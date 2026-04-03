@@ -34,6 +34,20 @@ MAX_ENTITIES = 5        # Максимум сущностей в тексте
 MAX_CANDIDATES = 3     # Максимум кандидатов на сущность
 WINDOW_SIZE = 2        # Скользящее окно - 2 слова
 
+# Прилагательные, которые не являются названиями улиц
+ADJECTIVES = {
+    'красный', 'красная', 'красное', 'красные', 'красным', 'красной',
+    'синий', 'синяя', 'синее', 'синие', 'синим', 'синей',
+    'белый', 'белая', 'белое', 'белые', 'белым', 'белой',
+    'старый', 'старая', 'старое', 'старые', 'старым', 'старой',
+    'новый', 'новая', 'новое', 'новые', 'новым', 'новой',
+    'черный', 'черная', 'черное', 'черные', 'черным', 'черной',
+    'зеленый', 'зеленая', 'зеленое', 'зеленые', 'зеленым', 'зеленой',
+    'серый', 'серая', 'серое', 'серые', 'серым', 'серой',
+    'темный', 'темная', 'темное', 'темные', 'темным', 'темной',
+    'светлый', 'светлая', 'светлое', 'светлые', 'светлым', 'светлой',
+}
+
 
 def _get_layer_keywords(layer: str) -> tuple:
     """Получить ключевые слова для слоя из settings."""
@@ -152,18 +166,30 @@ class SlidingWindowMatcher:
                     street_id = self._name_to_id.get(name)
 
                     if street_id and street_id not in seen_street_ids:
-                        seen_street_ids.add(street_id)
-                        entities.append({
-                            'text': bigram,
-                            'street_id': street_id,
-                            'matched_name': name,
-                            'score': score / 100.0,
-                            'source': 'bigram',  # откуда найдено
-                            'candidates': [
-                                {'name': m[0], 'score': m[1] / 100.0}
-                                for m in matches
-                            ]
-                        })
+                        # ПРОВЕРКА OVERLAP: слова из name должны присутствовать в тексте
+                        name_words = set(name.lower().split())
+                        text_words = set(words)
+                        
+                        overlap = name_words & text_words
+                        overlap_ratio = len(overlap) / len(name_words) if name_words else 0
+                        
+                        # Отбрасываем совпадения без overlap (минимум 50% слов)
+                        if overlap_ratio < 0.5:
+                            logger.debug(f"Skipping bigram '{name}': no overlap with text (ratio={overlap_ratio:.2f})")
+                        else:
+                            seen_street_ids.add(street_id)
+                            entities.append({
+                                'text': bigram,
+                                'street_id': street_id,
+                                'matched_name': name,
+                                'score': score / 100.0,
+                                'source': 'bigram',
+                                'overlap_ratio': overlap_ratio,
+                                'candidates': [
+                                    {'name': m[0], 'score': m[1] / 100.0}
+                                    for m in matches
+                                ]
+                            })
 
         # ЭТАП 2: Проверяем одиночные слова (если ещё есть место)
         if len(entities) < top_k:
@@ -171,12 +197,17 @@ class SlidingWindowMatcher:
                 if len(entities) >= top_k:
                     break
 
-                # Пропускаем короткие слова (< 3 символов)
-                if len(word) < 3:
+                # Пропускаем короткие слова (< 4 символов)
+                if len(word) < 4:
                     continue
 
                 # Пропускаем стоп-слова
                 if word in self._stopwords:
+                    continue
+                
+                # Пропускаем прилагательные (не являются названиями улиц)
+                if word in ADJECTIVES:
+                    logger.debug(f"Skipping adjective: {word}")
                     continue
 
                 matches = process.extract(
@@ -192,18 +223,30 @@ class SlidingWindowMatcher:
                     street_id = self._name_to_id.get(name)
 
                     if street_id and street_id not in seen_street_ids:
-                        seen_street_ids.add(street_id)
-                        entities.append({
-                            'text': word,
-                            'street_id': street_id,
-                            'matched_name': name,
-                            'score': score / 100.0,
-                            'source': 'word',  # откуда найдено
-                            'candidates': [
-                                {'name': m[0], 'score': m[1] / 100.0}
-                                for m in matches
-                            ]
-                        })
+                        # ПРОВЕРКА OVERLAP: слово должно присутствовать в тексте
+                        name_words = set(name.lower().split())
+                        text_words = set(words)
+                        
+                        overlap = name_words & text_words
+                        overlap_ratio = len(overlap) / len(name_words) if name_words else 0
+                        
+                        # Отбрасываем совпадения без overlap (минимум 50% слов)
+                        if overlap_ratio < 0.5:
+                            logger.debug(f"Skipping unigram '{name}': no overlap with text (ratio={overlap_ratio:.2f})")
+                        else:
+                            seen_street_ids.add(street_id)
+                            entities.append({
+                                'text': word,
+                                'street_id': street_id,
+                                'matched_name': name,
+                                'score': score / 100.0,
+                                'source': 'word',
+                                'overlap_ratio': overlap_ratio,
+                                'candidates': [
+                                    {'name': m[0], 'score': m[1] / 100.0}
+                                    for m in matches
+                                ]
+                            })
 
         # Сортируем: bigramы first
         entities.sort(key=lambda x: (0 if x['source'] == 'bigram' else 1))

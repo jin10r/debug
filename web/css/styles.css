@@ -1,0 +1,772 @@
+/* Базовые стили для карты */
+html, body {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden; /* Предотвращаем прокрутку */
+    background-color: #ffffff; /* Явный белый фон */
+}
+
+html {
+    background-color: #ffffff !important;
+}
+
+#map {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 100;
+    background-color: #ffffff; /* Явный белый фон для карты */
+    
+    /* КРИТИЧНО для мобильных: учитываем safe area (вырезы экрана) */
+    padding-top: var(--tg-safe-area-inset-top, 0px);
+    padding-right: var(--tg-safe-area-inset-right, 0px);
+    padding-bottom: var(--tg-safe-area-inset-bottom, 0px);
+    padding-left: var(--tg-safe-area-inset-left, 0px);
+    
+    /* Альтернативный вариант для поддержки env() */
+    padding-top: max(var(--tg-safe-area-inset-top, 0px), env(safe-area-inset-top, 0px));
+    padding-bottom: max(var(--tg-safe-area-inset-bottom, 0px), env(safe-area-inset-bottom, 0px));
+}
+
+/* Убеждаемся, что контейнер Leaflet имеет правильный фон */
+.leaflet-container {
+    background-color: #ffffff !important;
+}
+
+/* Убеждаемся, что тайлы карты отображаются правильно */
+.leaflet-tile {
+    filter: none !important;
+    opacity: 1 !important;
+}
+
+/* Исправление z-index для слоев карты */
+
+/* Рекламные оверлеи - самый высокий приоритет среди слоев карты */
+.leaflet-overlay-pane .ad-overlay {
+    z-index: 650 !important;
+    pointer-events: auto !important;
+}
+
+/* Все image overlays (включая рекламу) должны быть выше тепловой карты */
+.leaflet-image-layer {
+    z-index: 600 !important;
+    pointer-events: auto !important;
+}
+
+
+/*
+ * Обновленные стили для всех попапов Leaflet
+ * Устанавливаем базовые стили и используем переменные Telegram
+ */
+.leaflet-popup {
+    max-width: none !important;
+}
+
+/* Базовые стили для контента в попапах */
+.leaflet-popup-content {
+    margin: 8px 12px !important;
+    padding: 8px !important;
+    width: auto !important;
+    min-width: 200px !important;
+    max-width: 90vw !important;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+    color: var(--tg-text-color, #000000); /* Добавляем цвет текста из темы Telegram */
+}
+
+/* Стили для изображений в попапах */
+.leaflet-popup-content img {
+    max-width: 100% !important;
+    height: auto !important;
+    display: block !important;
+    margin: 8px auto !important;
+    border-radius: 8px; /* Добавляем скругление углов для изображений */
+}
+
+/* Стили для всех попапов, используем темы Telegram */
+.leaflet-popup-content-wrapper {
+    background-color: var(--tg-secondary-bg-color, rgba(248, 248, 248, 0.9)) !important;
+    border-radius: 12px !important;
+    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
+}
+
+.leaflet-popup-tip {
+    background-color: var(--tg-secondary-bg-color, rgba(248, 248, 248, 0.9)) !important;
+}
+
+#errorMessage {
+    display: none;
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: var(--tg-secondary-bg-color, #f8d7da);
+    color: var(--tg-text-color, #721c24);
+    padding: 12px 20px;
+    border-radius: 4px;
+    z-index: 1100;
+    text-align: center;
+    max-width: 80%;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+}
+
+:root {
+    /* Цвета по умолчанию, если Telegram WebApp не доступен */
+    --tg-bg-color: #ffffff;
+    --tg-text-color: #000000;
+    --tg-hint-color: #999999;
+    --tg-link-color: #007bff;
+    --tg-button-color: #007bff;
+    --tg-button-text-color: #ffffff;
+    --tg-secondary-bg-color: rgba(248, 248, 248, 0.9);
+    
+    /* Bot API 7.0+: Дополнительные цвета темы */
+    --tg-header-bg-color: #ffffff;
+    --tg-accent-text-color: #007bff;
+    --tg-section-bg-color: #ffffff;
+    --tg-section-header-text-color: #000000;
+    --tg-subtitle-text-color: #999999;
+    --tg-destructive-text-color: #ff3b30;
+    
+    /* Bot API 7.6+: Section separator */
+    --tg-section-separator-color: rgba(0, 0, 0, 0.1);
+    
+    /* Bot API 7.10+: Bottom bar */
+    --tg-bottom-bar-bg-color: #ffffff;
+    
+    /* Bot API 8.0+: Safe Area Insets */
+    --tg-safe-area-inset-top: 0px;
+    --tg-safe-area-inset-right: 0px;
+    --tg-safe-area-inset-bottom: 0px;
+    --tg-safe-area-inset-left: 0px;
+    
+    /* Bot API 8.0+: Content Safe Area Insets */
+    --tg-content-safe-area-inset-top: 0px;
+    --tg-content-safe-area-inset-right: 0px;
+    --tg-content-safe-area-inset-bottom: 0px;
+    --tg-content-safe-area-inset-left: 0px;
+}
+
+body {
+    /* Фон body не влияет на карту, т.к. карта абсолютно позиционирована */
+    background-color: #ffffff; /* Явный белый фон для body */
+    color: var(--tg-text-color);
+    margin: 0;
+    padding: 0;
+    
+    /* Bot API 8.0+: Учитываем safe area для устройств с вырезами */
+    /* ВАЖНО: Убрано padding для body, т.к. оно мешает карте
+       Safe area будет применяться только к #map и controlsContainer */
+    
+    /* Добавляем поддержку для Telegram viewport */
+    min-height: 100vh;
+    min-height: -webkit-fill-available; /* iOS Safari */
+    
+    /* Улучшенный рендеринг на мобильных */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+/* Темная тема - Bot API 6.1+ */
+body.dark-theme {
+    --tg-bg-color: #18222d;
+    --tg-text-color: #ffffff;
+    --tg-hint-color: #708499;
+    --tg-link-color: #6ab2f2;
+    --tg-button-color: #5288c1;
+    --tg-button-text-color: #ffffff;
+    --tg-secondary-bg-color: rgba(24, 34, 45, 0.9);
+}
+
+/* Обновляем стили панели, используя переменные */
+#controlsContainer {
+    position: absolute;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 90%;
+    max-width: 400px;
+    background-color: var(--tg-secondary-bg-color, rgba(255, 255, 255, 0.9));
+    border-radius: 8px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+    z-index: 1000;
+    overflow: hidden;
+    touch-action: pan-y;
+    min-height: 40px; /* Уменьшена на 20%: было 50px */
+    backdrop-filter: blur(10px); /* Эффект размытия фона (работает не везде) */
+}
+
+#controlsSlider {
+    display: flex;
+    width: 200%; /* 2 слайда */
+    transition: transform 0.3s ease-in-out;
+}
+
+.controlPanel {
+    width: 50%; /* 100% / 2 слайда */
+    padding: 6px 10px; /* Уменьшен на 20%: было 8px 12px */
+    box-sizing: border-box;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+/* Центрирование контента первого слайда */
+#realtimeControls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.centered-content {
+    width: 100%;
+}
+
+/* Кнопки первого слайда - распределение по ширине */
+#realtimeControls .buttons {
+    display: flex;
+    justify-content: space-between;
+    gap: 6px; /* Уменьшен на 20%: было 8px */
+    margin-top: 6px; /* Уменьшен на 20%: было 8px */
+}
+
+#realtimeControls .buttons button {
+    flex: 1;
+    padding: 3px 5px; /* Уменьшен на 20%: было 4px 6px */
+    border: 1px solid var(--tg-hint-color, #ccc);
+    background-color: transparent;
+    color: var(--tg-text-color, #333);
+    border-radius: 5px; /* Уменьшен на 20%: было 6px */
+    cursor: pointer;
+    font-size: 10px; /* Уменьшен на 20%: было 13px */
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
+
+#realtimeControls .buttons button.active {
+    background-color: var(--tg-button-color, #007bff);
+    border-color: var(--tg-button-color, #0056b3);
+    color: var(--tg-button-text-color, white);
+    font-weight: bold;
+}
+
+#realtimeControls .buttons button:hover {
+    border-color: var(--tg-button-color, #007bff);
+}
+
+.controlPanel p {
+    margin: 0 0 5px 0; /* Уменьшен на 20%: было 6px */
+    font-size: 10px; /* Уменьшен на 20%: было 13px */
+    font-weight: bold;
+    /* Используем основной цвет текста */
+    color: var(--tg-text-color, #000000);
+}
+
+#controlsContainer #timeControls .buttons {
+    display: flex;
+    justify-content: space-around;
+}
+
+#controlsContainer #timeControls button {
+    padding: 4px 8px; /* Уменьшен на 20%: было 5px 10px */
+    border: 1px solid var(--tg-hint-color, #ccc); /* Граница цвета подсказки */
+    /* Фон делаем более нейтральным, активная будет выделяться */
+    background-color: transparent; /* или можно var(--tg-bg-color) */
+    color: var(--tg-text-color, #333);
+    border-radius: 3px; /* Уменьшен на 20%: было 4px */
+    cursor: pointer;
+    font-size: 10px; /* Уменьшен на 20%: было 12px */
+    margin: 0 2px;
+    transition: background-color 0.2s ease, color 0.2s ease; /* Плавный переход */
+}
+
+#controlsContainer #timeControls button.active {
+    /* Используем цвета кнопки из темы */
+    background-color: var(--tg-button-color, #007bff);
+    border-color: var(--tg-button-color, #0056b3); /* Цвет кнопки для границы */
+    color: var(--tg-button-text-color, white);
+    font-weight: bold;
+}
+
+.layers {
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+}
+
+.layers label {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.layers img {
+    width: 25px !important;
+    height: 25px !important;
+    margin-bottom: 5px;
+    object-fit: contain;
+}
+
+.layers input[type="checkbox"] {
+    margin: 0;
+    /* Можно стилизовать чекбоксы под тему, но это сложнее */
+    accent-color: var(--tg-button-color, #007bff); /* Простой способ изменить цвет */
+}
+
+#controlsIndicators {
+    display: flex;
+    justify-content: center;
+    padding: 5px 0;
+}
+
+#controlsIndicators .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    /* Используем цвет подсказки для неактивных */
+    background-color: var(--tg-hint-color, #ccc);
+    margin: 0 4px;
+    transition: background-color 0.3s ease;
+}
+
+#controlsIndicators .dot.active {
+    /* Используем основной цвет текста для активного */
+    background-color: var(--tg-text-color, #666);
+}
+
+/* Медиа-запрос для мобильных устройств */
+@media (max-width: 600px) {
+    #controlsContainer {
+        position: fixed; /* Меняем с absolute на fixed для надёжного позиционирования */
+        width: 100%;
+        max-width: 100%;
+        bottom: 0;
+        left: 0;
+        transform: none;
+        border-radius: 8px 8px 0 0; /* Скругляем только верхние углы */
+        box-shadow: 0 -2px 5px rgba(0,0,0,0.1);
+        background-color: var(--tg-secondary-bg-color, rgba(255, 255, 255, 0.9));
+        z-index: 1200; /* Увеличиваем z-index для надёжности */
+        
+        /* КРИТИЧНО: Учитываем safe area на iPhone */
+        padding-bottom: max(8px, env(safe-area-inset-bottom, 0px)); /* Уменьшен на 20%: было 10px */
+        padding-bottom: max(8px, var(--tg-safe-area-inset-bottom, 0px)); /* Уменьшен на 20%: было 10px */
+    }
+
+    /* Настройка макета панелей на мобильном */
+    .controlPanel {
+        padding: 6px; /* Уменьшен на 20%: было 8px */
+    }
+
+    /* Стили для кнопок и контейнера кнопок */
+    #timeControls .buttons {
+        display: flex;
+        justify-content: space-around;
+        width: 100%;
+    }
+
+    #timeControls button {
+        flex: 1;
+        margin: 0 5px;
+        padding: 6px 0; /* Уменьшен на 20%: было 8px 0 */
+        text-align: center;
+    }
+
+    /* Стили для контейнера чекбоксов */
+    .layers {
+        display: flex;
+        justify-content: space-around;
+        width: 100%;
+    }
+
+    /* Стили для чекбоксов на мобильном */
+    .layers label {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 5px;
+    }
+
+    .layers img {
+        width: 25px !important;
+        height: 25px !important;
+        margin-bottom: 5px;
+    }
+
+    /* Более заметные индикаторы на мобильном */
+    #controlsIndicators {
+        padding: 6px 0; /* Уменьшен на 20%: было 8px 0 */
+    }
+
+    #controlsIndicators .dot {
+        width: 10px;
+        height: 10px;
+        margin: 0 5px;
+    }
+
+    /* Дополнительные улучшения для мобильного */
+    #map {
+        /* ИСПРАВЛЕНО: убрано calc, т.к. контролы накладываются поверх карты */
+        height: 100%;
+    }
+
+    
+    /* Увеличиваем контрастность чекбоксов */
+    .layers input[type="checkbox"] {
+        width: 22px;
+        height: 22px;
+        margin-top: 5px;
+    }
+    
+    /* Улучшенная поддержка касаний */
+    .interaction-item,
+    button {
+        min-height: 35px; /* Уменьшен на 20%: было 44px (Apple HIG рекомендация) */
+        touch-action: manipulation; /* Убираем задержку 300ms на мобильных */
+    }
+}
+
+/* Дополнительные улучшения стилей для чекбоксов */
+input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+}
+
+/* Стили для попапов в стиле Telegram - оставляем для совместимости, но теперь стили применяются ко всем попапам */
+.tg-styled-popup .leaflet-popup-content-wrapper,
+.tg-styled-popup .leaflet-popup-tip {
+    background-color: var(--tg-secondary-bg-color, rgba(248, 248, 248, 0.9));
+    color: var(--tg-text-color, #000000);
+}
+
+.tg-styled-popup .leaflet-popup-content {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+}
+
+/* Дополнительная стилизация для кнопки "копировать" */
+#copy-icon:hover {
+    opacity: 0.9;
+    transform: scale(1.05);
+    transition: all 0.2s ease;
+}
+
+#copy-icon:active {
+    transform: scale(0.95);
+    transition: all 0.1s ease;
+}
+
+/* Усиленные стили для гарантированного применения темы Telegram ко всем попапам */
+html body .leaflet-container .leaflet-popup .leaflet-popup-content-wrapper {
+    background-color: var(--tg-secondary-bg-color, rgba(248, 248, 248, 0.95)) !important; 
+    color: var(--tg-text-color, #000000) !important;
+    border-radius: 12px !important;
+    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
+}
+
+html body .leaflet-container .leaflet-popup .leaflet-popup-tip {
+    background-color: var(--tg-secondary-bg-color, rgba(248, 248, 248, 0.95)) !important;
+}
+
+html body .leaflet-container .leaflet-popup .leaflet-popup-content {
+    color: var(--tg-text-color, #000000) !important;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif !important;
+    line-height: 1.4 !important;
+}
+
+/* Стилизуем также кнопку закрытия попапа */
+html body .leaflet-container .leaflet-popup .leaflet-popup-close-button {
+    color: var(--tg-text-color, #000000) !important;
+    opacity: 0.7;
+    transition: opacity 0.2s;
+}
+
+html body .leaflet-container .leaflet-popup .leaflet-popup-close-button:hover {
+    opacity: 1;
+    background: none !important;
+}
+
+/* Стилизуем ссылки внутри попапов */
+html body .leaflet-container .leaflet-popup .leaflet-popup-content a {
+    color: var(--tg-link-color, #007bff) !important;
+    text-decoration: none !important;
+}
+
+html body .leaflet-container .leaflet-popup .leaflet-popup-content a:hover {
+    text-decoration: underline !important;
+}
+
+/* Добавляем поддержку предпочитаемой схемы цветов пользователя */
+@media (prefers-color-scheme: dark) {
+    :root {
+        /* Дефолтные значения для темной темы */
+        --tg-bg-color: #212121;
+        --tg-text-color: #ffffff;
+        --tg-hint-color: #aaaaaa;
+        --tg-link-color: #8aadf4;
+        --tg-button-color: #8aadf4;
+        --tg-button-text-color: #ffffff;
+        --tg-secondary-bg-color: rgba(33, 33, 33, 0.95);
+    }
+}
+
+/* Важное правило для поддержки темной темы в iOS Telegram */
+@media (color-scheme: dark) {
+    :root {
+        color-scheme: dark;
+    }
+}
+
+/* Принудительное применение стилей для темы в Telegram */
+html[data-theme="dark"] {
+    --tg-bg-color: #212121;
+    --tg-text-color: #ffffff;
+    --tg-hint-color: #aaaaaa;
+    --tg-link-color: #8aadf4;
+    --tg-button-color: #8aadf4;
+    --tg-button-text-color: #ffffff;
+    --tg-secondary-bg-color: rgba(33, 33, 33, 0.95);
+}
+
+/* 
+ * Усиленные стили для попапов - поскольку стили в leaflet.css могут перезаписывать наши
+ * Используем двойную специфичность для гарантии применения
+ */
+.leaflet-container .leaflet-popup-content-wrapper,
+html .leaflet-container .leaflet-popup-content-wrapper {
+    background-color: var(--tg-secondary-bg-color, rgba(248, 248, 248, 0.95)) !important; 
+    color: var(--tg-text-color, #000000) !important;
+    border-radius: 12px !important;
+    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
+}
+
+.leaflet-container .leaflet-popup-tip,
+html .leaflet-container .leaflet-popup-tip {
+    background-color: var(--tg-secondary-bg-color, rgba(248, 248, 248, 0.95)) !important;
+}
+
+/* Усиленные стили для контента попапа */
+.leaflet-container .leaflet-popup-content,
+html .leaflet-container .leaflet-popup-content {
+    color: var(--tg-text-color, #000000) !important;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif !important;
+    margin: 12px !important;
+}
+
+/* Стили для мобильных устройств - увеличиваем размер кнопок в попапах для лучшего взаимодействия */
+@media (max-width: 600px) {
+    .leaflet-container .leaflet-popup-content,
+    html .leaflet-container .leaflet-popup-content {
+        margin: 15px !important;
+        font-size: 16px !important;
+        line-height: 1.5 !important;
+    }
+    
+    #copy-icon {
+        width: 36px !important;
+        height: 36px !important;
+        padding: 8px !important;
+    }
+    
+    .leaflet-container .leaflet-popup-close-button,
+    html .leaflet-container .leaflet-popup-close-button {
+        font-size: 24px !important;
+        padding: 6px 8px !important;
+        right: 5px !important;
+        top: 5px !important;
+    }
+}
+
+/* Стили для слайда взаимодействия */
+.interaction-icons {
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    gap: 16px; /* Уменьшен на 20%: было 20px */
+    padding: 8px; /* Уменьшен на 20%: было 10px */
+}
+
+.interaction-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    cursor: pointer;
+    transition: transform 0.2s ease;
+}
+
+.interaction-item:active {
+    transform: scale(0.95);
+}
+
+.interaction-item.active .interaction-icon {
+    background: var(--tg-button-color, #007bff);
+    box-shadow: 0 0 12px var(--tg-button-color, #007bff), /* Уменьшен на 20%: было 15px */
+                0 0 24px var(--tg-button-color, #007bff); /* Уменьшен на 20%: было 30px */
+    color: var(--tg-button-text-color, white);
+}
+
+.interaction-icon {
+    font-size: 26px; /* Уменьшен на 20%: было 32px */
+    width: 26px; /* Уменьшен на 20%: было 32px */
+    height: 26px; /* Уменьшен на 20%: было 32px */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Центральный попап */
+#centerPopup {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: var(--tg-secondary-bg-color, rgba(248, 248, 248, 0.98));
+    color: var(--tg-text-color, #000000);
+    padding: 24px;
+    border-radius: 16px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    z-index: 10000;
+    width: calc(100vw - 48px);
+    max-width: 450px;
+    min-width: 280px;
+    max-height: 80vh;
+    overflow-y: auto;
+    display: none;
+    box-sizing: border-box;
+}
+
+#centerPopup.show {
+    display: block;
+}
+
+#centerPopupOverlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 9999;
+    display: none;
+}
+
+#centerPopupOverlay.show {
+    display: block;
+}
+
+#centerPopup .close-btn {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    font-size: 24px;
+    cursor: pointer;
+    color: var(--tg-hint-color, #999999);
+    line-height: 1;
+    user-select: none;
+}
+
+#centerPopup .close-btn:hover {
+    color: var(--tg-text-color, #000000);
+}
+
+/* Адаптация попапа для мобильных устройств */
+@media (max-width: 600px) {
+    #centerPopup {
+        width: calc(100vw - 32px);
+        left: 16px;
+        right: 16px;
+        transform: translate(0, -50%);
+        min-width: unset;
+        max-width: unset;
+        padding: 20px 16px;
+        margin: 0;
+    }
+    
+    #centerPopup .close-btn {
+        top: 8px;
+        right: 8px;
+        font-size: 28px;
+    }
+    
+    #centerPopup h3 {
+        font-size: 17px !important;
+    }
+    
+    #centerPopup table {
+        font-size: 14px;
+    }
+    
+    #centerPopup p {
+        font-size: 14px !important;
+    }
+}
+
+/* Адаптация для очень маленьких экранов */
+@media (max-width: 360px) {
+    #centerPopup {
+        width: calc(100vw - 24px);
+        left: 12px;
+        right: 12px;
+        transform: translate(0, -50%);
+        min-width: unset;
+        max-width: unset;
+        padding: 16px 12px;
+        margin: 0;
+    }
+    
+    #centerPopup h3 {
+        font-size: 16px !important;
+    }
+    
+    #centerPopup table {
+        font-size: 13px;
+    }
+    
+    #centerPopup p {
+        font-size: 13px !important;
+    }
+}
+
+@keyframes pulse {
+    0%, 100% {
+        box-shadow: 0 2px 8px rgba(102, 126, 234, 0.4);
+    }
+    50% {
+        box-shadow: 0 4px 16px rgba(102, 126, 234, 0.6);
+    }
+}
+.custom-checkbox {
+    position: relative;
+    width: 24px;
+    height: 24px;
+    border: 2px solid var(--tg-hint-color, #ccc);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+}
+
+.custom-checkbox.checked {
+    background: var(--tg-button-color, #007bff);
+    border-color: var(--tg-button-color, #007bff);
+}
+
+.custom-checkbox.checked::after {
+    content: '✓';
+    color: white;
+    font-size: 16px;
+    font-weight: bold;
+}
+
+.settings-section-title {
+    font-size: 14px;
+    color: var(--tg-hint-color, #999);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-top: 20px;
+    margin-bottom: 10px;
+}

@@ -1,0 +1,43 @@
+# Dockerfile.parser - Parser service with Sliding Window + Rapidfuzz
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# CPU-only режим
+ENV CUDA_VISIBLE_DEVICES=""
+ENV FORCE_CPU="1"
+ENV OMP_NUM_THREADS="4"
+ENV MKL_NUM_THREADS="4"
+
+# Создаём директорию для временных файлов, media и кэша
+RUN mkdir -p /tmp /media/events /app/.cache && chmod 777 /tmp /app/.cache
+
+# Python зависимости
+COPY parser/requirements.txt .
+
+# 1. Устанавливаем numpy
+RUN pip install --no-cache-dir "numpy>=1.24.0,<2.0"
+
+# 2. Устанавливаем основные зависимости
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Код парсера + settings + core
+COPY parser/ ./parser/
+COPY core/ ./core/
+
+# Устанавливаем procps для healthcheck (pgrep)
+RUN apt-get update && apt-get install -y --no-install-recommends procps && rm -rf /var/lib/apt/lists/*
+
+# Создаём пользователя и даём права
+RUN useradd -m -u 1000 parser && \
+    chown -R parser:parser /app /tmp /media/events
+
+# Health check (быстрый старт - не нужно загружать модели)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD pgrep -f 'python.*monitoring' >/dev/null 2>&1 || exit 1
+
+# Переключаемся на пользователя parser
+USER parser
+
+# Запуск
+CMD ["python", "-m", "parser.monitoring"]

@@ -3,7 +3,8 @@
 __version__ = '4.0.0'
 __author__ = 'Survival Map Team'
 
-from .message_processor import MessageProcessor, SlidingWindowMatcher
+from .message_processor import MessageProcessor
+from .similarity_search import SlidingWindowMatcher
 from .db_adapter import DBAdapter
 
 __all__ = [

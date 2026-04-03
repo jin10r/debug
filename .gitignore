@@ -56,10 +56,12 @@ tests/test_messages.txt
 # Analysis reports
 *.md
 !README.md
-!REPORT.md
-!CLEANUP_REPORT.md
+!docs/README.md
+!docs/ARCHITECTURE_REPORT.md
+!docs/DOCKER_ARCHITECTURE.md
+!docs/PROJECT_OVERVIEW.md
+!docs/SECURITY.md
 pg_plan3.txt
-process_raw.txt
 
 # Archived migration scripts and docs
 postgres/migrations/ARCHIVE/

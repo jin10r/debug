@@ -136,14 +136,26 @@
                 if (!config.telegram_validation_enabled) {
                     console.log('[Gate] Validation disabled (development mode)');
                     statusEl.textContent = 'Режим разработки...';
-                    sessionStorage.setItem('dev_mode', 'true');
                     
-                    // Set dev user in sessionStorage
-                    sessionStorage.setItem('user', JSON.stringify({
-                        id: 123456789,
-                        first_name: 'Dev',
-                        username: 'devuser'
-                    }));
+                    // Call validate-init to get dev tokens
+                    try {
+                        const response = await fetch('/api/validate-init', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ init_data: '' })
+                        });
+                        const result = await response.json();
+                        
+                        if (result.valid && result.access_token) {
+                            sessionStorage.setItem('access_token', result.access_token);
+                            sessionStorage.setItem('refresh_token', result.refresh_token);
+                            sessionStorage.setItem('user', JSON.stringify(result.user));
+                        }
+                    } catch (e) {
+                        console.error('[Gate] Failed to get dev tokens:', e);
+                    }
+                    
+                    sessionStorage.setItem('dev_mode', 'true');
                     
                     setTimeout(() => redirectTo('/map.html'), 500);
                     return;

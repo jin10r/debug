@@ -262,12 +262,36 @@ export class WebSocketManager {
     }
 
     /**
-     * Request full refresh (fallback, should not be used in normal operation)
+     * Request full refresh (fallback to HTTP API if WebSocket fails)
      */
     private async requestFullRefresh(): Promise<void> {
-        console.warn('[WS] requestFullRefresh called - this should not be used in WebSocket-only mode');
-        // This method is kept for compatibility but should not be called
-        // All data should come through WebSocket
+        console.log('[WS] requestFullRefresh: fetching from API...');
+        
+        try {
+            const response = await fetch('/api/events', {
+                method: 'GET',
+                headers: {
+                    'Accept': 'application/json'
+                }
+            });
+            
+            if (!response.ok) {
+                throw new Error(`API returned ${response.status}`);
+            }
+            
+            const result = await response.json();
+            const events = result.data?.features || [];
+            
+            console.log('[WS] requestFullRefresh: got', events.length, 'events from API');
+            
+            if (events.length > 0 && this.onInitialData) {
+                this.onInitialData({ type: 'FeatureCollection', features: events });
+            } else {
+                console.warn('[WS] requestFullRefresh: no events in response');
+            }
+        } catch (error) {
+            console.error('[WS] requestFullRefresh failed:', error);
+        }
     }
 
     /**

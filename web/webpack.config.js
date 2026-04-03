@@ -1,20 +1,35 @@
 const path = require('path');
 
 module.exports = {
+  // Компилируем все JS/TS модули как отдельные файлы
   entry: {
-    app: './js/common.js',
+    'js/common': './js/common.js',
+    'js/core/store': './js/core/store.ts',
+    'js/core/local_cache': './js/core/local_cache.ts',
+    'js/core/websocket': './js/core/websocket.ts',
+    'js/core/event_manager': './js/core/event_manager.ts',
+    'js/telegram/validator': './js/telegram/validator.ts',
   },
   output: {
-    filename: '[name].bundle.js',
+    filename: '[name].js',
     path: path.resolve(__dirname, 'dist'),
     clean: true,
-    publicPath: '/js/'
+    publicPath: '/'
   },
   module: {
     rules: [
       {
         test: /\.ts$/,
-        use: 'ts-loader',
+        use: {
+          loader: 'ts-loader',
+          options: {
+            transpileOnly: true,
+            compilerOptions: {
+              strict: false,
+              noEmit: false
+            }
+          }
+        },
         exclude: /node_modules/
       },
       {

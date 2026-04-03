@@ -291,12 +291,49 @@ async def validate_init_data_endpoint(request: web.Request) -> web.Response:
         data = await request.json()
         init_data = data.get('init_data')
 
-        # Validation disabled: reject request
+        # Validation disabled: allow any request (dev mode)
         if not settings.app.telegram_validation_enabled:
-            return web.json_response(
-                {'valid': False, 'error': 'Validation is disabled'},
-                status=403
-            )
+            logger.info('[DEV MODE] Telegram validation disabled, allowing request without verification')
+            
+            # Generate tokens for a test/dev user
+            user_data = {
+                'id': '123456789',  # Test user ID
+                'first_name': 'Dev',
+                'username': 'dev_user'
+            }
+            
+            # Try to extract user info from init_data if provided (no verification)
+            if init_data:
+                try:
+                    from parser.monitoring import parse_init_data as telegram_parse_init_data
+                    params = telegram_parse_init_data(init_data)
+                    user_json = params.get('user')
+                    if user_json:
+                        import json
+                        user_info = json.loads(user_json)
+                        if isinstance(user_info, dict):
+                            user_data = {
+                                'id': str(user_info.get('id', '123456789')),
+                                'first_name': user_info.get('first_name', 'Dev'),
+                                'username': user_info.get('username')
+                            }
+                except Exception as e:
+                    logger.warning(f'Could not parse init_data in dev mode: {e}')
+            
+            # Generate tokens without verification
+            access_token, refresh_token = generate_jwt_tokens(user_data)
+            
+            return web.json_response({
+                'valid': True,
+                'user': {
+                    'id': user_data['id'],
+                    'first_name': user_data['first_name'],
+                    'username': user_data.get('username')
+                },
+                'access_token': access_token,
+                'refresh_token': refresh_token,
+                'expires_in': settings.jwt.access_token_ttl
+            })
 
         if not init_data:
             logger.warning("Validation request missing init_data")

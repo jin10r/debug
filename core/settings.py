@@ -79,7 +79,7 @@ class RedisConfig:
 @dataclass
 class SimilarityConfig:
     stop_words: tuple = field(default_factory=lambda: DEFAULT_STOPWORDS)
-    entity_min_word_length: int = 4  # УВЕЛИЧЕН с 3 для фильтрации коротких слов
+    entity_min_word_length: int = 3  # Учитываем все слова от 3 символов
     entity_similarity_threshold: float = 0.65  # УВЕЛИЧЕН с 0.55 для уменьшения FP
     strict_similarity_threshold: float = 0.65  # УВЕЛИЧЕН с 0.55
     buffer_radius_m: float = 100.0
@@ -87,7 +87,7 @@ class SimilarityConfig:
 
     # LocationFinder параметры
     default_threshold: float = 0.65  # УВЕЛИЧЕН с 0.55 для уменьшения FP
-    min_word_length: int = 4         # УВЕЛИЧЕН с 3 для фильтрации коротких слов
+    min_word_length: int = 3         # Учитываем все слова от 3 символов
     max_ngram_length: int = 5        # Максимальная длина n-gram
 
     # Поля для загрузки из БД

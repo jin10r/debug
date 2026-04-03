@@ -34,20 +34,6 @@ MAX_ENTITIES = 5        # Максимум сущностей в тексте
 MAX_CANDIDATES = 3     # Максимум кандидатов на сущность
 WINDOW_SIZE = 2        # Скользящее окно - 2 слова
 
-# Прилагательные, которые не являются названиями улиц
-ADJECTIVES = {
-    'красный', 'красная', 'красное', 'красные', 'красным', 'красной',
-    'синий', 'синяя', 'синее', 'синие', 'синим', 'синей',
-    'белый', 'белая', 'белое', 'белые', 'белым', 'белой',
-    'старый', 'старая', 'старое', 'старые', 'старым', 'старой',
-    'новый', 'новая', 'новое', 'новые', 'новым', 'новой',
-    'черный', 'черная', 'черное', 'черные', 'черным', 'черной',
-    'зеленый', 'зеленая', 'зеленое', 'зеленые', 'зеленым', 'зеленой',
-    'серый', 'серая', 'серое', 'серые', 'серым', 'серой',
-    'темный', 'темная', 'темное', 'темные', 'темным', 'темной',
-    'светлый', 'светлая', 'светлое', 'светлые', 'светлым', 'светлой',
-}
-
 
 def _get_layer_keywords(layer: str) -> tuple:
     """Получить ключевые слова для слоя из settings."""
@@ -57,11 +43,9 @@ def _get_layer_keywords(layer: str) -> tuple:
     if layer == 'cops':
         return ('коп', 'полиц', 'мусор', 'люстр', 'бп', 'блокпост', 'мигалк', 'патрул', 'б/п', 'пост')
     elif layer == 'bus':
-        return ('бус', 'автобус', 'спринтер', 'рено', 'h1', 'h2', 'h3', 'h4', 'h5', 'фольц', 'хендай', 'вито')
+        return ('бус', 'автобус', 'спринтер', 'рено', 'h1', 'h2', 'h3', 'h4', 'h5', 'фольц', 'хендай', 'вито', 'сталкер')
     elif layer == 'traffic':
-        return ('дтп', 'авар', 'пробк', 'затор', 'закрыт', 'перекрыт',
-                'ремонт', 'реконструкц', 'стоянк', 'парковк', 'эвакуатор',
-                'сбил', 'наезд', 'столкн', 'встречк', 'обочин')
+        return ('дтп', 'авар', 'пробк', 'затор', 'светофор')
     return ()
 
 
@@ -167,11 +151,23 @@ class SlidingWindowMatcher:
 
                     if street_id and street_id not in seen_street_ids:
                         # ПРОВЕРКА OVERLAP: слова из name должны присутствовать в тексте
-                        name_words = set(name.lower().split())
-                        text_words = set(words)
+                        # Используем fuzzy matching для учёта падежных форм
+                        name_words = name.lower().split()
                         
-                        overlap = name_words & text_words
-                        overlap_ratio = len(overlap) / len(name_words) if name_words else 0
+                        # Считаем сколько слов из name можно найти в тексте с fuzzy matching
+                        matched_words = 0
+                        for name_word in name_words:
+                            # Проверяем точное совпадение
+                            if name_word in words:
+                                matched_words += 1
+                            else:
+                                # Fuzzy matching для отдельных слов (порог 0.75)
+                                for text_word in words:
+                                    if fuzz.ratio(name_word, text_word) >= 75:
+                                        matched_words += 1
+                                        break
+                        
+                        overlap_ratio = matched_words / len(name_words) if name_words else 0
                         
                         # Отбрасываем совпадения без overlap (минимум 50% слов)
                         if overlap_ratio < 0.5:
@@ -197,17 +193,8 @@ class SlidingWindowMatcher:
                 if len(entities) >= top_k:
                     break
 
-                # Пропускаем короткие слова (< 4 символов)
-                if len(word) < 4:
-                    continue
-
                 # Пропускаем стоп-слова
                 if word in self._stopwords:
-                    continue
-                
-                # Пропускаем прилагательные (не являются названиями улиц)
-                if word in ADJECTIVES:
-                    logger.debug(f"Skipping adjective: {word}")
                     continue
 
                 matches = process.extract(
@@ -224,11 +211,23 @@ class SlidingWindowMatcher:
 
                     if street_id and street_id not in seen_street_ids:
                         # ПРОВЕРКА OVERLAP: слово должно присутствовать в тексте
-                        name_words = set(name.lower().split())
-                        text_words = set(words)
+                        # Используем fuzzy matching для учёта падежных форм
+                        name_words = name.lower().split()
                         
-                        overlap = name_words & text_words
-                        overlap_ratio = len(overlap) / len(name_words) if name_words else 0
+                        # Считаем сколько слов из name можно найти в тексте с fuzzy matching
+                        matched_words = 0
+                        for name_word in name_words:
+                            # Проверяем точное совпадение
+                            if name_word in words:
+                                matched_words += 1
+                            else:
+                                # Fuzzy matching для отдельных слов (порог 0.75)
+                                for text_word in words:
+                                    if fuzz.ratio(name_word, text_word) >= 75:
+                                        matched_words += 1
+                                        break
+                        
+                        overlap_ratio = matched_words / len(name_words) if name_words else 0
                         
                         # Отбрасываем совпадения без overlap (минимум 50% слов)
                         if overlap_ratio < 0.5:
@@ -538,7 +537,8 @@ class MessageProcessor:
             keywords = _get_layer_keywords(layer)
             for word in words:
                 for keyword in keywords:
-                    if word.startswith(keyword):
+                    # Регистронезависимое сравнение
+                    if word.startswith(keyword.lower()):
                         logger.debug(f"Detected layer '{layer}' by keyword '{keyword}'")
                         return layer
 

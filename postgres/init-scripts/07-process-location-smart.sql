@@ -178,9 +178,16 @@ BEGIN
         final_geometry AS (
             SELECT
                 CASE
-                    -- 0 точек пересечения → берём полную геометрию ЛУЧШЕЙ улицы (первый в p_street_ids)
+                    -- 0 точек пересечения → берём полную геометрию улицы с ЛУЧШИМ SCORE
                     WHEN (SELECT COUNT(*) FROM filtered_points) = 0 THEN
-                        (SELECT geom FROM streets WHERE id = p_street_ids[1])
+                        (
+                            SELECT s.geom 
+                            FROM streets s
+                            INNER JOIN unnest(p_street_ids, COALESCE(p_street_scores, ARRAY_FILL(1.0, ARRAY[array_length(p_street_ids, 1)]))) AS u(id, score) 
+                                ON s.id = u.id
+                            ORDER BY u.score DESC
+                            LIMIT 1
+                        )
 
                     -- 1 точка → Point
                     WHEN (SELECT COUNT(*) FROM filtered_points) = 1 THEN
@@ -214,11 +221,13 @@ BEGIN
             END IF;
         END IF;
 
-        -- 5. Fallback: если геометрия всё ещё NULL
+        -- 5. Fallback: если геометрия всё ещё NULL → выбираем улицу с лучшим score
         IF v_geom IS NULL THEN
-            SELECT geom INTO v_geom
-            FROM unique_geoms
-            ORDER BY id
+            SELECT s.geom INTO v_geom
+            FROM streets s
+            INNER JOIN unnest(p_street_ids, COALESCE(p_street_scores, ARRAY_FILL(1.0, ARRAY[array_length(p_street_ids, 1)]))) AS u(id, score) 
+                ON s.id = u.id
+            ORDER BY u.score DESC
             LIMIT 1;
             v_strategy := 'single_match';
         END IF;

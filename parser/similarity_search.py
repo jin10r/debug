@@ -8,12 +8,9 @@ from typing import Dict, List, Set, Optional
 
 from rapidfuzz import fuzz, process
 
-# Импорт настроек
-try:
-    from .settings import settings
-    DEFAULT_SIMILARITY_THRESHOLD = settings.similarity.entity_similarity_threshold
-except Exception:
-    DEFAULT_SIMILARITY_THRESHOLD = 0.67
+# Импорт настроек - обязательный (без fallback)
+from .settings import settings
+SIMILARITY_THRESHOLD = settings.similarity.entity_similarity_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -71,36 +68,19 @@ class SlidingWindowMatcher:
             ngrams.append(ngram)
         return ngrams
 
-    def _check_overlap(self, name: str, text_words: List[str], threshold: float = DEFAULT_SIMILARITY_THRESHOLD) -> float:
-        """Проверяет overlap между названием улицы и словами в тексте."""
-        name_words = name.lower().split()
-        if not name_words:
-            return 0.0
-
-        matched_words = 0
-        for name_word in name_words:
-            if name_word in text_words:
-                matched_words += 1
-            else:
-                # Fuzzy matching для падежных форм (порог = threshold matching)
-                for text_word in text_words:
-                    if fuzz.ratio(name_word, text_word) >= threshold * 100:
-                        matched_words += 1
-                        break
-
-        return matched_words / len(name_words)
-
     def find_entities(
         self,
         text: str,
         top_k: int = MAX_ENTITIES,
-        threshold: float = DEFAULT_SIMILARITY_THRESHOLD
+        threshold: float = SIMILARITY_THRESHOLD
     ) -> List[Dict]:
         """
         Находит сущности в тексте:
-        1. Сначала проверяем пары слов (2 слова) - больший приоритет
-        2. Затем проверяем одиночные слова
-        3. Всего не более 5 сущностей, для каждой до 3 кандидатов
+        1. Проверяем пары слов (2 слова) и одиночные слова
+        2. Фильтруем по единому порогу threshold
+        3. Ранжируем по score (descending)
+        4. Дедупликация по street_id
+        5. Возвращаем топ-K результатов
         """
         if not self._initialized:
             logger.warning("SlidingWindowMatcher not initialized")
@@ -110,17 +90,15 @@ class SlidingWindowMatcher:
         if not words:
             return []
 
-        entities = []
+        # ЭТАП 1: Сбор всех кандидатов выше порога
+        all_candidates = []
         seen_street_ids: Set[int] = set()
 
-        # ЭТАП 1: Проверяем пары слов (2 слова)
+        # Проверяем пары слов (2 слова)
         if len(words) >= 2:
             bigrams = self._generate_ngrams(words, 2)
 
             for bigram in bigrams:
-                if len(entities) >= top_k:
-                    break
-
                 # Пропускаем bigram с стоп-словами
                 bigram_words = bigram.split()
                 if any(w in self._stopwords for w in bigram_words):
@@ -135,69 +113,59 @@ class SlidingWindowMatcher:
                 )
 
                 if matches:
-                    name, score, _ = matches[0]
-                    street_id = self._name_to_id.get(name)
-
-                    if street_id and street_id not in seen_street_ids:
-                        overlap_ratio = self._check_overlap(name, words, threshold)
-                        if overlap_ratio >= 0.5:
+                    for name, score, _ in matches:
+                        street_id = self._name_to_id.get(name)
+                        if street_id and street_id not in seen_street_ids:
                             seen_street_ids.add(street_id)
-                            entities.append({
+                            all_candidates.append({
                                 'text': bigram,
                                 'street_id': street_id,
                                 'matched_name': name,
                                 'score': score / 100.0,
-                                'source': 'bigram',
-                                'overlap_ratio': overlap_ratio,
-                                'candidates': [
-                                    {'name': m[0], 'score': m[1] / 100.0}
-                                    for m in matches
-                                ]
+                                'source': 'bigram'
                             })
 
-        # ЭТАП 2: Проверяем одиночные слова
-        if len(entities) < top_k:
-            for word in words:
-                if len(entities) >= top_k:
-                    break
-                if len(word) < 3:
-                    continue
-                if word in self._stopwords:
-                    continue
+        # Проверяем одиночные слова (если не набрали top_k из bigrams)
+        remaining = top_k * 2  # запас для слов
+        for word in words:
+            if len(word) < 3:
+                continue
+            if word in self._stopwords:
+                continue
 
-                matches = process.extract(
-                    word,
-                    self._all_names,
-                    scorer=fuzz.ratio,
-                    limit=MAX_CANDIDATES,
-                    score_cutoff=threshold * 100
-                )
+            matches = process.extract(
+                word,
+                self._all_names,
+                scorer=fuzz.ratio,
+                limit=MAX_CANDIDATES,
+                score_cutoff=threshold * 100
+            )
 
-                if matches:
-                    name, score, _ = matches[0]
+            if matches:
+                for name, score, _ in matches:
                     street_id = self._name_to_id.get(name)
-
                     if street_id and street_id not in seen_street_ids:
-                        overlap_ratio = self._check_overlap(name, words, threshold)
-                        if overlap_ratio >= 0.5:
-                            seen_street_ids.add(street_id)
-                            entities.append({
-                                'text': word,
-                                'street_id': street_id,
-                                'matched_name': name,
-                                'score': score / 100.0,
-                                'source': 'word',
-                                'overlap_ratio': overlap_ratio,
-                                'candidates': [
-                                    {'name': m[0], 'score': m[1] / 100.0}
-                                    for m in matches
-                                ]
-                            })
+                        seen_street_ids.add(street_id)
+                        all_candidates.append({
+                            'text': word,
+                            'street_id': street_id,
+                            'matched_name': name,
+                            'score': score / 100.0,
+                            'source': 'word'
+                        })
 
-        # Сортируем: bigrams first
-        entities.sort(key=lambda x: (0 if x['source'] == 'bigram' else 1))
+        # ЭТАП 2: Ранжирование по score (descending)
+        all_candidates.sort(key=lambda x: x['score'], reverse=True)
 
-        logger.debug(f"Found {len(entities)} entities: {[(e['text'], e['source']) for e in entities]}")
+        # ЭТАП 3: Дедупликация по street_id (уже выполнена через seen_street_ids)
+
+        # ЭТАП 4: Ограничение топ-K
+        entities = all_candidates[:top_k]
+
+        # ЭТАП 5: Сортировка - bigrams имеют приоритет
+        entities.sort(key=lambda x: (0 if x['source'] == 'bigram' else 1, -x['score']))
+
+        logger.debug(f"Found {len(entities)} entities: {[(e['text'], e['source'], e['score']) for e in entities]}")
         return entities
 
     async def close(self):

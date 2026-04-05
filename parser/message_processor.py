@@ -16,7 +16,7 @@ import asyncpg
 import pytz
 
 # Импорт модуля поиска сущностей
-from .similarity_search import SlidingWindowMatcher, DEFAULT_SIMILARITY_THRESHOLD, MAX_ENTITIES
+from .similarity_search import SlidingWindowMatcher, SIMILARITY_THRESHOLD, MAX_ENTITIES
 
 # Импорт настроек из локального модуля
 try:
@@ -69,7 +69,7 @@ class MessageProcessor:
     async def initialize(self) -> bool:
         """Инициализация при старте."""
         try:
-            logger.info(f"✅ Using similarity threshold: {DEFAULT_SIMILARITY_THRESHOLD}")
+            logger.info(f"✅ Using similarity threshold: {SIMILARITY_THRESHOLD}")
             logger.info(f"✅ Using sliding window size: {WINDOW_SIZE}")
 
             # 1. Инициализация SlidingWindowMatcher
@@ -148,7 +148,7 @@ class MessageProcessor:
             entities = self.matcher.find_entities(
                 cleaned,
                 top_k=MAX_ENTITIES,
-                threshold=DEFAULT_SIMILARITY_THRESHOLD
+                threshold=SIMILARITY_THRESHOLD
             )
 
             if entities:

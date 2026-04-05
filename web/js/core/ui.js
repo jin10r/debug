@@ -102,6 +102,12 @@ window.initializeMap = function() {
     });
     currentTileLayer.addTo(map);
 
+    // Обновляем иконку День/Ночь при инициализации
+    const dayNightIcon = document.getElementById('dayNightIcon');
+    if (dayNightIcon && currentTileKey === 'dark') {
+        dayNightIcon.src = '/assets/images/moon.svg';
+    }
+
     // Устанавливаем экземпляр карты в глобальное состояние
     window.setMapInstance(map);
 
@@ -251,12 +257,19 @@ function initializeControls(map) {
 // Функция для инициализации кнопок взаимодействия
 function initializeInteractionControls() {
     const legendBtn = document.getElementById('legendBtn');
+    const dayNightBtn = document.getElementById('dayNightBtn');
     const closeBtn = document.getElementById('closeCenterPopup');
     const overlay = document.getElementById('centerPopupOverlay');
 
     legendBtn?.addEventListener('click', () => {
         window.hapticFeedback('light');
         showLegendPopup();
+    });
+
+    // Кнопка День/Ночь
+    dayNightBtn?.addEventListener('click', () => {
+        window.hapticFeedback('light');
+        toggleDayNightMode();
     });
 
     closeBtn?.addEventListener('click', () => {
@@ -268,6 +281,24 @@ function initializeInteractionControls() {
         window.hapticFeedback('light');
         hideCenterPopup();
     });
+}
+
+// Функция переключения режима День/Ночь
+function toggleDayNightMode() {
+    const dayNightIcon = document.getElementById('dayNightIcon');
+    const isDarkMode = currentTileKey === 'dark';
+    
+    // Переключаем между 'osm' (день) и 'dark' (ночь)
+    const newTileKey = isDarkMode ? 'osm' : 'dark';
+    
+    window.switchTileLayer(newTileKey);
+    
+    // Обновляем иконку
+    if (dayNightIcon) {
+        dayNightIcon.src = isDarkMode ? '/assets/images/sun.svg' : '/assets/images/moon.svg';
+    }
+    
+    console.log('[DayNight] Switched to:', newTileKey);
 }
 
 // Функция для добавления оверлея вопроса

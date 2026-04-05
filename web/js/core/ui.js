@@ -104,8 +104,16 @@ window.initializeMap = function() {
 
     // Обновляем иконку День/Ночь при инициализации
     const dayNightIcon = document.getElementById('dayNightIcon');
-    if (dayNightIcon && currentTileKey === 'dark') {
-        dayNightIcon.src = '/assets/images/moon.svg';
+    if (dayNightIcon) {
+        if (currentTileKey === 'dark') {
+            // Ночь - показываем солнце с оранжевым фильтром
+            dayNightIcon.src = '/assets/images/sun.svg';
+            dayNightIcon.style.filter = 'invert(1) hue-rotate(180deg)';
+        } else {
+            // День - показываем луну
+            dayNightIcon.src = '/assets/images/moon.svg';
+            dayNightIcon.style.filter = 'invert(1) hue-rotate(180deg)';
+        }
     }
 
     // Устанавливаем экземпляр карты в глобальное состояние
@@ -293,9 +301,17 @@ function toggleDayNightMode() {
     
     window.switchTileLayer(newTileKey);
     
-    // Обновляем иконку
+    // Обновляем иконку: когда ночь - показываем солнце (переключить на день), когда день - показывать луну (переключить на ночь)
     if (dayNightIcon) {
-        dayNightIcon.src = isDarkMode ? '/assets/images/sun.svg' : '/assets/images/moon.svg';
+        if (newTileKey === 'dark') {
+            // Ночь - показываем солнце (чтобы переключить на день)
+            dayNightIcon.src = '/assets/images/sun.svg';
+            dayNightIcon.style.filter = 'invert(1) hue-rotate(180deg)';
+        } else {
+            // День - показываем луну (чтобы переключить на ночь)
+            dayNightIcon.src = '/assets/images/moon.svg';
+            dayNightIcon.style.filter = 'invert(1) hue-rotate(180deg)';
+        }
     }
     
     console.log('[DayNight] Switched to:', newTileKey);

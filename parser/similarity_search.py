@@ -76,11 +76,13 @@ class SlidingWindowMatcher:
     ) -> List[Dict]:
         """
         Находит сущности в тексте:
-        1. Проверяем пары слов (2 слова) и одиночные слова
-        2. Фильтруем по единому порогу threshold
-        3. Ранжируем по score (descending)
-        4. Дедупликация по street_id
-        5. Возвращаем топ-K результатов
+        1. Генерируем униграммы и биграммы из текста
+        2. Для каждой n-gramмы ищем совпадения в базе улиц
+        3. Все кандидаты собираются в общий пул без приоритета по типу
+        4. Фильтруем по порогу threshold
+        5. Ранжируем по score (descending)
+        6. Дедупликация по street_id (оставляем лучший score)
+        7. Возвращаем топ-K результатов
         """
         if not self._initialized:
             logger.warning("SlidingWindowMatcher not initialized")
@@ -90,80 +92,54 @@ class SlidingWindowMatcher:
         if not words:
             return []
 
-        # ЭТАП 1: Сбор всех кандидатов выше порога
-        all_candidates = []
-        seen_street_ids: Set[int] = set()
+        # ЭТАП 1: Генерация всех n-gramm (униграммы + биграммы)
+        ngrams = []
 
-        # Проверяем пары слов (2 слова)
+        # Униграммы
+        for word in words:
+            if len(word) >= 3 and word not in self._stopwords:
+                ngrams.append((word, 'word'))
+
+        # Биграммы
         if len(words) >= 2:
             bigrams = self._generate_ngrams(words, 2)
-
             for bigram in bigrams:
-                # Пропускаем bigram с стоп-словами
                 bigram_words = bigram.split()
-                if any(w in self._stopwords for w in bigram_words):
-                    continue
+                if not any(w in self._stopwords for w in bigram_words):
+                    ngrams.append((bigram, 'bigram'))
 
-                matches = process.extract(
-                    bigram,
-                    self._all_names,
-                    scorer=fuzz.ratio,
-                    limit=MAX_CANDIDATES,
-                    score_cutoff=threshold * 100
-                )
+        # ЭТАП 2: Сбор всех кандидатов выше порога (общий пул)
+        all_candidates = []
 
-                if matches:
-                    for name, score, _ in matches:
-                        street_id = self._name_to_id.get(name)
-                        if street_id and street_id not in seen_street_ids:
-                            seen_street_ids.add(street_id)
-                            all_candidates.append({
-                                'text': bigram,
-                                'street_id': street_id,
-                                'matched_name': name,
-                                'score': score / 100.0,
-                                'source': 'bigram'
-                            })
-
-        # Проверяем одиночные слова (если не набрали top_k из bigrams)
-        remaining = top_k * 2  # запас для слов
-        for word in words:
-            if len(word) < 3:
-                continue
-            if word in self._stopwords:
-                continue
-
+        for ngram_text, ngram_type in ngrams:
             matches = process.extract(
-                word,
+                ngram_text,
                 self._all_names,
                 scorer=fuzz.ratio,
                 limit=MAX_CANDIDATES,
                 score_cutoff=threshold * 100
             )
 
-            if matches:
-                for name, score, _ in matches:
-                    street_id = self._name_to_id.get(name)
-                    if street_id and street_id not in seen_street_ids:
-                        seen_street_ids.add(street_id)
-                        all_candidates.append({
-                            'text': word,
-                            'street_id': street_id,
-                            'matched_name': name,
-                            'score': score / 100.0,
-                            'source': 'word'
-                        })
+            for name, score, _ in matches:
+                street_id = self._name_to_id.get(name)
+                if street_id:
+                    all_candidates.append({
+                        'text': ngram_text,
+                        'street_id': street_id,
+                        'matched_name': name,
+                        'score': score / 100.0,
+                        'source': ngram_type
+                    })
 
-        # ЭТАП 2: Ранжирование по score (descending)
-        all_candidates.sort(key=lambda x: x['score'], reverse=True)
+        # ЭТАП 3: Дедупликация по street_id — оставляем лучший score
+        deduplicated = {}
+        for candidate in all_candidates:
+            sid = candidate['street_id']
+            if sid not in deduplicated or candidate['score'] > deduplicated[sid]['score']:
+                deduplicated[sid] = candidate
 
-        # ЭТАП 3: Дедупликация по street_id (уже выполнена через seen_street_ids)
-
-        # ЭТАП 4: Ограничение топ-K
-        entities = all_candidates[:top_k]
-
-        # ЭТАП 5: Сортировка - bigrams имеют приоритет
-        entities.sort(key=lambda x: (0 if x['source'] == 'bigram' else 1, -x['score']))
+        # ЭТАП 4: Ранжирование по score (descending) и ограничение топ-K
+        entities = sorted(deduplicated.values(), key=lambda x: x['score'], reverse=True)[:top_k]
 
         logger.debug(f"Found {len(entities)} entities: {[(e['text'], e['source'], e['score']) for e in entities]}")
         return entities

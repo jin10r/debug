@@ -80,9 +80,8 @@ class RedisConfig:
 class SimilarityConfig:
     stop_words: tuple = field(default_factory=lambda: DEFAULT_STOPWORDS)
     entity_min_word_length: int = 3  # Учитываем все слова от 3 символов
-    entity_similarity_threshold: float = 0.65  # Единый порог для фильтрации
-    buffer_radius_m: float = 100.0
-    use_word_similarity_operator: bool = True
+    entity_similarity_threshold: float = 0.67  # Единый порог для фильтрации
+    buffer_radius_m: float = 100.0  # Радиус буфера вокруг точки (в метрах)
 
     # LocationFinder параметры
     default_threshold: float = 0.67  # Уровень сходства с сущностями
@@ -224,7 +223,7 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
             ),
             similarity=SimilarityConfig(
                 entity_min_word_length=env.int("ENTITY_MIN_WORD_LENGTH", default=3),
-                entity_similarity_threshold=env.float("ENTITY_SIMILARITY_THRESHOLD", default=0.55),
+                entity_similarity_threshold=env.float("ENTITY_SIMILARITY_THRESHOLD", default=0.67),
                 buffer_radius_m=env.float("BUFFER_RADIUS_M", default=100.0)
             ),
             question_overlay=QuestionOverlayConfig(

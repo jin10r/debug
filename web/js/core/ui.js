@@ -110,9 +110,9 @@ window.initializeMap = function() {
             dayNightIcon.src = '/assets/images/sun.svg';
             dayNightIcon.style.filter = 'invert(1) hue-rotate(180deg)';
         } else {
-            // День - показываем луну
+            // День - показываем луну без фильтра
             dayNightIcon.src = '/assets/images/moon.svg';
-            dayNightIcon.style.filter = 'invert(1) hue-rotate(180deg)';
+            dayNightIcon.style.filter = '';
         }
     }
 
@@ -304,13 +304,13 @@ function toggleDayNightMode() {
     // Обновляем иконку: когда ночь - показываем солнце (переключить на день), когда день - показывать луну (переключить на ночь)
     if (dayNightIcon) {
         if (newTileKey === 'dark') {
-            // Ночь - показываем солнце (чтобы переключить на день)
+            // Ночь - показываем солнце с оранжевым фильтром
             dayNightIcon.src = '/assets/images/sun.svg';
             dayNightIcon.style.filter = 'invert(1) hue-rotate(180deg)';
         } else {
-            // День - показываем луну (чтобы переключить на ночь)
+            // День - показываем луну без фильтра
             dayNightIcon.src = '/assets/images/moon.svg';
-            dayNightIcon.style.filter = 'invert(1) hue-rotate(180deg)';
+            dayNightIcon.style.filter = '';
         }
     }
     

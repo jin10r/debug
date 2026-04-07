@@ -69,6 +69,82 @@ A microservices platform that monitors Telegram channels for user-submitted repo
 - Docker Compose 2.0+
 - 2GB RAM minimum
 - Telegram Bot Token (from [@BotFather](https://t.me/BotFather))
+- **Telegram User Session** (for parsing user channels, not bot)
+
+### 🔑 Creating Telegram User Session
+
+> **⚠️ Important:** Parser uses **user account** (not bot) to read Telegram channels. You need to create a session file first.
+
+#### Step 1: Get Telegram API Credentials
+
+1. Go to https://my.telegram.org
+2. Login with your phone number
+3. Go to **API development tools**
+4. Create a new application
+5. Copy `api_id` (number) and `api_hash` (string)
+
+#### Step 2: Create Session File
+
+Create a temporary script in project root:
+
+```bash
+cat > create_session.py << 'EOF'
+import asyncio
+from pyrogram import Client
+
+async def main():
+    # Replace with your credentials from my.telegram.org
+    app = Client(
+        "my_session",
+        api_id=YOUR_API_ID,          # Replace with your api_id
+        api_hash="YOUR_API_HASH"     # Replace with your api_hash
+    )
+    
+    async with app:
+        print("✅ Session created successfully!")
+        print(f"Session file: my_session.session")
+
+asyncio.run(main())
+EOF
+```
+
+Run the script:
+
+```bash
+pip install pyrogram
+python create_session.py
+```
+
+**You will be prompted to:**
+1. Enter your phone number (with country code, e.g., `+380XXXXXXXXX`)
+2. Enter the confirmation code from Telegram
+3. Enter 2FA password (if enabled)
+
+After successful authentication, file `my_session.session` will be created.
+
+#### Step 3: Copy Session to Parser Directory
+
+```bash
+cp my_session.session parser/session.session
+```
+
+**Important:** The file must be named exactly `session.session` and located in `parser/` directory.
+
+#### Step 4: Verify Session
+
+Check that file exists:
+```bash
+ls -lh parser/session.session
+```
+
+Expected size: 5-15 KB
+
+#### ⚠️ Security Notes
+
+- **Never commit** `session.session` to Git (already in `.gitignore`)
+- **Backup** your session file securely
+- If session is deleted or corrupted, repeat the process
+- Session is tied to your Telegram account
 
 ### Installation
 
@@ -84,13 +160,16 @@ cp .env.example .env
 #   - CHANNEL_ID (Telegram channel to monitor)
 #   - JWT_SECRET (generate: python -c "import secrets; print(secrets.token_urlsafe(32))")
 
-# 3. Start services
+# 3. Ensure session file exists
+ls -lh parser/session.session  # Must exist before starting
+
+# 4. Start services
 docker-compose up -d
 
-# 4. Check logs
+# 5. Check logs
 docker-compose logs -f app
 
-# 5. Open in browser
+# 6. Open in browser
 # http://localhost
 ```
 
@@ -384,22 +463,47 @@ docker-compose exec postgres psql -U postgres -f enrich_streets.sql
 
 ## 🐛 Troubleshooting
 
-### Parser not connecting
+### Parser cannot start: Session file not found
 
-**Problem:** `Session file not found`
+**Problem:** 
+```
+Session file not found
+```
+or
+```
+pyrogram.errors.exceptions.badrequest_400.ApiIdPublishedFlood: [420 API_ID_PUBLISH_FLOOD]
+```
 
 **Solution:**
-```bash
-# Create session separately
-python -c "
-from pyrogram import Client
-app = Client('my_session', api_id=YOUR_API_ID, api_hash='YOUR_API_HASH')
-async with app:
-    print('Session created')
-"
 
-# Copy session to parser
+1. **Check if session file exists:**
+```bash
+ls -lh parser/session.session
+```
+
+2. **If file doesn't exist, create it:**
+
+See detailed instructions above in "🔑 Creating Telegram User Session" section.
+
+3. **If session is corrupted or expired:**
+```bash
+# Remove old session
+rm parser/session.session
+
+# Recreate session (see instructions above)
+python create_session.py
 cp my_session.session parser/session.session
+```
+
+4. **If you get API_ID_PUBLISH_FLOOD error:**
+- You're using wrong `api_id`/`api_hash`
+- Get fresh credentials from https://my.telegram.org
+- Wait 24 hours if flood-limited
+
+5. **Restart parser after adding session:**
+```bash
+docker-compose restart parser
+docker-compose logs -f parser
 ```
 
 ### Redis unavailable

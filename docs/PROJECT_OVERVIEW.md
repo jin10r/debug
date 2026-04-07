@@ -267,18 +267,69 @@ POSTGRES_PASSWORD=secure        # Пароль PostgreSQL
 
 ## 🐛 Типичные проблемы
 
-### Parser не подключается к Telegram
+### Parser не подключается к Telegram: Session file not found
 
-**Симптом:** `Session file not found`
+**Симптом:** `Session file not found` или `API_ID_PUBLISH_FLOOD`
 
-**Решение:**
+**Полная инструкция по созданию сессии:**
+
+#### 1. Получите API credentials
+
+1. Перейдите на https://my.telegram.org
+2. Войдите по номеру телефона
+3. Перейдите в **API development tools**
+4. Создайте новое приложение
+5. Скопируйте `api_id` и `api_hash`
+
+#### 2. Создайте файл сессии
+
 ```bash
-# Создать сессию
-python -c "from pyrogram import Client; ..."
+cat > create_session.py << 'EOF'
+import asyncio
+from pyrogram import Client
 
-# Скопировать
-cp my_session.session parser/session.session
+async def main():
+    app = Client(
+        "my_session",
+        api_id=YOUR_API_ID,          # Замените!
+        api_hash="YOUR_API_HASH"     # Замените!
+    )
+    
+    async with app:
+        print("✅ Сессия создана!")
+
+asyncio.run(main())
+EOF
 ```
+
+```bash
+pip install pyrogram
+python create_session.py
+```
+
+Введите:
+- Номер телефона (например `+380XXXXXXXXX`)
+- Код подтверждения из Telegram
+- 2FA пароль (если есть)
+
+#### 3. Скопируйте сессию
+
+```bash
+cp my_session.session parser/session.session
+ls -lh parser/session.session  # Проверьте: 5-15 KB
+```
+
+#### 4. Перезапустите парсер
+
+```bash
+docker-compose restart parser
+docker-compose logs -f parser
+```
+
+**⚠️ Важно:**
+- Никогда не коммитьте `session.session` в Git
+- Сделайте бэкап сессии
+- Сессия привязана к вашему аккаунту Telegram
 
 ### События не появляются на карте
 

@@ -391,22 +391,87 @@ docker-compose exec app curl http://localhost:8080/metrics
 
 ## 🐛 Troubleshooting
 
-### Parser не подключается
+### Parser не подключается: Session file not found
 
-**Проблема:** Ошибка `Session file not found`
+**Проблема:** Ошибка `Session file not found` или `pyrogram.errors.exceptions.badrequest_400.ApiIdPublishedFlood`
 
 **Решение:**
-```bash
-# Создайте сессию отдельно
-python -c "
-from pyrogram import Client
-app = Client('my_session', api_id=YOUR_API_ID, api_hash='YOUR_API_HASH')
-async with app:
-    print('Session created')
-"
 
-# Скопируйте сессию
+#### Шаг 1: Получите API credentials
+
+1. Перейдите на https://my.telegram.org
+2. Войдите по номеру телефона
+3. Перейдите в **API development tools**
+4. Создайте новое приложение
+5. Скопируйте `api_id` (число) и `api_hash` (строка)
+
+#### Шаг 2: Создайте файл сессии
+
+Создайте временный скрипт в корне проекта:
+
+```bash
+cat > create_session.py << 'EOF'
+import asyncio
+from pyrogram import Client
+
+async def main():
+    # Замените на ваши credentials из my.telegram.org
+    app = Client(
+        "my_session",
+        api_id=YOUR_API_ID,          # Замените на ваш api_id
+        api_hash="YOUR_API_HASH"     # Замените на ваш api_hash
+    )
+    
+    async with app:
+        print("✅ Сессия создана успешно!")
+        print(f"Файл сессии: my_session.session")
+
+asyncio.run(main())
+EOF
+```
+
+Запустите:
+
+```bash
+pip install pyrogram
+python create_session.py
+```
+
+**Вам будет предложено:**
+1. Ввести номер телефона (с кодом страны, например `+380XXXXXXXXX`)
+2. Ввести код подтверждения из Telegram
+3. Ввести 2FA пароль (если включен)
+
+После успешной аутентификации будет создан файл `my_session.session`.
+
+#### Шаг 3: Скопируйте сессию в директорию парсера
+
+```bash
 cp my_session.session parser/session.session
+```
+
+**Важно:** Файл должен называться точно `session.session` и находиться в директории `parser/`.
+
+#### Шаг 4: Проверьте сессию
+
+```bash
+ls -lh parser/session.session
+```
+
+Ожидаемый размер: 5-15 KB
+
+#### ⚠️ Примечания по безопасности
+
+- **Никогда не коммитьте** `session.session` в Git (уже в `.gitignore`)
+- **Сделайте бэкап** файла сессии в безопасном месте
+- Если сессия удалена или истекла, повторите процесс
+- Сессия привязана к вашему аккаунту Telegram
+
+#### Шаг 5: Перезапустите парсер
+
+```bash
+docker-compose restart parser
+docker-compose logs -f parser
 ```
 
 ### Redis недоступен

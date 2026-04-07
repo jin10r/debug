@@ -1,0 +1,263 @@
+// common.js — общие функции, доступные глобально
+// Оптимизированная версия — удалено дублирование с modules/notifications.js
+
+/**
+ * Функция тактильной отдачи (вибрации)
+ */
+window.hapticFeedback = function(type = 'medium') {
+    const tg = window.Telegram?.WebApp;
+    const hasNativeHaptics = !!tg?.HapticFeedback;
+
+    if (window.location?.hostname === 'localhost') {
+        try {
+            if (!window.__hapticDebugOnce) {
+                window.__hapticDebugOnce = true;
+                console.log('[hapticFeedback] env:', {
+                    webappVersion: tg?.version,
+                    platform: tg?.platform,
+                    hasNativeHaptics
+                });
+            }
+        } catch (e) {
+        }
+    }
+
+    if (hasNativeHaptics) {
+        try {
+            switch (type) {
+                case 'light':
+                    tg.HapticFeedback.impactOccurred('light');
+                    break;
+                case 'heavy':
+                    tg.HapticFeedback.impactOccurred('heavy');
+                    break;
+                case 'success':
+                case 'warning':
+                case 'error':
+                    tg.HapticFeedback.notificationOccurred(type);
+                    break;
+                case 'selection_changed':
+                    tg.HapticFeedback.selectionChanged();
+                    break;
+                default:
+                    tg.HapticFeedback.impactOccurred('medium');
+            }
+            return;
+        } catch (e) {
+            console.log('Telegram haptic feedback failed:', e);
+        }
+    }
+
+    if (window.telegramIntegration) {
+        try {
+            const ok = window.telegramIntegration.hapticFeedback(type);
+            if (ok) {
+                return;
+            }
+        } catch (e) {
+        }
+    }
+};
+
+window.playNotificationSound = (function() {
+    let audioContext = null;
+    let enabled = false;
+
+    function init() {
+        if (enabled) return;
+        enabled = true;
+        try {
+            const Ctx = window.AudioContext || window.webkitAudioContext;
+            if (!Ctx) return;
+            audioContext = new Ctx();
+            if (audioContext.state === 'suspended') {
+                audioContext.resume().catch(() => {});
+            }
+        } catch (e) {
+            audioContext = null;
+        }
+    }
+
+    if (document && document.addEventListener) {
+        document.addEventListener('pointerdown', init, { once: true, passive: true });
+        document.addEventListener('touchstart', init, { once: true, passive: true });
+        document.addEventListener('mousedown', init, { once: true, passive: true });
+        document.addEventListener('keydown', init, { once: true, passive: true });
+    }
+
+    return function() {
+        if (!window.Telegram?.WebApp) return false;
+        if (!audioContext) return false;
+
+        try {
+            if (audioContext.state === 'suspended') {
+                audioContext.resume().catch(() => {});
+                if (audioContext.state === 'suspended') return false;
+            }
+
+            const osc = audioContext.createOscillator();
+            const gain = audioContext.createGain();
+
+            osc.type = 'sine';
+            osc.frequency.value = 880;
+
+            gain.gain.setValueAtTime(0.0001, audioContext.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.02, audioContext.currentTime + 0.01);
+            gain.gain.exponentialRampToValueAtTime(0.0001, audioContext.currentTime + 0.10);
+
+            osc.connect(gain);
+            gain.connect(audioContext.destination);
+
+            osc.start();
+            osc.stop(audioContext.currentTime + 0.11);
+            return true;
+        } catch (e) {
+            return false;
+        }
+    };
+})();
+
+/**
+ * Функция показа уведомлений
+ */
+window.showNotification = function(message, duration = 3000, type = 'info') {
+    if (type === 'error' || type === 'warning') {
+        window.hapticFeedback('heavy');
+    } else {
+        window.hapticFeedback('light');
+    }
+
+    let container = document.getElementById('notificationContainer');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'notificationContainer';
+        container.style.cssText = `
+            position: fixed;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10000;
+            width: 90%;
+            max-width: 500px;
+            pointer-events: none;
+        `;
+        document.body.appendChild(container);
+    }
+
+    const notification = document.createElement('div');
+
+    let bgColor, textColor, borderColor;
+    switch (type) {
+        case 'warning':
+            bgColor = 'rgba(255, 165, 0, 0.9)';
+            textColor = '#000000';
+            borderColor = 'rgba(255, 140, 0, 0.8)';
+            break;
+        case 'error':
+            bgColor = 'rgba(255, 50, 50, 0.9)';
+            textColor = '#ffffff';
+            borderColor = 'rgba(255, 0, 0, 0.8)';
+            break;
+        default:
+            bgColor = 'var(--tg-secondary-bg-color, rgba(0, 0, 0, 0.85))';
+            textColor = 'var(--tg-text-color, #ffffff)';
+            borderColor = 'var(--tg-hint-color, rgba(255, 255, 255, 0.1))';
+    }
+
+    notification.style.cssText = `
+        background-color: ${bgColor};
+        color: ${textColor};
+        padding: 12px 20px;
+        border-radius: 8px;
+        margin-bottom: 10px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        font-size: 14px;
+        line-height: 1.4;
+        pointer-events: auto;
+        animation: slideDown 0.3s ease-out;
+        backdrop-filter: blur(10px);
+        border: 1px solid ${borderColor};
+    `;
+    notification.innerHTML = message;
+
+    if (!document.getElementById('notificationStyles')) {
+        const style = document.createElement('style');
+        style.id = 'notificationStyles';
+        style.textContent = `
+            @keyframes slideDown {
+                from { opacity: 0; transform: translateY(-20px); }
+                to { opacity: 1; transform: translateY(0); }
+            }
+            @keyframes slideUp {
+                from { opacity: 1; transform: translateY(0); }
+                to { opacity: 0; transform: translateY(-20px); }
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
+    container.appendChild(notification);
+
+    setTimeout(() => {
+        notification.style.animation = 'slideUp 0.3s ease-out';
+        setTimeout(() => notification.remove(), 300);
+    }, duration);
+
+    notification.addEventListener('click', () => {
+        notification.style.animation = 'slideUp 0.3s ease-out';
+        setTimeout(() => notification.remove(), 300);
+    });
+};
+
+/**
+ * Функция форматирования времени (только часы:минуты)
+ * API возвращает время в UTC в формате ISO 8601
+ * Конвертируем в Europe/Kiev для отображения
+ */
+window.formatDateTime = function(dateTimeStr) {
+    if (!dateTimeStr) return '';
+    try {
+        const timeMatch = dateTimeStr.match(/T(\d{2}):(\d{2})/);
+        if (timeMatch) {
+            return `${timeMatch[1]}:${timeMatch[2]}`;
+        }
+
+        const date = new Date(dateTimeStr);
+        if (isNaN(date.getTime())) return '';
+
+        // Конвертируем UTC время в киевское
+        // Используем Intl.DateTimeFormat для правильной конвертации с учетом DST
+        const timeFormatter = new Intl.DateTimeFormat('ru-RU', {
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false,
+            timeZone: 'Europe/Kiev'
+        });
+        
+        return timeFormatter.format(date);
+    } catch (e) {
+        console.error('Invalid datetime format:', dateTimeStr, e);
+        return '';
+    }
+};
+
+/**
+ * Функция обработки HTML для Telegram
+ */
+window.processTelegramHTML = function(html) {
+    if (!html) return '';
+
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = html;
+
+    tempDiv.querySelectorAll('a').forEach(link => {
+        link.setAttribute('target', '_blank');
+        link.setAttribute('rel', 'noopener noreferrer');
+        link.style.color = 'var(--tg-link-color, #2678b6)';
+        link.style.textDecoration = 'underline';
+    });
+
+    return tempDiv.innerHTML;
+};
+
+console.log('✅ Common functions loaded globally');

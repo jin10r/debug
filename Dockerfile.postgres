@@ -1,0 +1,25 @@
+FROM postgis/postgis:15-3.3
+
+# Установка pg_cron для автоматической очистки событий
+RUN apt-get update && apt-get install -y postgresql-15-cron \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Копирование конфигурации
+COPY postgres/config/postgresql.conf /etc/postgresql/postgresql.conf
+COPY postgres/config/pg_hba.conf /etc/postgresql/pg_hba.conf
+
+# Копирование скриптов инициализации
+COPY postgres/init-scripts/ /docker-entrypoint-initdb.d/
+
+# Копирование данных
+COPY postgres/data/ /docker-entrypoint-initdb.d/data/
+
+# Настройка прав
+RUN chmod 644 /etc/postgresql/postgresql.conf \
+    && chmod 640 /etc/postgresql/pg_hba.conf \
+    && chown -R postgres:postgres /docker-entrypoint-initdb.d/
+
+EXPOSE 5432
+
+CMD ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]

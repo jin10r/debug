@@ -1,0 +1,224 @@
+# Docker Compose - Survival Map v2
+# Architecture: Parser with SQLite replica + PostgreSQL with PostGIS
+
+services:
+  # =============================================================================
+  # PostgreSQL - основной storage с PostGIS
+  # =============================================================================
+  postgres:
+    build:
+      context: .
+      dockerfile: Dockerfile.postgres
+    container_name: survival_postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - db
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres && psql -U postgres -d postgres -c 'SELECT pg_is_in_recovery()' | grep -q 'f' && psql -U postgres -d postgres -c 'SELECT 1'"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 180s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    restart: unless-stopped
+
+  # =============================================================================
+  # Parser - Telegram парсер с in-memory кэшем
+  # =============================================================================
+  parser:
+    build:
+      context: .
+      dockerfile: Dockerfile.parser
+    container_name: survival_parser
+    environment:
+      # PostgreSQL connection
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: postgres
+      DB_USER: postgres
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      # Telegram
+      CHANNEL_ID: ${CHANNEL_ID}
+      # JWT Secret (required for settings validation)
+      JWT_SECRET: ${JWT_SECRET}
+      # Media
+      EVENTS_MEDIA_DIR: /media/events
+      # Logging (optional - not implemented in code)
+      # LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # LOG_FORMAT: ${LOG_FORMAT:-json}
+      # HuggingFace cache
+      HF_HOME: /app/.cache/huggingface
+      TRANSFORMERS_CACHE: /app/.cache/huggingface
+    volumes:
+      - events_media:/media/events
+      - parser_cache:/app/.cache/huggingface
+      - ./parser/session.session:/app/parser/session.session:rw
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend
+      - db
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'python.*monitoring' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 120s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1024M
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: false
+    tmpfs:
+      - /tmp:noexec,nosuid,size=100m
+    restart: unless-stopped
+
+  # =============================================================================
+  # Redis - кэш и очереди (опционально)
+  # =============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: survival_redis
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru --requirepass ${REDIS_PASSWORD:-}
+    volumes:
+      - redis_data:/data
+    networks:
+      - backend
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-}", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 256M
+    restart: unless-stopped
+
+  # =============================================================================
+  # App - API сервер (опционально)
+  # =============================================================================
+  app:
+    build: .
+    container_name: survival_app
+    environment:
+      # Database
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: postgres
+      DB_USER: postgres
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      # Redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      # JWT
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-900}
+      JWT_REFRESH_TTL: ${JWT_REFRESH_TTL:-604800}
+      # Bot
+      BOT_TOKEN: ${BOT_TOKEN}
+      # App
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8080
+      APP_TELEGRAM_VALIDATION: ${TELEGRAM_VALIDATION_ENABLED:-False}
+      # Optional
+      WEBAPP_URL: ${WEBAPP_URL:-}
+      REDIRECT_URL: ${REDIRECT_URL:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - frontend
+      - backend
+      - db
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/health')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 40s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+    restart: unless-stopped
+
+  # =============================================================================
+  # Nginx - reverse proxy
+  # =============================================================================
+  nginx:
+    image: nginx:alpine
+    container_name: survival_nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./web:/usr/share/nginx/html:ro
+      - events_media:/usr/share/nginx/html/assets/images/events:ro
+    depends_on:
+      - app
+    networks:
+      - frontend
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+    restart: unless-stopped
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
+  db:
+    driver: bridge
+    internal: true  # No external access
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  postgres_data:
+    driver: local
+  events_media:
+    driver: local
+  redis_data:
+    driver: local
+  parser_cache:
+    driver: local

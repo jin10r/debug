@@ -1,93 +1,478 @@
-# survival_map
+# 🗺️ Survival Map v2 — Real-time Event Mapping Platform
 
+**Real-time geospatial event mapping for Odesa, Ukraine**
 
+[![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/)
+[![PostgreSQL 15](https://img.shields.io/badge/postgresql-15-blue.svg)](https://www.postgresql.org/)
+[![PostGIS 3.3](https://img.shields.io/badge/postgis-3.3-green.svg)](https://postgis.net/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-## Getting started
+---
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+## 📋 Overview
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+A microservices platform that monitors Telegram channels for user-submitted reports about local events (police checkpoints, bus movements, traffic incidents, etc.), extracts location entities using fuzzy string matching, geocodes them, and displays them on an interactive web map in real time.
 
-## Add your files
+### Key Features
 
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+- 🔄 **Real-time updates** via WebSocket (sub-second delivery)
+- 🔍 **Fuzzy entity matching** using Rapidfuzz with sliding window algorithm (1-5ms)
+- 🗺️ **PostGIS geocoding** with multiple strategies (single match, intersection, random fallback)
+- 🤖 **Telegram bot** with WebApp integration
+- 🔐 **JWT authentication** with Telegram HMAC validation
+- 📊 **Prometheus metrics** for monitoring
+- 🐳 **Docker microservices** with resource limits (~2GB RAM total)
+
+---
+
+## 🏗️ Architecture
 
 ```
-cd existing_repo
-git remote add origin https://gitlab.com/trav1s/survival_map.git
-git branch -M main
-git push -uf origin main
+  Telegram Channel
+        |
+        v
+  +----------+        +----------------+
+  |  Parser  |------->|  PostgreSQL    |
+  | (Pyrogram|  events|  + PostGIS     |
+  | +Rapidfuzz)       +-------+--------+
+  +----------+                |
+                              | events_new NOTIFY
+                              v
+  +----------+        +-------+--------+
+  |  Nginx   |<------>|  App (aiohttp) |
+  | (reverse |  proxy |  + aiogram bot |
+  |  proxy)  |        |  + WebSocket   |
+  +----------+        +----------------+
+        |                     |
+        v                     v
+   Static files         Redis (cache)
+   (web frontend)
 ```
 
-## Integrate with your tools
+### Services
 
-* [Set up project integrations](https://gitlab.com/trav1s/survival_map/-/settings/integrations)
+| Service | Tech Stack | Resources | Purpose |
+|---------|-----------|-----------|---------|
+| **Parser** | Pyrogram + Rapidfuzz | 0.25 CPU, 256MB RAM | Monitor Telegram, extract entities |
+| **PostgreSQL** | PostGIS 3.3 + pg_cron | 0.5 CPU, 512MB RAM | Store events, streets, compute geometry |
+| **App** | aiohttp + aiogram | 0.25 CPU, 256MB RAM | Web API, WebSocket, bot |
+| **Redis** | Redis 7 | 0.1 CPU, 128MB RAM | Cache, sessions, replay protection |
+| **Nginx** | Nginx | 0.1 CPU, 64MB RAM | Reverse proxy, static files |
 
-## Collaborate with your team
+---
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+## 🚀 Quick Start
 
-## Test and Deploy
+### Prerequisites
 
-Use the built-in continuous integration in GitLab.
+- Docker 20+
+- Docker Compose 2.0+
+- 2GB RAM minimum
+- Telegram Bot Token (from [@BotFather](https://t.me/BotFather))
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+### Installation
 
-***
+```bash
+# 1. Clone repository
+git clone <repository_url>
+cd rapid_window
 
-# Editing this README
+# 2. Configure environment
+cp .env.example .env
+# Edit .env and set:
+#   - BOT_TOKEN (from BotFather)
+#   - CHANNEL_ID (Telegram channel to monitor)
+#   - JWT_SECRET (generate: python -c "import secrets; print(secrets.token_urlsafe(32))")
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+# 3. Start services
+docker-compose up -d
 
-## Suggestions for a good README
+# 4. Check logs
+docker-compose logs -f app
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+# 5. Open in browser
+# http://localhost
+```
 
-## Name
-Choose a self-explaining name for your project.
+### Environment Variables
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+**Required:**
+```env
+# Telegram
+BOT_TOKEN=123456:ABC-DEF...
+CHANNEL_ID=-1001234567890
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+# Database
+POSTGRES_PASSWORD=secure_password
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+# JWT (MUST be changed in production!)
+JWT_SECRET=<min-32-characters-secret>
+```
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+**Optional:**
+```env
+# Feature flags
+TELEGRAM_VALIDATION_ENABLED=true
+ENABLE_RANDOM_POINTS=true
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+# Map settings
+MAP_CENTER_LAT=46.49804
+MAP_CENTER_LNG=30.83135
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+# Redis
+REDIS_PASSWORD=secure_redis_password
+```
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+---
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+## 📊 Data Flow
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+1. **Parser** reads Telegram messages from monitored channel
+2. **Text cleaning**: HTML stripping, Cyrillic normalization, truncation at "Сообщить" marker
+3. **Entity matching**: Sliding window algorithm (bigrams → unigrams) with Rapidfuzz
+4. **Layer detection**: Keyword-based classification (cops/bus/traffic/pig)
+5. **Database insertion**: PostgreSQL `process_location_smart()` computes geometry
+6. **Real-time broadcast**: PG NOTIFY → asyncpg LISTEN → WebSocket → web clients
+7. **Auto-cleanup**: pg_cron deletes events older than 1 hour (every 5 minutes)
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+### Entity Matching Pipeline
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+```
+Input text: "Преображенская в сторону Софиевской"
+    ↓
+Clean: "преображенская в сторону софиевской"
+    ↓
+Stage 1 - Bigrams (window=2):
+  - "преображенская в" → no match
+  - "в сторону" → skip (stopwords)
+  - "сторону софиевской" → Софиевская (0.85) ✅
+    ↓
+Stage 2 - Unigrams:
+  - "преображенская" → Преображенская (0.92) ✅
+  - "софиевской" → already found
+    ↓
+Result: [Преображенская (0.92), Софиевская (0.85)]
+Strategy: centroid (two streets → midpoint)
+```
 
-## License
-For open source projects, say how it is licensed.
+---
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+## 📡 API Reference
+
+### Events
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/events` | GET | Get events snapshot (GeoJSON) |
+| `/api/events/status` | GET | Get metadata (version, max_event_id) |
+| `/api/events/updates` | POST | Get incremental updates (after_id, limit) |
+| `/api/events/streets` | GET | Get all streets with synonyms |
+
+### Location
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/location` | POST | Search location by text query |
+| `/api/location/batch` | POST | Batch location search |
+
+### Authentication
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/validation-config` | POST | Get validation config |
+| `/api/validate-init` | POST | Validate Telegram initData |
+| `/api/auth/refresh` | POST | Refresh access token |
+
+### Health & Cache
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Basic health check |
+| `/health/live` | GET | Liveness probe |
+| `/health/ready` | GET | Readiness probe |
+| `/health/detailed` | GET | Detailed service status |
+| `/api/cache/manifest` | POST | Get cache manifest |
+| `/api/cache/status` | POST | Get cache status |
+
+### WebSocket
+
+**Endpoint:** `ws://localhost/ws`
+
+**Protocol:**
+1. Connect with Telegram initData in first message
+2. Server validates and sends initial events snapshot
+3. Server broadcasts new events in real-time
+4. Client can send time filter changes
+
+---
+
+## 🔍 Entity Search (Sliding Window)
+
+The core entity search algorithm uses a **two-stage sliding window** approach:
+
+### Configuration
+
+```python
+# parser/message_processor.py
+MAX_ENTITIES = 5              # Max entities per message
+MAX_CANDIDATES = 3           # Max candidates per entity
+WINDOW_SIZE = 2              # Bigram window size
+DEFAULT_SIMILARITY_THRESHOLD = 0.67  # Fuzzy matching threshold
+```
+
+### Algorithm
+
+1. **Stage 1 - Bigrams**: Check all 2-word combinations with higher priority
+2. **Stage 2 - Unigrams**: Check individual words if capacity remains
+3. **Deduplication**: Each street_id appears only once
+4. **Sorting**: Bigrams first, then unigrams
+
+### Performance
+
+| Metric | Value |
+|--------|-------|
+| **Search latency** | 1-5 ms |
+| **Accuracy** | 85-95% |
+| **Memory usage** | ~10 MB |
+| **False positives** | <5% |
+
+**Detailed analysis:** See [docs/SLIDING_WINDOW_ANALYSYS.md](docs/SLIDING_WINDOW_ANALYSYS.md)
+
+---
+
+## 🗄️ Database Schema
+
+### Core Tables
+
+**streets**
+- `id` (SERIAL PRIMARY KEY)
+- `names` (TEXT[]) — Array of synonyms and case forms
+- `geom` (GEOMETRY) — Point geometry
+
+**events**
+- `id` (SERIAL PRIMARY KEY)
+- `event_time` (TIMESTAMPTZ)
+- `description` (TEXT)
+- `layer` (VARCHAR) — cops/bus/traffic/pig
+- `strategy` (VARCHAR) — single_match/centroid/random
+- `geom` (GEOMETRY)
+- `matches` (JSONB) — Matched entities with scores
+
+**events_meta**
+- Single-row table tracking version and max_event_id for incremental updates
+
+### Key Functions
+
+- `process_location_smart()` — Computes event geometry from matched street IDs
+- `search_locations()` — API location search
+- `generate_random_location_v2()` — Random point fallback for unmatched events
+- `clean_old_events()` — Auto-deletes events >1 hour (pg_cron)
+
+---
+
+## 🧪 Development
+
+### Local Development
+
+```bash
+# Without Docker (requires PostgreSQL + Redis)
+pip install -r requirements.txt
+python main.py
+
+# With Docker (hot reload)
+docker-compose up -d redis postgres
+python main.py
+```
+
+### Parser Development
+
+```bash
+# Run parser separately
+python -m parser.monitoring
+```
+
+### Frontend Development
+
+```bash
+cd web
+
+# TypeScript compilation
+npx tsc --watch
+
+# Or open map.html directly for debugging
+```
+
+### Running Tests
+
+```bash
+# Web frontend tests
+cd web/tests
+node run-tests.js
+
+# Python tests (if available)
+pytest -v
+```
+
+---
+
+## 📈 Monitoring
+
+### Prometheus Metrics
+
+**Access:**
+```bash
+curl http://localhost:8080/metrics
+```
+
+**Key metrics:**
+- `http_requests_total` — HTTP requests count
+- `http_request_duration_seconds` — Request duration
+- `db_pool_size` — Database pool size
+- `db_query_duration_seconds` — Query duration
+- `cache_hits_total` — Cache hits
+
+### Logs
+
+```bash
+# All services
+docker-compose logs -f
+
+# Specific service
+docker-compose logs -f parser
+docker-compose logs -f app
+
+# JSON structured logs (production)
+docker-compose logs -f --tail=100 app | jq
+```
+
+---
+
+## 🛠️ Utility Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `enrich_streets.py` | Analyze events to find new street names |
+| `analyze_events.py` | Detailed event matching quality analysis |
+| `export_events.py` | Export events to CSV |
+
+### Street Enrichment Workflow
+
+```bash
+# 1. Analyze events for new streets
+python enrich_streets.py
+
+# 2. Review suggested additions
+# Output: SQL statements for new streets
+
+# 3. Apply to database
+docker-compose exec postgres psql -U postgres -f enrich_streets.sql
+
+# 4. Parser will auto-reload streets via pg_notify
+```
+
+---
+
+## 📚 Documentation
+
+- [📊 Architecture Report](docs/ARCHITECTURE_REPORT.md) — Full architecture analysis
+- [🔧 Docker Architecture](docs/DOCKER_ARCHITECTURE.md) — Docker-specific documentation
+- [🔐 Security](docs/SECURITY.md) — Security best practices
+- [🔍 Sliding Window Analysis](docs/SLIDING_WINDOW_ANALYSYS.md) — Entity search quality analysis
+- [📝 Street Enrichment Report](REPORT.md) — Street database improvements
+
+---
+
+## 🐛 Troubleshooting
+
+### Parser not connecting
+
+**Problem:** `Session file not found`
+
+**Solution:**
+```bash
+# Create session separately
+python -c "
+from pyrogram import Client
+app = Client('my_session', api_id=YOUR_API_ID, api_hash='YOUR_API_HASH')
+async with app:
+    print('Session created')
+"
+
+# Copy session to parser
+cp my_session.session parser/session.session
+```
+
+### Redis unavailable
+
+**Problem:** `Redis connection failed`
+
+**Solution:**
+```bash
+docker-compose ps redis
+docker-compose restart redis
+docker-compose logs redis
+```
+
+### WebSocket not connecting
+
+**Problem:** Connection to `/ws` fails
+
+**Solution:**
+1. Check nginx config for `proxy_set_header Upgrade`
+2. Check app logs: `docker-compose logs app | grep WebSocket`
+
+### JWT token expired
+
+**Problem:** 401 Unauthorized
+
+**Solution:** Frontend auto-refreshes tokens. Manual refresh:
+```javascript
+const response = await fetch('/api/auth/refresh', {
+  method: 'POST',
+  headers: {'Content-Type': 'application/json'},
+  body: JSON.stringify({refresh_token: storedRefreshToken})
+});
+```
+
+---
+
+## 📊 Performance Benchmarks
+
+| Operation | Latency | Notes |
+|-----------|---------|-------|
+| **Entity search** | 1-5 ms | Sliding window + Rapidfuzz |
+| **process_location()** | 5-20 ms | PostGIS geometry computation |
+| **Full processing** | 10-50 ms | From message to NOTIFY |
+| **WebSocket broadcast** | <100 ms | To all connected clients |
+
+**Recommended load:** 60 messages/minute (1 per second)
+
+---
+
+## 🔮 Future Improvements
+
+- [ ] Add trigram support (window size = 3)
+- [ ] Contextual entity validation (nearby words like "ул", "ТЦ")
+- [ ] Dynamic stopword updates from analytics
+- [ ] A/B testing for similarity thresholds
+- [ ] Phonetic matching for Cyrillic variants
+- [ ] Machine learning-based entity recognition (GLiNER, spaCy)
+
+---
+
+## 📝 License
+
+MIT License — see [LICENSE](LICENSE) file
+
+---
+
+## 👥 Contacts
+
+- **Documentation:** `docs/`
+- **API:** `/api/*`
+- **Health:** `/health`
+
+---
+
+*Last updated: 2026-04-03*  
+*Version: 2.0.0*

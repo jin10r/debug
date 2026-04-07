@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Validator Tests - Stage 0</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            border-radius: 8px;
+            padding: 30px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            border-bottom: 2px solid #0088cc;
+            padding-bottom: 10px;
+        }
+        .status {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 4px;
+            font-weight: bold;
+            margin: 5px 0;
+        }
+        .status.pass { background: #d4edda; color: #155724; }
+        .status.fail { background: #f8d7da; color: #721c24; }
+        .status.running { background: #fff3cd; color: #856404; }
+        button {
+            background: #0088cc;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px 5px 10px 0;
+        }
+        button:hover { background: #0077b5; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        .test-result {
+            background: #f8f9fa;
+            border-left: 4px solid #ccc;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 0 4px 4px 0;
+        }
+        .test-result.pass { border-left-color: #28a745; }
+        .test-result.fail { border-left-color: #dc3545; }
+        #console {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 15px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            max-height: 400px;
+            overflow-y: auto;
+            margin-top: 20px;
+        }
+        .log-info { color: #4ec9b0; }
+        .log-warn { color: #ce9178; }
+        .log-error { color: #f48771; }
+        .progress {
+            background: #e9ecef;
+            border-radius: 4px;
+            height: 20px;
+            margin: 15px 0;
+            overflow: hidden;
+        }
+        .progress-bar {
+            background: #28a745;
+            height: 100%;
+            transition: width 0.3s;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧪 Validator Tests - Stage 0</h1>
+        <p>Testing Telegram WebApp validation and redirect functionality</p>
+        
+        <div class="progress" style="display: none;">
+            <div class="progress-bar" id="progressBar" style="width: 0%"></div>
+        </div>
+        
+        <button id="runTestsBtn" onclick="runTests()">🚀 Run All Tests</button>
+        <button onclick="clearConsole()">🗑️ Clear Console</button>
+        
+        <div id="results"></div>
+        
+        <h2>📋 Console Output</h2>
+        <div id="console"></div>
+    </div>
+
+    <script>
+        // Console capture
+        const consoleDiv = document.getElementById('console');
+        const originalLog = console.log;
+        const originalWarn = console.warn;
+        const originalError = console.error;
+
+        function logToConsole(message, type = 'info') {
+            const line = document.createElement('div');
+            line.className = `log-${type}`;
+            line.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            consoleDiv.appendChild(line);
+            consoleDiv.scrollTop = consoleDiv.scrollHeight;
+        }
+
+        console.log = function(...args) {
+            originalLog.apply(console, args);
+            logToConsole(args.join(' '), 'info');
+        };
+        console.warn = function(...args) {
+            originalWarn.apply(console, args);
+            logToConsole(args.join(' '), 'warn');
+        };
+        console.error = function(...args) {
+            originalError.apply(console, args);
+            logToConsole(args.join(' '), 'error');
+        };
+
+        function clearConsole() {
+            consoleDiv.innerHTML = '';
+            document.getElementById('results').innerHTML = '';
+        }
+
+        async function runTests() {
+            const btn = document.getElementById('runTestsBtn');
+            btn.disabled = true;
+            btn.textContent = '⏳ Running tests...';
+            
+            clearConsole();
+            
+            console.log('🚀 Starting Validator Tests (Stage 0)');
+            console.log('=====================================');
+
+            const results = [];
+            const totalTests = 5;
+
+            try {
+                // Load test module
+                await loadTestScript();
+                
+                // Run tests
+                const testInstance = window.validatorTests;
+                
+                // Test 1
+                updateProgress(0, totalTests);
+                console.log('\n🧪 Test 1: Validation passes in Telegram Mini App');
+                const r1 = await testInstance.test1_validationPasses();
+                results.push({ name: 'Validation passes', passed: r1 });
+                updateProgress(1, totalTests);
+
+                // Test 2
+                console.log('\n🧪 Test 2: Validation fails in browser (no Telegram)');
+                const r2 = await testInstance.test2_validationFails();
+                results.push({ name: 'Validation fails (redirect)', passed: r2 });
+                updateProgress(2, totalTests);
+
+                // Test 3
+                console.log('\n🧪 Test 3: No redirect URL - continues without validation');
+                const r3 = await testInstance.test3_noRedirectUrl();
+                results.push({ name: 'No redirect URL', passed: r3 });
+                updateProgress(3, totalTests);
+
+                // Test 4
+                console.log('\n🧪 Test 4: initData without user data');
+                const r4 = await testInstance.test4_initDataWithoutUser();
+                results.push({ name: 'initData without user', passed: r4 });
+                updateProgress(4, totalTests);
+
+                // Test 5
+                console.log('\n🧪 Test 5: Config loading from server');
+                const r5 = await testInstance.test5_configLoading();
+                results.push({ name: 'Config loading', passed: r5 });
+                updateProgress(5, totalTests);
+
+                // Display results
+                const passed = results.filter(r => r.passed).length;
+                const total = results.length;
+
+                console.log('\n=====================================');
+                console.log(`📊 Results: ${passed}/${total} tests passed`);
+                console.log('=====================================\n');
+
+                displayResults(results, passed, total);
+
+            } catch (error) {
+                console.error('Test execution failed:', error);
+                displayError(error);
+            }
+
+            btn.disabled = false;
+            btn.textContent = '🚀 Run All Tests';
+        }
+
+        function updateProgress(current, total) {
+            const percent = (current / total) * 100;
+            document.getElementById('progressBar').style.width = `${percent}%`;
+        }
+
+        function displayResults(results, passed, total) {
+            const resultsDiv = document.getElementById('results');
+            
+            let html = '<h2>📊 Test Results</h2>';
+            html += `<div class="status ${passed === total ? 'pass' : 'fail'}">`;
+            html += `Passed: ${passed}/${total}`;
+            html += '</div>';
+            
+            results.forEach((result, index) => {
+                html += `<div class="test-result ${result.passed ? 'pass' : 'fail'}">`;
+                html += `<strong>Test ${index + 1}: ${result.name}</strong><br>`;
+                html += result.passed ? '✅ PASS' : '❌ FAIL';
+                html += '</div>';
+            });
+
+            resultsDiv.innerHTML = html;
+        }
+
+        function displayError(error) {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = `
+                <div class="test-result fail">
+                    <strong>❌ Test Execution Failed</strong><br>
+                    ${error.message}
+                </div>
+            `;
+        }
+
+        function loadTestScript() {
+            return new Promise((resolve, reject) => {
+                const script = document.createElement('script');
+                script.src = '/tests/test-validator.js';
+                script.onload = () => resolve();
+                script.onerror = () => reject(new Error('Failed to load test script'));
+                document.head.appendChild(script);
+            });
+        }
+    </script>
+</body>
+</html>

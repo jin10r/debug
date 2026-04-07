@@ -178,30 +178,24 @@ GET /health/ready          # Readiness probe
 
 ---
 
-## 🛠️ Инструменты для разработки
+## 🛠️ Разработка
 
-### Скрипты анализа
+### Добавление новой улицы
 
-| Скрипт | Что делает |
-|--------|-----------|
-| `enrich_streets.py` | Ищет новые улицы в событиях |
-| `analyze_events.py` | Анализирует качество matching |
-| `export_events.py` | Экспорт событий в CSV |
-
-### Как добавить новую улицу
-
-```python
-# 1. Запустить анализ
-python enrich_streets.py
-
-# 2. Получить SQL для добавления
-# Вывод: INSERT INTO streets (names, geom) VALUES ...
-
-# 3. Применить к БД
-docker-compose exec postgres psql -U postgres
-
-# 4. Parser автоматически обновит кэш (pg_notify)
-```
+1. Откройте `postgres/data/streets.csv`
+2. Добавьте строку с названием и координатами:
+   ```
+   Название улицы,"POLYGON((lon lat, ...))"
+   ```
+   или
+   ```
+   Название улицы,"LINESTRING(lon lat, ...)"
+   ```
+3. Перезапустите PostgreSQL или выполните:
+   ```bash
+   docker-compose exec postgres psql -U postgres -f /docker-entrypoint-initdb.d/04-load-data.sql
+   ```
+4. Парсер автоматически обновит кэш через pg_notify
 
 ---
 
@@ -334,25 +328,18 @@ docker-compose logs -f parser
 ### События не появляются на карте
 
 **Причины:**
-1. WebSocket не подключён → проверить nginx config
+1. WebSocket не подключён → проверить `docker-compose logs app | grep WebSocket`
 2. PostgreSQL NOTIFY не работает → проверить `docker-compose logs app | grep NOTIFY`
-3. Нет совпадений улиц → проверить `enrich_streets.py`
+3. Нет совпадений улиц → проверить логи парсера `docker-compose logs parser`
 
 ### Много событий со стратегией "random"
 
 **Причина:** Не находятся улицы в тексте
 
 **Решение:**
-```bash
-# 1. Проверить качество matching
-python analyze_events.py
-
-# 2. Добавить новые улицы
-python enrich_streets.py
-
-# 3. Проверить стоп-слова (может, реальные улицы в стоп-словах?)
-# Файл: core/settings.py → DEFAULT_STOPWORDS
-```
+1. Проверить логи парсера на наличие unmatched entities
+2. Добавить новые улицы в `postgres/data/streets.csv`
+3. Проверить стоп-слова в `core/settings.py` → `DEFAULT_STOPWORDS`
 
 ---
 
@@ -393,12 +380,7 @@ rapid_window/
 │   └── ARCHIVE/             # Архив документов
 │
 ├── main.py                  # Entry point
-├── enrich_streets.py        # Поиск новых улиц
-├── analyze_events.py        # Анализ качества
-├── export_events.py         # Экспорт в CSV
-├── README.md                # Главная документация
-├── REPORT.md                # Отчёт по обогащению улиц
-└── CLEANUP_REPORT.md        # Отчёт по очистке
+└── README.md                # Главная документация
 ```
 
 ---
@@ -451,9 +433,9 @@ rapid_window/
 
 ### День 3: Первая задача
 
-1. Добавить новую улицу (через `enrich_streets.py`)
-2. Изменить порог сходства в `settings.py`
-3. Посмотреть эффект в `analyze_events.py`
+1. Добавить новую улицу в `postgres/data/streets.csv`
+2. Изменить порог сходства в `core/settings.py`
+3. Проверить логи парсера: `docker-compose logs -f parser`
 
 ---
 

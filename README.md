@@ -426,38 +426,14 @@ docker-compose logs -f --tail=100 app | jq
 
 ---
 
-## 🛠️ Utility Scripts
-
-| Script | Purpose |
-|--------|---------|
-| `enrich_streets.py` | Analyze events to find new street names |
-| `analyze_events.py` | Detailed event matching quality analysis |
-| `export_events.py` | Export events to CSV |
-
-### Street Enrichment Workflow
-
-```bash
-# 1. Analyze events for new streets
-python enrich_streets.py
-
-# 2. Review suggested additions
-# Output: SQL statements for new streets
-
-# 3. Apply to database
-docker-compose exec postgres psql -U postgres -f enrich_streets.sql
-
-# 4. Parser will auto-reload streets via pg_notify
-```
-
----
-
 ## 📚 Documentation
 
 - [📊 Architecture Report](docs/ARCHITECTURE_REPORT.md) — Full architecture analysis
 - [🔧 Docker Architecture](docs/DOCKER_ARCHITECTURE.md) — Docker-specific documentation
 - [🔐 Security](docs/SECURITY.md) — Security best practices
 - [🔍 Sliding Window Analysis](docs/SLIDING_WINDOW_ANALYSYS.md) — Entity search quality analysis
-- [📝 Street Enrichment Report](REPORT.md) — Street database improvements
+- [📋 Project Overview](docs/PROJECT_OVERVIEW.md) — Complete project documentation (Russian)
+- [📖 Main Documentation](docs/README.md) — Russian version of README
 
 ---
 

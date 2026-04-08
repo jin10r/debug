@@ -186,7 +186,7 @@ services:
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./web:/usr/share/nginx/html:ro
-      - events_media:/usr/share/nginx/html/assets/images/events:ro
+      - events_media:/media/events:ro
     depends_on:
       - app
     networks:

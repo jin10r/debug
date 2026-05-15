@@ -11,7 +11,11 @@ import asyncpg
 import numpy as np
 
 from .embedder import RuBertEmbedder, EMBEDDING_DIM
+
+# Импорт настроек
 from .settings import settings
+
+from core.settings import settings
 
 SIMILARITY_THRESHOLD = settings.similarity.entity_similarity_threshold  # Единый порог из настроек
 MAX_ENTITIES = 5

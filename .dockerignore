@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.git/
+.gitignore
+.qwen/
+.pytest_cache/
+.coverage
+*.cover
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.local
+.venv/
+venv/
+ENV/
+
+# Tests
+tests/
+*_test.py
+test_*.py
+
+# Documentation
+*.md
+!requirements.txt
+docs/
+
+# Legacy
+legacy/
+
+# Node modules
+node_modules/
+web/node_modules/
+
+# Session (mounted via volume)
+session.session

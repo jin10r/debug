@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#ffffff" id="theme-color-meta">
+    <meta name="color-scheme" content="light dark">
+    <title>survival_map</title>
+
+    <!-- Icons -->
+    <link rel="icon" href="data:,">
+    <link rel="apple-touch-icon" href="/assets/images/icon-192.png">
+
+    <!-- Stylesheets -->
+    <link rel="stylesheet" href="/assets/lib/leaflet.css"/>
+    <link rel="stylesheet" href="/assets/lib/MarkerCluster.css" />
+    <link rel="stylesheet" href="/assets/lib/MarkerCluster.Default.css" />
+    <link rel="stylesheet" href="css/styles.css">
+
+    <!-- Telegram Web App -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+
+    <!-- Configuration Loader -->
+    <script>
+      // JWT Token Management
+      window.getAuthHeaders = function() {
+        const headers = {
+          'Content-Type': 'application/json'
+        };
+
+        // Add JWT access token from sessionStorage
+        const token = sessionStorage.getItem('access_token');
+        if (token) {
+          headers['Authorization'] = 'Bearer ' + token;
+        }
+
+        return headers;
+      };
+
+      // Check for valid session on load
+      (async function() {
+        const token = sessionStorage.getItem('access_token');
+        const devMode = sessionStorage.getItem('dev_mode') === 'true';
+
+        // Allow dev mode without token
+        if (!token && !devMode) {
+          // No token - redirect to gate page
+          window.location.replace('/index.html');
+          return;
+        }
+
+        // Load config
+        try {
+          const configResponse = await fetch('/api/config', {
+            method: 'POST',
+            headers: window.getAuthHeaders(),
+            body: JSON.stringify({})
+          });
+
+          if (configResponse.status === 401) {
+            // Token expired or invalid - try refresh
+            const refreshToken = sessionStorage.getItem('refresh_token');
+            if (refreshToken) {
+              try {
+                const refreshResponse = await fetch('/api/auth/refresh', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ refresh_token: refreshToken })
+                });
+
+                if (refreshResponse.ok) {
+                  const refreshData = await refreshResponse.json();
+                  sessionStorage.setItem('access_token', refreshData.access_token);
+                  // Reload with new token
+                  location.reload();
+                  return;
+                }
+              } catch (e) {
+                console.error('Refresh failed:', e);
+              }
+            }
+            // Refresh failed - redirect to gate
+            window.location.replace('/index.html');
+            return;
+          }
+
+          if (configResponse.ok) {
+            const serverConfig = await configResponse.json();
+            window.APP_CONFIG = { ...window.APP_CONFIG, ...serverConfig };
+            console.log('[CONFIG] Loaded from server:', window.APP_CONFIG);
+          }
+        } catch (err) {
+          console.warn('[CONFIG] Failed to load from server:', err);
+        }
+      })();
+
+      // Default config values
+      window.APP_CONFIG = {
+        map_center_lat: 46.4825,
+        map_center_lng: 30.7233,
+        map_default_zoom: 10,
+        enable_random_points: true
+      };
+
+      // Load user info from sessionStorage
+      const userData = sessionStorage.getItem('user');
+      if (userData) {
+        try {
+          const user = JSON.parse(userData);
+          window.currentUserId = user.id;
+          window.currentUserName = user.first_name || user.username;
+        } catch (e) {
+          console.error('Failed to parse user data:', e);
+        }
+      }
+
+      // Dev mode fallback
+      if (sessionStorage.getItem('dev_mode') === 'true') {
+        window.currentUserId = window.currentUserId || 'dev_user';
+        window.currentUserName = window.currentUserName || 'Dev User';
+      }
+
+      window.isAdmin = false;
+    </script>
+
+    <!-- Service Worker Registration with Hash-Based Cache -->
+    <!-- Service Worker removed - using localStorage + WebSocket for real-time updates -->
+    <script>
+      // Handle online/offline status
+      window.addEventListener('online', () => {
+        if (window.updateOnlineStatus) window.updateOnlineStatus(true);
+      });
+
+      window.addEventListener('offline', () => {
+        if (window.updateOnlineStatus) window.updateOnlineStatus(false);
+      });
+    </script>
+
+</head>
+<body>
+    <div id="map"></div>
+    <div id="errorMessage">Ошибка: Не удалось загрузить данные.</div>
+    <div id="centerPopupOverlay"></div>
+    <div id="centerPopup">
+        <span class="close-btn" id="closeCenterPopup">×</span>
+        <div id="centerPopupContent"></div>
+    </div>
+
+    <!-- Connection status indicator -->
+    <div id="connection-indicator" style="display: none; position: absolute; top: 10px; left: 50%; transform: translateX(-50%); background: #f44336; color: white; padding: 8px 16px; border-radius: 4px; z-index: 1000; font-size: 14px;">
+        ⚠️ Нет связи с сервером
+    </div>
+
+
+    <div id="legendBtn" title="Легенда" style="position: absolute; top: 20px; right: 20px; z-index: 1000; cursor: pointer;">
+        <img src="/assets/images/legend-info.svg" class="interaction-icon" style="width: 24px; height: 24px;" alt="Легенда">
+    </div>
+
+    <div id="dayNightBtn" title="День/Ночь" style="position: absolute; top: 50px; right: 20px; z-index: 1000; cursor: pointer;">
+        <img id="dayNightIcon" src="/assets/images/sun.svg" class="interaction-icon" style="width: 24px; height: 24px;" alt="День/Ночь">
+    </div>
+
+    <div id="controlsContainer">
+        <div id="controlsSlider">
+            <!-- Первый слайд: Время и Слои (объединенные) -->
+            <div id="realtimeControls" class="controlPanel">
+                <div class="centered-content">
+                    <p>Отображать события за:</p>
+                    <div class="buttons">
+                        <button data-minutes="15">15 минут</button>
+                        <button data-minutes="30">30 минут</button>
+                        <button data-minutes="60">1 час</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/assets/lib/leaflet.js"></script>
+    <script src="/assets/lib/leaflet.markercluster.js"></script>
+    <script src="/assets/lib/proj4.min.js"></script>
+    <script src="/assets/lib/proj4leaflet.js"></script>
+
+    <!-- Initialization -->
+    <script>
+      (async function() {
+        const loadScript = (src) => new Promise((resolve, reject) => {
+          try {
+            const s = document.createElement('script');
+            s.src = src;
+            s.defer = true;
+            s.onload = () => resolve(true);
+            s.onerror = () => reject(new Error('Failed to load ' + src));
+            document.head.appendChild(s);
+          } catch (e) {
+            reject(e);
+          }
+        });
+
+        // Use timestamp-based versioning (no server-side manifest)
+        const fallbackV = String(Date.now());
+        const integrationUrl = `/js/telegram/integration.js/__v__/${fallbackV}`;
+
+        console.log('[BOOT] User already authenticated, loading app...');
+
+        // Load tg integration only (no validator needed)
+        await loadScript(integrationUrl);
+
+        // Initialize Telegram Mini App integration
+        if (window.telegramIntegration) {
+          window.telegramIntegration.init();
+
+          window.telegramIntegration.on('onActivated', () => {
+            console.log('App activated - refreshing data');
+          });
+
+          window.telegramIntegration.on('onViewportChanged', (event) => {
+            console.log('Viewport changed:', event);
+          });
+        }
+
+        // Initialize Telegram WebApp
+        if (window.Telegram?.WebApp) {
+          window.Telegram.WebApp.ready();
+          window.Telegram.WebApp.expand();
+        }
+
+        console.log('✅ User loaded:', window.currentUserId);
+
+        // ===================================================
+        // Load all dependencies
+        // ===================================================
+        try {
+          const cacheBuster = Date.now();
+          await loadScript(`/dist/js/common.js?t=${cacheBuster}`);
+          await loadScript(`/dist/js/core/store.js?t=${cacheBuster}`);
+          await loadScript(`/dist/js/core/local_cache.js?t=${cacheBuster}`);
+          await loadScript(`/dist/js/core/websocket.js?t=${cacheBuster}`);
+          await loadScript(`/dist/js/core/event_manager.js?t=${cacheBuster}`);
+          await loadScript(`/dist/js/core/token-manager.js?t=${cacheBuster}`);
+          await loadScript(`/dist/js/core/cache.js?t=${cacheBuster}`);
+          await loadScript(`/dist/js/core/map.js?t=${cacheBuster}`);
+          await loadScript(`/dist/js/core/data.js?t=${cacheBuster}`);
+          await loadScript(`/dist/js/modules/popups.js?t=${cacheBuster}`);
+          await loadScript(`/dist/js/modules/notifications.js?t=${cacheBuster}`);
+          await loadScript(`/dist/js/core/ui.js?t=${cacheBuster}`);
+
+          console.log('✅ All scripts loaded successfully');
+
+          // Initialize token manager for auto-refresh
+          if (window.tokenManager) {
+            await window.tokenManager.init();
+            console.log('✅ Token Manager initialized');
+          }
+
+          if (window.bootstrapUI) {
+            window.bootstrapUI();
+          } else {
+            console.error('❌ bootstrapUI not found!');
+          }
+        } catch (error) {
+          console.error('❌ Failed to load scripts:', error);
+
+          const friendlyMessage = 'Ошибка загрузки приложения. ' +
+            'Пожалуйста, закройте и заново откройте мини‑приложение.';
+
+          if (window.telegramIntegration?.showAlert) {
+            try {
+              await window.telegramIntegration.showAlert(friendlyMessage);
+            } catch (e) {
+              alert(friendlyMessage);
+            }
+          } else if (window.Telegram?.WebApp?.showAlert) {
+            try {
+              await window.Telegram.WebApp.showAlert(friendlyMessage);
+            } catch (e) {
+              alert(friendlyMessage);
+            }
+          } else {
+            alert(friendlyMessage);
+          }
+        }
+      })();
+    </script>
+</body>
+</html>

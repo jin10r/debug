@@ -1,0 +1,88 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment (all secrets here)
+.env
+.env.local
+.env.*.local
+*.local
+
+# Secrets directory (deprecated - use .env instead)
+secrets/
+
+# Logs
+*.log
+logs/
+
+# Cache
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+arms_cache/
+
+# Editor
+.qoder/
+.windsurf/
+
+# Session files
+*.session
+*.session-journal
+
+# Secrets (keep structure, not content)
+secrets/*.txt
+!secrets/.gitkeep
+
+# Test data
+tests/test_messages.txt
+
+# Analysis reports
+*.md
+!README.md
+!docs/README.md
+!docs/ARCHITECTURE_REPORT.md
+!docs/DOCKER_ARCHITECTURE.md
+!docs/PROJECT_OVERVIEW.md
+!docs/SECURITY.md
+pg_plan3.txt
+
+# Archived migration scripts and docs
+postgres/migrations/ARCHIVE/
+docs/ARCHIVE/
+
+# Misc
+.DS_Store
+Thumbs.db
+
+# ML Models (large files — run scripts/export_onnx_model.py to regenerate)
+models/
+!models/.gitkeep
+!models/gliner_onnx/
+rubert-tiny2-onnx/
+
+# Frontend build artifacts
+web/node_modules/
+web/dist/
+
+# Runtime media uploads
+media/
+
+# Build / profiling artifacts
+optimization_results.json

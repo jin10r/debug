@@ -1,0 +1,73 @@
+# Dockerfile.parser - Parser service with Semantic Search (rubert-tiny2 ONNX + pgvector)
+# Multi-stage build для минимизации размера образа
+
+# =============================================================================
+# Stage 1: Builder (установка зависимостей)
+# =============================================================================
+FROM python:3.11-slim AS builder
+
+WORKDIR /build
+
+# Устанавливаем зависимости для сборки и Python пакеты с кешированием
+RUN --mount=type=cache,target=/var/cache/apt,id=parser-apt \
+    apt-get update && apt-get install -y --no-install-recommends gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY parser/requirements.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --user -r requirements.txt && \
+    # Очистка ненужных файлов (ОСТОРОЖНО: не трогаем смонтированный /root/.cache/pip)
+    find /root/.local -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true && \
+    find /root/.local -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true && \
+    find /root/.local -type f -name "*.pyc" -delete && \
+    find /root/.local -type f -name "*.pyo" -delete && \
+    find /root/.local -type f -name "*.md" -delete
+
+# =============================================================================
+# Stage 2: Runtime (минимальный образ)
+# =============================================================================
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# CPU-only режим для ONNX (оптимизировано для контейнера с лимитом 1 CPU)
+ENV CUDA_VISIBLE_DEVICES=""
+ENV FORCE_CPU="1"
+ENV OMP_NUM_THREADS="2"
+ENV MKL_NUM_THREADS="2"
+ENV PYTHONUNBUFFERED="1"
+ENV PYTHONDONTWRITEBYTECODE="1"
+ENV PATH="/home/parser/.local/bin:$PATH"
+
+# Копируем установленные пакеты из builder
+COPY --from=builder /root/.local /home/parser/.local
+
+# Системные зависимости (только runtime) с кешированием
+RUN --mount=type=cache,target=/var/cache/apt,id=parser-runtime \
+    apt-get update && apt-get install -y --no-install-recommends procps \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean \
+    && apt-get autoremove -y
+
+# Создаём директории и пользователя (объединяем слои для меньшего размера)
+RUN useradd -m -u 1000 parser && \
+    mkdir -p /tmp /rubert-tiny2-onnx && \
+    chmod 1777 /tmp && \
+    chown -R parser:parser /app /tmp /home/parser/.local
+
+# ONNX модель (тяжёлый слой — кэшируется отдельно)
+COPY --chown=parser:parser rubert-tiny2-onnx/ ./rubert-tiny2-onnx/
+
+# Код парсера + settings + core (лёгкий слой — меняется чаще всего)
+COPY --chown=parser:parser parser/ ./parser/
+COPY --chown=parser:parser core/ ./core/
+
+# Health check (оптимизированный start-period)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD python -c "import os; os.kill(int(open('/tmp/parser.pid').read()), 0)" 2>/dev/null || exit 1
+
+# Переключаемся на пользователя parser
+USER parser
+
+# Запуск с созданием PID-файла для healthcheck
+CMD ["sh", "-c", "python -m parser.monitoring & echo $! > /tmp/parser.pid && wait"]

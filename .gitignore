@@ -83,6 +83,6 @@ web/dist/
 
 # Runtime media uploads
 media/
-
+logs
 # Build / profiling artifacts
 optimization_results.json

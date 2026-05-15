@@ -63,33 +63,34 @@ async def on_startup(app: web.Application):
     shutdown_event = asyncio.Event()
     app['shutdown_event'] = shutdown_event
     
-    # Start bot polling in background (with proper error handling)
+    # Start bot polling in background (with exponential backoff)
     async def run_bot_polling():
-        """Wrapper for bot polling with restart on errors"""
-        should_restart = True
-        while should_restart:
+        """Wrapper for bot polling with exponential backoff on network errors."""
+        if not settings or not settings.bot or not settings.bot.token:
+            logger.warning("⚠️ BOT_TOKEN not configured, skipping bot polling")
+            return
+
+        delay = 30
+        max_delay = 300
+
+        while not shutdown_event.is_set():
             try:
                 logger.info("🤖 Starting bot polling...")
+                delay = 30  # reset on successful start
                 await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
-                # If polling exits normally (shouldn't happen), stop restarting
-                should_restart = False
+                break  # normal exit
             except asyncio.CancelledError:
                 logger.info("✅ Bot polling cancelled (shutdown requested)")
-                should_restart = False
-                raise
+                break
             except Exception as e:
-                # Only restart on unexpected errors, not during shutdown
-                if not shutdown_event.is_set():
-                    logger.error(f"❌ Bot polling error: {e}, restarting in 5 seconds...")
-                    try:
-                        await asyncio.sleep(5)
-                    except asyncio.CancelledError:
-                        logger.info("✅ Bot polling restart cancelled (shutdown requested)")
-                        should_restart = False
-                        raise
-                else:
-                    logger.info("✅ Bot polling stopped (shutdown in progress)")
-                    should_restart = False
+                if shutdown_event.is_set():
+                    break
+                logger.warning(f"⚠️ Bot polling failed (likely no Telegram access): {e}. Retry in {delay}s...")
+                try:
+                    await asyncio.sleep(delay)
+                except asyncio.CancelledError:
+                    break
+                delay = min(delay * 2, max_delay)
     
     app['bot_polling_task'] = asyncio.create_task(run_bot_polling())
     

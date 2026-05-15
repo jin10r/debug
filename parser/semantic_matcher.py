@@ -13,7 +13,12 @@ import numpy as np
 from .embedder import RuBertEmbedder, EMBEDDING_DIM
 from .settings import settings
 
-SIMILARITY_THRESHOLD = settings.similarity.entity_similarity_threshold  # Единый порог из настроек
+_DEFAULT_THRESHOLD = 0.67
+SIMILARITY_THRESHOLD = (
+    settings.similarity.entity_similarity_threshold
+    if settings and settings.similarity
+    else _DEFAULT_THRESHOLD
+)
 MAX_ENTITIES = 5
 MAX_CANDIDATES_PER_NGRAM = 5  # Увеличено для украинских словоформ
 
@@ -250,15 +255,6 @@ class SemanticMatcher:
             return common_prefix_len / max(len(input_lower), len(candidate_lower)) * 0.5
         
         return 0.0
-        
-        logger.debug(
-            f"Combined score: semantic={semantic_score:.3f}*{semantic_weight}={semantic_score*semantic_weight:.3f}, "
-            f"distance={distance_meters}m→{distance_score:.3f}*{geographic_weight}={distance_score*geographic_weight:.3f}, "
-            f"lexical={lexical_score:.3f}*{lexical_weight}={lexical_score*lexical_weight:.3f}, "
-            f"total={combined_score:.3f}"
-        )
-        
-        return min(combined_score, 1.0)  # Гарантия в пределах [0,1]
     
     async def _get_street_geometries(self, pg_pool, street_ids: List[int]) -> Dict[int, str]:
         """Получение геометрий улиц по их IDs для расчета расстояний."""
@@ -715,7 +711,7 @@ class SemanticMatcher:
                                 )
                             indexed_count += 1
 
-                    logger.debug(f"Indexed batch {i // batch_size + 1}: {len(batch)} streets")
+                    logger.info(f"Indexed batch {i // batch_size + 1}/{(len(rows) + batch_size - 1) // batch_size}: {indexed_count}/{len(rows)} streets")
 
                 logger.info(f"✅ Indexed {indexed_count} streets")
                 return indexed_count

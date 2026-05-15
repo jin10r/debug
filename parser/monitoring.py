@@ -14,6 +14,14 @@ from typing import Optional, Dict, Any
 from pyrogram import Client, filters
 from pyrogram.types import Message
 
+# Настраиваем логирование на уровне модуля — до любых импортов,
+# чтобы ошибки при загрузке зависимостей были видны в docker logs.
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    force=True,
+)
+
 from core.settings import settings
 from .db_adapter import DBAdapter
 from .message_processor import MessageProcessor
@@ -35,8 +43,10 @@ class ParserBot:
 
         # Конфигурация из env через систему настроек
         if not settings or not settings.bot or not settings.bot.channel_id:
-            logger.error("CHANNEL_ID not configured in settings")
-            sys.exit(1)
+            raise RuntimeError(
+                "CHANNEL_ID not configured in settings. "
+                "Check that CHANNEL_ID is set in .env and passed to the parser container."
+            )
         self.channel_id = settings.bot.channel_id
         self.events_media_dir = os.getenv('EVENTS_MEDIA_DIR', '/app/media/events')
 

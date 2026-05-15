@@ -9,9 +9,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.postgres
-      network: host
-      cache_from:
-        - postgres:latest
     container_name: survival_postgres
     environment:
       POSTGRES_USER: postgres
@@ -46,9 +43,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.parser
-      network: host
-      cache_from:
-        - parser:latest
     container_name: survival_parser
     environment:
       # PostgreSQL connection
@@ -69,14 +63,10 @@ services:
       # HuggingFace cache
       HF_HOME: /app/.cache/huggingface
       TRANSFORMERS_CACHE: /app/.cache/huggingface
-      # Telegram proxy (optional, for blocked networks)
-      SOCKS5_HOST: ${SOCKS5_HOST:-}
-      PROXY_PORT: ${PROXY_PORT:-1080}
-      PROXY_SCHEME: ${PROXY_SCHEME:-socks5}
     volumes:
+      - events_media:/media/events
       - parser_cache:/app/.cache/huggingface
       - ./parser/session.session:/app/parser/session.session:rw
-      - events_media:/media/events:rw
     depends_on:
       postgres:
         condition: service_healthy
@@ -135,12 +125,7 @@ services:
   # App - API сервер (опционально)
   # =============================================================================
   app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      network: host
-      cache_from:
-        - app:latest
+    build: .
     container_name: survival_app
     environment:
       # Database
@@ -159,7 +144,6 @@ services:
       JWT_REFRESH_TTL: ${JWT_REFRESH_TTL:-604800}
       # Bot
       BOT_TOKEN: ${BOT_TOKEN}
-      CHANNEL_ID: ${CHANNEL_ID}
       # App
       APP_HOST: 0.0.0.0
       APP_PORT: 8080
@@ -167,10 +151,6 @@ services:
       # Optional
       WEBAPP_URL: ${WEBAPP_URL:-}
       REDIRECT_URL: ${REDIRECT_URL:-}
-      # Media
-      EVENTS_MEDIA_DIR: /media/events
-    volumes:
-      - events_media:/media/events:ro
     depends_on:
       postgres:
         condition: service_healthy

@@ -2,7 +2,7 @@
 Telegram WebApp authentication with HMAC validation and JWT tokens
 Uses centralized validation from core.utils.telegram_validation
 """
-
+from functools import wraps, lru_cache
 from typing import Optional, Dict, Tuple, Any
 import logging
 import time
@@ -10,7 +10,10 @@ import jwt
 from aiohttp import web
 
 from core.settings import settings
-from core.utils.telegram_validation import validate_telegram_webapp_data
+from core.utils.telegram_validation import (
+    validate_telegram_webapp_data,
+    extract_user_id_from_init_data
+)
 
 try:
     from redis.asyncio import Redis
@@ -77,7 +80,53 @@ async def check_redis_required_connection() -> bool:
         raise RuntimeError(f"Redis ping failed: {e}")
 
 
+async def is_hash_used(hash_value: str) -> bool:
+    """Check if initData hash was already used (replay protection).
 
+    Args:
+        hash_value: The hash value from Telegram initData
+
+    Returns:
+        True if hash was already used (replay attack detected), False otherwise
+
+    Raises:
+        RuntimeError: If Redis is unavailable
+    """
+    redis = await RedisManager().get_redis()
+    if redis is None:
+        raise RuntimeError("Redis unavailable - cannot check hash")
+    return await redis.exists(f"used_hash:{hash_value}") > 0
+
+
+async def mark_hash_used(hash_value: str, ttl: int = 86400):
+    """Mark hash as used with TTL.
+
+    Args:
+        hash_value: The hash value to mark
+        ttl: Time-to-live in seconds (default 24 hours)
+
+    Raises:
+        RuntimeError: If Redis is unavailable
+    """
+    redis = await RedisManager().get_redis()
+    if redis is None:
+        raise RuntimeError("Redis unavailable - cannot mark hash")
+    await redis.setex(f"used_hash:{hash_value}", ttl, "1")
+
+
+async def check_rate_limit(client_ip: str, max_requests: int = 5, window: int = 60) -> bool:
+    """Check if client exceeded rate limit"""
+    redis = await RedisManager().get_redis()
+    key = f"rate_limit:{client_ip}"
+
+    if redis:
+        current = await redis.incr(key)
+        if current == 1:
+            await redis.expire(key, window)
+        return current <= max_requests
+    else:
+        # In-memory fallback - no rate limiting
+        return True
 
 
 def generate_jwt_tokens(user_data: Dict[str, Any]) -> Tuple[str, str]:
@@ -190,7 +239,25 @@ def verify_jwt_token(token: str, token_type: str = 'access') -> Optional[Dict]:
         return None
 
 
+async def refresh_access_token(refresh_token: str) -> Optional[str]:
+    """Generate new access token from valid refresh token"""
+    payload = verify_jwt_token(refresh_token, 'refresh')
+    if not payload:
+        return None
 
+    now = int(time.time())
+    access_payload = {
+        'sub': payload['sub'],
+        'iat': now,
+        'exp': now + settings.jwt.access_token_ttl,
+        'type': 'access'
+    }
+
+    return jwt.encode(
+        access_payload,
+        settings.jwt.secret,
+        algorithm=settings.jwt.algorithm
+    )
 
 
 def parse_init_data(init_data: str) -> Dict[str, str]:

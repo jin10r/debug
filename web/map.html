@@ -197,9 +197,32 @@
           }
         });
 
-        // Use timestamp-based versioning (no server-side manifest)
+        // Load manifest early to build versioned URLs for scripts
+        let manifest = null;
+        try {
+          const mr = await fetch('/api/cache/manifest', {
+            method: 'POST',
+            headers: window.getAuthHeaders(),
+            body: JSON.stringify({}),
+            cache: 'no-store'
+          });
+          manifest = mr.ok ? await mr.json() : null;
+        } catch (e) {
+          manifest = null;
+        }
+
+        const getAssetHash = (p) => {
+          try {
+            const assets = manifest?.assets || {};
+            return assets[p] || assets['/' + p.replace(/^\//, '')] || assets[p.replace(/^\//, '')] || null;
+          } catch (e) {
+            return null;
+          }
+        };
+
         const fallbackV = String(Date.now());
-        const integrationUrl = `/js/telegram/integration.js/__v__/${fallbackV}`;
+        const integrationHash = getAssetHash('/js/telegram/integration.js');
+        const integrationUrl = `/js/telegram/integration.js/__v__/${encodeURIComponent(integrationHash || fallbackV)}`;
 
         console.log('[BOOT] User already authenticated, loading app...');
 
@@ -237,13 +260,14 @@
           await loadScript(`/dist/js/core/local_cache.js?t=${cacheBuster}`);
           await loadScript(`/dist/js/core/websocket.js?t=${cacheBuster}`);
           await loadScript(`/dist/js/core/event_manager.js?t=${cacheBuster}`);
-          await loadScript(`/dist/js/core/token-manager.js?t=${cacheBuster}`);
-          await loadScript(`/dist/js/core/cache.js?t=${cacheBuster}`);
-          await loadScript(`/dist/js/core/map.js?t=${cacheBuster}`);
-          await loadScript(`/dist/js/core/data.js?t=${cacheBuster}`);
-          await loadScript(`/dist/js/modules/popups.js?t=${cacheBuster}`);
-          await loadScript(`/dist/js/modules/notifications.js?t=${cacheBuster}`);
-          await loadScript(`/dist/js/core/ui.js?t=${cacheBuster}`);
+          await loadScript(`/js/core/token-manager.js?t=${cacheBuster}`);
+          await loadScript(`/js/core/cache.js?t=${cacheBuster}`);
+          await loadScript(`/js/common.js?t=${cacheBuster}`);
+          await loadScript(`/js/core/map.js?t=${cacheBuster}`);
+          await loadScript(`/js/core/data.js?t=${cacheBuster}`);
+          await loadScript(`/js/modules/popups.js?t=${cacheBuster}`);
+          await loadScript(`/js/modules/notifications.js?t=${cacheBuster}`);
+          await loadScript(`/js/core/ui.js?t=${cacheBuster}`);
 
           console.log('✅ All scripts loaded successfully');
 

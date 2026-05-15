@@ -71,18 +71,7 @@ docs/ARCHIVE/
 .DS_Store
 Thumbs.db
 
-# ML Models (large files — run scripts/export_onnx_model.py to regenerate)
+# ML Models (large files, download separately)
 models/
 !models/.gitkeep
 !models/gliner_onnx/
-rubert-tiny2-onnx/
-
-# Frontend build artifacts
-web/node_modules/
-web/dist/
-
-# Runtime media uploads
-media/
-
-# Build / profiling artifacts
-optimization_results.json

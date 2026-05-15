@@ -8,21 +8,21 @@ CREATE OR REPLACE FUNCTION process_event(
     p_layer TEXT,        -- определенный слой из парсера
     p_photo_url TEXT DEFAULT NULL
 )
-RETURNS TABLE(event_id INT, layer TEXT, strategy VARCHAR(40), geom GEOMETRY)
+RETURNS TABLE(event_id INT, layer TEXT, strategy VARCHAR(20), geom GEOMETRY)
 LANGUAGE plpgsql
 SECURITY DEFINER
 AS $$
 DECLARE
     v_layer TEXT := COALESCE(p_layer, 'pig');
     v_matches JSONB;
-    v_strategy VARCHAR(40) := 'random';
+    v_strategy VARCHAR(20) := 'random';
     v_geom GEOMETRY;
     v_event_id INT;
     v_street_ids INT[];
     v_best_street_id INT;
     v_best_score FLOAT;
     v_buffer_radius FLOAT := 100.0;  -- метры для псевдопересечения
-    v_similarity_threshold FLOAT := 0.67;  -- Должен соответствовать значению из settings.py
+    v_similarity_threshold FLOAT := 0.67;
     v_stage1_threshold FLOAT;
     v_stage2_threshold FLOAT;
     v_min_word_length INT := 4;
@@ -182,49 +182,46 @@ BEGIN
             46.49804 + 0.045 * sqrt(random()) * sin(2.0 * pi() * random())
         ), 4326);
     ELSIF array_length(v_street_ids, 1) = 1 THEN
-        -- Одна улица - берем её геометрию (с валидацией)
-        SELECT ST_MakeValid(s.geom) INTO v_geom
+        -- Одна улица - берем её геометрию
+        SELECT s.geom INTO v_geom
         FROM streets s
         WHERE s.id = v_street_ids[1];
         v_strategy := 'single_match';
     ELSE
         -- Несколько улиц - ищем пересечения и псевдопересечения
-        -- ST_MakeValid защищает от невалидных геометрий (самопересечения и др.)
         WITH found_objects AS (
-            SELECT s.id, ST_MakeValid(s.geom) AS obj_geom, s.names[1] as name
+            SELECT s.id, s.geom AS obj_geom, s.names[1] as name
             FROM streets s
             WHERE s.id = ANY(v_street_ids)
         ),
-        -- Проверяем пересечения ТОЛЬКО между РАЗНЫМИ объектами
+        -- Проверяем пересечения и объекты в радиусе 100м
         proximity_check AS (
-            SELECT
-                a.id as id1,
+            SELECT 
+                a.id as id1, 
                 b.id as id2,
                 ST_Intersects(a.obj_geom, b.obj_geom) as has_intersection,
                 ST_DWithin(
-                    ST_Transform(a.obj_geom, 3857),
-                    ST_Transform(b.obj_geom, 3857),
+                    ST_Transform(a.obj_geom, 3857), 
+                    ST_Transform(b.obj_geom, 3857), 
                     v_buffer_radius
                 ) as has_pseudo
             FROM found_objects a
             CROSS JOIN found_objects b
-            WHERE a.id < b.id  -- Гарантия: только разные объекты
-              AND ST_IsValid(a.obj_geom)  -- Дополнительная проверка после MakeValid
-              AND ST_IsValid(b.obj_geom)
+            WHERE a.id < b.id
         ),
         -- Находим первое пересечение или псевдопересечение
         first_connection AS (
-            SELECT
-                id1,
+            SELECT 
+                id1, 
                 id2,
-                CASE
-                    WHEN has_intersection THEN 'intersection'::VARCHAR(40)
-                    WHEN has_pseudo THEN 'intersection'::VARCHAR(40)
+                CASE 
+                    WHEN has_intersection THEN 'intersection'::VARCHAR(20)
+                    WHEN has_pseudo THEN 'intersection'::VARCHAR(20)
                 END as connection_type,
-                CASE
-                    WHEN has_intersection THEN
+                CASE 
+                    WHEN has_intersection THEN 
                         ST_PointOnSurface(ST_Intersection(fo1.obj_geom, fo2.obj_geom))
-                    WHEN has_pseudo THEN
+                    WHEN has_pseudo THEN 
                         -- Центр между ближайшими точками
                         ST_Centroid(ST_Collect(
                             ST_ClosestPoint(fo1.obj_geom, fo2.obj_geom),
@@ -237,15 +234,15 @@ BEGIN
             WHERE has_intersection OR has_pseudo
             LIMIT 1
         )
-        SELECT
+        SELECT 
             connection_type,
             connection_geom
         INTO v_strategy, v_geom
         FROM first_connection;
-
+        
         -- Если нет пересечений/псевдопересечений - берем геометрию лучшего объекта
         IF v_geom IS NULL THEN
-            SELECT ST_MakeValid(s.geom) INTO v_geom
+            SELECT s.geom INTO v_geom
             FROM streets s
             WHERE s.id = v_best_street_id;
             v_strategy := 'single_match';
@@ -331,35 +328,21 @@ BEGIN
           AND NOT EXISTS (SELECT 1 FROM stopwords s WHERE s.word = w.word)
     ),
     stage1_matches AS (
-        SELECT DISTINCT ON (street_candidates.id)
-            street_candidates.id,
-            street_candidates.name,
-            street_candidates.street_geom,
-            street_candidates.sim_score,
-            street_candidates.matched_part
-        FROM (
-            SELECT 
-                s.id,
-                (SELECT n FROM unnest(s.names) AS n LIMIT 1) as name,
-                s.geom AS street_geom,
-                CASE
-                    WHEN ew.word = lower(n) THEN 1.0
-                    WHEN lower(n) LIKE '%' || ew.word || '%' THEN 
-                        0.8 + (0.2 * (length(ew.word)::float / length(n)::float))
-                    WHEN ew.word % lower(n) THEN GREATEST(similarity(ew.word, lower(n)), 0.5)
-                    ELSE similarity(ew.word, lower(n))
-                END AS sim_score,
-                ew.word AS matched_part
-            FROM extracted_words ew
-            JOIN streets s ON EXISTS (SELECT 1 FROM unnest(s.names) AS n WHERE 
-                ew.word % lower(n)
-                OR lower(n) LIKE '%' || ew.word || '%'
-            )
-            CROSS JOIN unnest(s.names) AS n
-            WHERE similarity(ew.word, lower(n)) >= v_stage1_threshold
-               OR lower(n) LIKE '%' || ew.word || '%'
-        ) AS street_candidates
-        ORDER BY street_candidates.id, street_candidates.sim_score DESC
+        SELECT DISTINCT ON (s.id)
+            s.id,
+            s.name,
+            s.geom AS street_geom,
+            CASE
+                WHEN ew.word = lower(s.name) THEN 1.0
+                WHEN ew.word % s.name THEN GREATEST(similarity(ew.word, s.name), 0.7)
+                ELSE similarity(ew.word, s.name)
+            END AS sim_score,
+            ew.word AS matched_part
+        FROM extracted_words ew
+        JOIN streets s ON ew.word % s.name
+        WHERE similarity(ew.word, s.name) >= v_stage1_threshold
+        ORDER BY s.id,
+                 CASE WHEN ew.word = lower(s.name) THEN 1.0 ELSE similarity(ew.word, s.name) END DESC
     ),
     -- Stage 2: Поиск по комбинациям слов (пары)
     word_array AS (
@@ -380,35 +363,22 @@ BEGIN
         WHERE wa.words IS NOT NULL
     ),
     stage2_matches AS (
-        SELECT DISTINCT ON (street_candidates.id)
-            street_candidates.id,
-            street_candidates.name,
-            street_candidates.street_geom,
-            street_candidates.sim_score,
-            street_candidates.matched_part
-        FROM (
-            SELECT 
-                s.id,
-                (SELECT n FROM unnest(s.names) AS n LIMIT 1) as name,
-                s.geom AS street_geom,
-                CASE
-                    WHEN c.combo = lower(n) THEN 1.0
-                    WHEN lower(n) LIKE '%' || c.combo || '%' THEN 
-                        0.8 + (0.2 * (length(c.combo)::float / length(n)::float))
-                    WHEN c.combo % lower(n) THEN GREATEST(similarity(c.combo, lower(n)), 0.5)
-                    ELSE similarity(c.combo, lower(n))
-                END AS sim_score,
-                c.combo AS matched_part
-            FROM combinations c
-            JOIN streets s ON EXISTS (SELECT 1 FROM unnest(s.names) AS n WHERE 
-                c.combo % lower(n) OR lower(n) LIKE '%' || c.combo || '%'
-            )
-            CROSS JOIN unnest(s.names) AS n
-            WHERE c.combo IS NOT NULL
-              AND (similarity(c.combo, lower(n)) >= v_stage2_threshold
-                   OR lower(n) LIKE '%' || c.combo || '%')
-        ) AS street_candidates
-        ORDER BY street_candidates.id, street_candidates.sim_score DESC
+        SELECT DISTINCT ON (s.id)
+            s.id,
+            s.name,
+            s.geom AS street_geom,
+            CASE
+                WHEN c.combo = lower(s.name) THEN 1.0
+                WHEN c.combo % s.name THEN GREATEST(similarity(c.combo, s.name), 0.7)
+                ELSE similarity(c.combo, s.name)
+            END AS sim_score,
+            c.combo AS matched_part
+        FROM combinations c
+        JOIN streets s ON c.combo % s.name
+        WHERE c.combo IS NOT NULL 
+          AND similarity(c.combo, s.name) >= v_stage2_threshold
+        ORDER BY s.id,
+                 CASE WHEN c.combo = lower(s.name) THEN 1.0 ELSE similarity(c.combo, s.name) END DESC
     ),
     -- Объединение всех совпадений с приоритетом stage 2
     all_matches AS (
@@ -482,30 +452,26 @@ BEGIN
     IF match_count >= 2 THEN
         street1_id := (top_matches->0->>'street_id')::INT;
         street2_id := (top_matches->1->>'street_id')::INT;
-
-        -- Проверяем пересечение (ST_MakeValid защищает от невалидных геометрий)
-        SELECT ST_PointOnSurface(ST_Intersection(va.geom, vb.geom))
+        
+        -- Проверяем пересечение
+        SELECT ST_PointOnSurface(ST_Intersection(a.geom, b.geom)) 
         INTO intersection_result
-        FROM (SELECT ST_MakeValid(geom) as geom FROM streets WHERE id = street1_id) va,
-             (SELECT ST_MakeValid(geom) as geom FROM streets WHERE id = street2_id) vb
-        WHERE ST_IsValid(va.geom)
-          AND ST_IsValid(vb.geom)
-          AND ST_Intersects(va.geom, vb.geom);
-
+        FROM streets a, streets b 
+        WHERE a.id = street1_id AND b.id = street2_id 
+          AND ST_Intersects(a.geom, b.geom);
+        
         -- Если нет пересечения, проверяем псевдопересечение
         IF intersection_result IS NULL OR ST_IsEmpty(intersection_result) THEN
             SELECT ST_Centroid(ST_Collect(
-                ST_ClosestPoint(va.geom, vb.geom),
-                ST_ClosestPoint(vb.geom, va.geom)
+                ST_ClosestPoint(a.geom, b.geom),
+                ST_ClosestPoint(b.geom, a.geom)
             ))
             INTO intersection_result
-            FROM (SELECT ST_MakeValid(geom) as geom FROM streets WHERE id = street1_id) va,
-                 (SELECT ST_MakeValid(geom) as geom FROM streets WHERE id = street2_id) vb
-            WHERE ST_IsValid(va.geom)
-              AND ST_IsValid(vb.geom)
+            FROM streets a, streets b
+            WHERE a.id = street1_id AND b.id = street2_id
               AND ST_DWithin(
-                  ST_Transform(va.geom, 3857),
-                  ST_Transform(vb.geom, 3857),
+                  ST_Transform(a.geom, 3857),
+                  ST_Transform(b.geom, 3857),
                   v_buffer_radius
               );
         END IF;
@@ -532,8 +498,8 @@ BEGIN
     END IF;
 
     -- Одна улица или нет пересечения - берем ПОЛНУЮ геометрию первой улицы
-    SELECT ST_MakeValid(geom) INTO v_street_geom
-    FROM streets
+    SELECT geom INTO v_street_geom
+    FROM streets 
     WHERE id = (top_matches->0->>'street_id')::INT;
 
     -- Вычисляем центроид для coordinates (для удобства отображения)

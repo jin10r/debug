@@ -38,8 +38,5 @@ test_*.py
 *.md
 !requirements.txt
 
-# Unused modules (dead code)
-similarity_search.py
-
 # Session (mounted via volume)
 # session.session

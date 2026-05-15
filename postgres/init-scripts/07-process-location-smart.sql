@@ -1,14 +1,14 @@
 -- =============================================================================
 -- 07-process-location-smart.sql
 -- Умная функция обработки событий с дедупликацией по геометрии
--- ОБНОВЛЕННАЯ ВЕРСИЯ: возвращает ЛЮБЫЕ геометрии пересечений объектов
 -- =============================================================================
 -- Ключевые особенности:
 -- 1. Дедупликация синонимов по геометрии (ST_SnapToGrid)
--- 2. ВСЕ пересечения между уникальными геометриями (любые типы)
--- 3. ВСЕ псевдопересечения (500м - увеличенный радиус)
--- 4. Возвращает оригинальные геометрии, а не центроиды
--- 5. Поддерживает POINT, LINESTRING, POLYGON, MULTI* пересечения
+-- 2. ВСЕ пересечения между уникальными геометрия
+-- 3. ВСЕ псевдопересечения (100м)
+-- 4. Фильтрация выбросов (≤2км от центроида)
+-- 5. Построение геометрии (Point/LineString/Polygon)
+-- 6. Проверка размера (диагональ ≤2км)
 
 -- =============================================================================
 -- Обновление ограничения strategy в таблице events
@@ -21,9 +21,7 @@ ALTER TABLE events ADD CONSTRAINT events_strategy_check CHECK (
         'single_match',
         'intersection',
         'polygon_intersection',
-        'single_intersection',
-        'full_intersection_geometry',
-        'combined_geometries'
+        'single_intersection'
     )
 );
 
@@ -37,174 +35,256 @@ CREATE OR REPLACE FUNCTION process_location_smart(
     p_layer TEXT,
     p_photo_url TEXT DEFAULT NULL,
     p_street_ids INT[] DEFAULT NULL,
-    p_street_scores FLOAT[] DEFAULT NULL,   -- Скоринг для каждой улицы
-    p_matched_parts TEXT[] DEFAULT NULL,    -- Часть текста, совпавшая с улицей
+    p_street_scores FLOAT[] DEFAULT NULL,  -- Скоринг для каждой улицы
     p_max_distance_meters FLOAT DEFAULT 2000.0,
-    p_pseudo_radius_meters FLOAT DEFAULT 500.0
+    p_pseudo_radius_meters FLOAT DEFAULT 100.0
 )
-    RETURNS TABLE(
+RETURNS TABLE(
     event_id INT,
     result_layer TEXT,
-    result_strategy VARCHAR(40),
+    result_strategy VARCHAR(20),
     result_geom GEOMETRY,
     result_matches JSONB
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
 AS $$
-    DECLARE
-    v_layer TEXT := COALESCE(p_layer, 'pig');
-    v_matches JSONB;
-    v_strategy VARCHAR(40) := 'random';
+DECLARE
     v_geom GEOMETRY;
+    v_strategy VARCHAR(20);
+    v_matches JSONB;
     v_event_id INT;
+    v_diagonal_meters FLOAT;
 BEGIN
-    -- ПРОВЕРЯЕМ ВХОДНЫЕ ДАННЫЕ
-    IF p_street_ids IS NULL OR array_length(p_street_ids, 1) = 0 THEN
-        -- НЕТ улиц → случайная точка
-        SELECT INTO v_geom ST_SetSRID(ST_MakePoint(
-            30.71 + ((RANDOM() - 0.5) * 0.05), 
-            46.45 + ((RANDOM() - 0.5) * 0.05)
-        ), 4326);
-        v_matches = jsonb_build_object('strategy', 'random', 'streets', '[]');
-        
-    ELSIF array_length(p_street_ids, 1) = 1 THEN
-        -- ОДНА улица → возвращаем её геометрию
-        SELECT INTO v_geom, v_strategy geom, 'single_match'
-        FROM streets WHERE id = p_street_ids[1];
-        
-        v_matches = jsonb_build_object(
-            'strategy', 'single_match',
-            'streets', jsonb_build_array(jsonb_build_object(
-                'id', p_street_ids[1],
-                'score', COALESCE(p_street_scores[1], 1.0)
-            ))
-        );
-        
+    -- 1. Формируем matches из ВСЕХ найденных улиц с их скорингом
+    -- Используем unnest с двумя массивами вместе для правильного соответствия индексов
+    IF p_street_scores IS NOT NULL AND array_length(p_street_scores, 1) = array_length(p_street_ids, 1) THEN
+        -- Используем переданный скоринг с правильным сопоставлением
+        SELECT jsonb_agg(jsonb_build_object(
+            'street_id', s.id,
+            'name', s.names[1],
+            'similarity', u.score,
+            'matched_part', 'full_text'
+        ) ORDER BY u.score DESC)
+        INTO v_matches
+        FROM streets s,
+             unnest(p_street_ids, p_street_scores) AS u(id, score)
+        WHERE s.id = u.id;
     ELSE
-        -- МНОГО улиц → ищем пересечения
-        WITH 
-        -- Сначала создаем unique_geoms как основной CTE с сохранением данных
+        -- Fallback: все similarity = 1.0
+        SELECT jsonb_agg(jsonb_build_object(
+            'street_id', s.id,
+            'name', s.names[1],
+            'similarity', 1.0,
+            'matched_part', 'full_text'
+        )) INTO v_matches
+        FROM streets s
+        WHERE s.id = ANY(p_street_ids);
+    END IF;
+
+    -- 2. Если улиц нет → random в question_overlay
+    IF p_street_ids IS NULL OR array_length(p_street_ids, 1) = 0 THEN
+        v_strategy := 'random';
+        v_geom := ST_SetSRID(ST_MakePoint(
+            30.83135 + 0.045 * sqrt(random()) * cos(2.0 * pi() * random()),
+            46.49804 + 0.045 * sqrt(random()) * sin(2.0 * pi() * random())
+        ), 4326);
+
+    -- 3. Если одна улица → полная геометрия (уже POLYGON или LINESTRING из CSV)
+    ELSIF array_length(p_street_ids, 1) = 1 THEN
+        SELECT geom INTO v_geom
+        FROM streets
+        WHERE id = p_street_ids[1];
+        v_strategy := 'single_match';
+
+    -- 4. Если 2+ улицы → дедупликация по геометрии + пересечения
+    ELSE
+        WITH street_geoms AS (
+            -- Получаем все улицы с их геометриями
+            SELECT 
+                s.id,
+                s.names[1] as name,
+                s.geom,
+                -- Хэш геометрии для группировки синонимов
+                ST_AsText(ST_SnapToGrid(s.geom, 0.0001)) as geom_hash
+            FROM streets s
+            WHERE s.id = ANY(p_street_ids)
+        ),
+        -- ДЕДУПЛИКАЦИЯ по геометрии: оставляем по одному представителю на уникальную геометрию
         unique_geoms AS (
-            -- Дедупликация по геометрии (ST_SnapToGrid)
-            SELECT DISTINCT ON (ST_SnapToGrid(geom, 0.001))
-                id, geom, names
-            FROM streets 
-            WHERE id = ANY(p_street_ids)
-            ORDER BY ST_SnapToGrid(geom, 0.001), id
+            SELECT DISTINCT ON (geom_hash)
+                id,
+                name,
+                geom
+            FROM street_geoms
+            ORDER BY geom_hash, id  -- Берём первый по ID (детерминировано)
         ),
-        intersections AS (
-            -- ВСЕ возможные пересечения между уникальными геометриями
+        -- ВСЕ точки пересечения между РАЗНЫМИ геометрия
+        all_intersections AS (
             SELECT 
-                a.id as id1, 
-                b.id as id2,
-                ST_Intersection(a.geom, b.geom) as intersection_geom
-            FROM unique_geoms a
-            CROSS JOIN unique_geoms b
-            WHERE a.id < b.id  -- избегаем self-join и дубликатов
-            AND NOT ST_IsEmpty(ST_Intersection(a.geom, b.geom))
-        ),
-        pseudo_intersections AS (
-            -- ВСЕ псевдопересечения (на основе ST_DWithin с увеличенным радиусом)
-            SELECT 
-                a.id as id1,
-                b.id as id2,
-                ST_Centroid(ST_Collect(ARRAY[a.geom, b.geom])) as pseudo_intersection_geom
+                ST_Intersection(a.geom, b.geom) as point
             FROM unique_geoms a
             CROSS JOIN unique_geoms b
             WHERE a.id < b.id
-            AND ST_DWithin(a.geom, b.geom, p_pseudo_radius_meters)
+              AND ST_Intersects(a.geom, b.geom)
+              AND NOT ST_IsEmpty(ST_Intersection(a.geom, b.geom))
+              AND GeometryType(ST_Intersection(a.geom, b.geom)) = 'POINT'
         ),
-        valid_geoms AS (
-            -- Валидные пересечения
-            SELECT intersection_geom as geom
-            FROM intersections
-            WHERE NOT ST_IsEmpty(intersection_geom)
+        -- ВСЕ точки псевдопересечения (100м) между РАЗНЫМИ геометрия
+        all_pseudo AS (
+            SELECT
+                ST_Centroid(ST_Collect(
+                    ST_ClosestPoint(a.geom, b.geom),
+                    ST_ClosestPoint(b.geom, a.geom)
+                )) as point
+            FROM unique_geoms a
+            CROSS JOIN unique_geoms b
+            WHERE a.id < b.id
+              AND ST_DWithin(
+                  ST_Transform(a.geom, 3857),
+                  ST_Transform(b.geom, 3857),
+                  p_pseudo_radius_meters
+                )
+        ),
+        -- Объединяем все точки
+        all_points AS (
+            SELECT point FROM all_intersections
             UNION ALL
-            -- Валидные псевдопересечения
-            SELECT pseudo_intersection_geom as geom
-            FROM pseudo_intersections
-            WHERE NOT ST_IsEmpty(pseudo_intersection_geom)
+            SELECT point FROM all_pseudo
         ),
-        strategy_result AS (
-            -- ВЫБИРАЕМ итоговую стратегию и геометрию
+        -- Вычисляем центроид всех точек
+        centroid_calc AS (
+            SELECT ST_Centroid(ST_Collect(point)) as centroid
+            FROM all_points
+            WHERE point IS NOT NULL
+        ),
+        -- Фильтрация выбросов: расстояние от центроида ≤ max_distance
+        filtered_points AS (
             SELECT 
-                CASE 
-                    WHEN COUNT(*) > 1 THEN 'combined_geometries'
-                    WHEN COUNT(*) = 1 THEN 'full_intersection_geometry'
-                    ELSE 'single_match'
-                END as strategy,
-                CASE 
-                    WHEN COUNT(*) > 0 THEN 
-                        ST_Union(geom)
-                    ELSE 
-                        (SELECT geom FROM streets WHERE id = p_street_ids[1])
-                END as geometry
-            FROM valid_geoms
-        )
-        
-        -- Получаем результаты
-        SELECT strategy, geometry
-        INTO v_strategy, v_geom
-        FROM strategy_result;
+                p.point
+            FROM all_points p, centroid_calc c
+            WHERE p.point IS NOT NULL
+              AND ST_Distance(
+                  ST_Transform(p.point, 3857),
+                  ST_Transform(c.centroid, 3857)
+              ) <= p_max_distance_meters
+        ),
+        -- Собираем отфильтрованные точки
+        collected_points AS (
+            SELECT ST_Collect(point) as collected
+            FROM filtered_points
+        ),
+        -- Строим геометрию
+        final_geometry AS (
+            SELECT
+                CASE
+                    -- 0 точек пересечения → берём полную геометрию улицы с ЛУЧШИМ SCORE
+                    WHEN (SELECT COUNT(*) FROM filtered_points) = 0 THEN
+                        (
+                            SELECT s.geom 
+                            FROM streets s
+                            INNER JOIN unnest(p_street_ids, COALESCE(p_street_scores, ARRAY_FILL(1.0, ARRAY[array_length(p_street_ids, 1)]))) AS u(id, score) 
+                                ON s.id = u.id
+                            ORDER BY u.score DESC
+                            LIMIT 1
+                        )
 
-        -- Строим результат matches (теперь с корректной видимостью unique_geoms)
-        WITH ug AS (
-            SELECT DISTINCT ON (ST_SnapToGrid(geom, 0.001))
-                id, geom, names
-            FROM streets 
-            WHERE id = ANY(p_street_ids)
-            ORDER BY ST_SnapToGrid(geom, 0.001), id
-        )
-        SELECT jsonb_build_object(
-            'strategy', v_strategy,
-            'streets', (
-                SELECT jsonb_agg(jsonb_build_object(
-                    'id', ug.id,
-                    'names', ug.names,
-                    'score', COALESCE(p_street_scores[array_position(p_street_ids, ug.id)], 1.0)
-                ))
-                FROM ug
-            )
-        ) INTO v_matches;
-    END IF;
+                    -- 1 точка → Point
+                    WHEN (SELECT COUNT(*) FROM filtered_points) = 1 THEN
+                        (SELECT point FROM filtered_points LIMIT 1)
 
-    -- ФИЛЬТРАЦИЯ выбросов (геометрия слишком далеко от центроида)
-    IF v_geom IS NOT NULL AND NOT ST_IsEmpty(v_geom) THEN
-        DECLARE
-            v_centroid GEOMETRY := ST_Centroid(v_geom);
-            v_distances FLOAT[];
-        BEGIN
-            -- Пропускаем фильтрацию для объединенных геометрий
-            IF v_strategy != 'combined_geometries' AND 
-               ST_Distance(v_centroid, v_geom, true) > p_max_distance_meters THEN
-                -- Выброс → используем случайную точку в центроиде
-                v_geom := v_centroid;
-                v_strategy := 'random';
+                    -- 2+ точки → Convex Hull
+                    ELSE
+                        ST_ConvexHull(collected)
+                END as geom,
+                CASE
+                    WHEN (SELECT COUNT(*) FROM filtered_points) = 0 THEN 'single_match'
+                    WHEN (SELECT COUNT(*) FROM filtered_points) = 1 THEN 'single_intersection'
+                    ELSE 'polygon_intersection'
+                END as strategy
+            FROM collected_points
+        )
+        SELECT geom, strategy INTO v_geom, v_strategy FROM final_geometry;
+
+        -- 4. Проверка размера полигона (диагональ ≤ 2км)
+        IF ST_GeometryType(v_geom) = 'ST_Polygon' THEN
+            SELECT 
+                ST_Distance(
+                    ST_Transform(ST_PointN(ST_ExteriorRing(v_geom), 1), 3857),
+                    ST_Transform(ST_PointN(ST_ExteriorRing(v_geom), 3), 3857)
+                ) INTO v_diagonal_meters;
+            
+            IF v_diagonal_meters > p_max_distance_meters THEN
+                -- Полигон слишком большой → берём центроид
+                v_geom := ST_Centroid(v_geom);
+                v_strategy := 'single_match';
             END IF;
-        END;
+        END IF;
+
+        -- 5. Fallback: если геометрия всё ещё NULL → выбираем улицу с лучшим score
+        IF v_geom IS NULL THEN
+            SELECT s.geom INTO v_geom
+            FROM streets s
+            INNER JOIN unnest(p_street_ids, COALESCE(p_street_scores, ARRAY_FILL(1.0, ARRAY[array_length(p_street_ids, 1)]))) AS u(id, score) 
+                ON s.id = u.id
+            ORDER BY u.score DESC
+            LIMIT 1;
+            v_strategy := 'single_match';
+        END IF;
     END IF;
 
-    -- СОЗДАЁМ событие
-    INSERT INTO events (event_time, description, layer, photo_url, strategy, geom)
-    VALUES (p_event_time, p_description, v_layer, p_photo_url, v_strategy, v_geom)
+    -- 7. INSERT INTO events
+    INSERT INTO events (event_time, description, photo_url, layer, matches, strategy, geom)
+    VALUES (p_event_time, p_description, p_photo_url, p_layer, v_matches, v_strategy, v_geom)
     RETURNING id INTO v_event_id;
 
-    -- Возвращаем результат
-    event_id := v_event_id;
-    result_layer := v_layer;
-    result_strategy := v_strategy;
-    result_geom := v_geom;
-    result_matches := v_matches;
-    
-    RETURN NEXT;
+    -- 8. Обновление events_meta
+    UPDATE events_meta
+    SET version = version + 1,
+        updated_at = now(),
+        max_event_id = v_event_id
+    WHERE id = 1;
+
+    -- 9. NOTIFY для WebSocket
+    PERFORM pg_notify('events_new', jsonb_build_object(
+        'type', 'Feature',
+        'geometry', ST_AsGeoJSON(v_geom)::jsonb,
+        'properties', jsonb_build_object(
+            'id', v_event_id,
+            'layer', p_layer,
+            'strategy', v_strategy,
+            'description', p_description,
+            'photo_url', p_photo_url,
+            'matches', v_matches,
+            'time', p_event_time
+        )
+    )::text);
+
+    RETURN QUERY SELECT v_event_id, p_layer, v_strategy, v_geom, v_matches;
 END;
 $$;
 
--- Комментарий для функции
-COMMENT ON FUNCTION process_location_smart IS 
-'Умная функция обработки геопространственных событий с дедупликацией и поиском пересечений';
+COMMENT ON FUNCTION process_location_smart IS
+    'Умная обработка событий с дедупликацией по геометрии, фильтрацией выбросов и построением геометрии';
 
--- Индексы для оптимизации
-CREATE INDEX IF NOT EXISTS idx_streets_geom_gist ON streets USING GIST (geom);
-CREATE INDEX IF NOT EXISTS idx_streets_id ON streets (id);
+-- =============================================================================
+-- Примеры использования:
+--
+-- -- Тест 1: Синонимы (45, 46, 47 — одна геометрия)
+-- SELECT * FROM process_location_smart(
+--     now(), 'пушкинской левицкого', 'pig', NULL, 
+--     ARRAY[45, 46, 47, 123]
+-- );
+--
+-- -- Тест 2: Все синонимы
+-- SELECT * FROM process_location_smart(
+--     now(), 'пушкинской ул пушкина улица пушкина', 'pig', NULL, 
+--     ARRAY[45, 46, 47]
+-- );
+--
+-- -- Тест 3: Нет пересечений
+-- SELECT * FROM process_location_smart(
+--     now(), 'пушкинской левицкого катаева', 'pig', NULL, 
+--     ARRAY[45, 123, 200]
+-- );
+-- =============================================================================

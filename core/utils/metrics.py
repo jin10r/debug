@@ -296,4 +296,55 @@ def setup_metrics_routes(app: web.Application):
     logger.info("Metrics endpoint registered at /metrics")
 
 
+# ============================================
+# Context Managers for Timing
+# ============================================
 
+class MetricsTimer:
+    """Context manager for timing operations"""
+    
+    def __init__(self, histogram, labels: dict):
+        self.histogram = histogram
+        self.labels = labels
+        self.start_time = None
+    
+    def __enter__(self):
+        self.start_time = time.time()
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        duration = time.time() - self.start_time
+        self.histogram.labels(**self.labels).observe(duration)
+
+
+def time_nlp_operation(operation: str):
+    """Context manager for timing NLP operations"""
+    return MetricsTimer(
+        nlp_processing_duration_seconds,
+        {'operation': operation}
+    )
+
+
+def time_db_query(query_type: str):
+    """Context manager for timing database queries"""
+    return MetricsTimer(
+        db_query_duration_seconds,
+        {'query_type': query_type}
+    )
+
+
+def time_background_task(task_name: str):
+    """Context manager for timing background tasks"""
+    return MetricsTimer(
+        background_task_duration_seconds,
+        {'task_name': task_name}
+    )
+
+
+# Example usage:
+# 
+# with time_nlp_operation('normalize'):
+#     result = nlp.normalize_text(text)
+# 
+# with time_db_query('SELECT'):
+#     data = await db.fetch(query)

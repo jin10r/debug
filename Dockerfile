@@ -5,24 +5,22 @@ RUN groupadd -r appuser && useradd -r -g appuser appuser
 
 WORKDIR /app
 
-# Install system dependencies as root with BuildKit caching
-RUN --mount=type=cache,target=/var/cache/apt,id=app-apt \
-    apt-get update && apt-get install -y --no-install-recommends \
+# Install system dependencies as root
+RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies with pip caching
+# Install Python dependencies
 COPY requirements.txt .
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
 COPY core/ ./core/
 COPY main.py .
 
 # Create media directory with correct ownership
-RUN mkdir -p /app/media/events && chown -R appuser:appuser /app
+RUN mkdir -p /media/events && chown -R appuser:appuser /app /media/events
 
 # Set ownership and switch to non-root user
 RUN chown -R appuser:appuser /app

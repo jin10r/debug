@@ -116,6 +116,7 @@ def setup_logging(
     # Suppress noisy loggers
     if suppress_noisy_loggers:
         logging.getLogger("pyrogram").setLevel(logging.WARNING)
+        logging.getLogger("kurigram").setLevel(logging.WARNING)
         logging.getLogger("asyncio").setLevel(logging.WARNING)
         logging.getLogger("aiohttp.access").setLevel(logging.WARNING)
         logging.getLogger("aiogram").setLevel(logging.INFO)

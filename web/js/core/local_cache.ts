@@ -1,16 +1,17 @@
 /**
  * LocalCache - Local storage for GeoJSON events with TTL
  * 
- * CORRECTED LOGIC:
- * - localStorage is ONLY for offline display during connection loss
- * - Store is populated ONLY via WebSocket (not from localStorage)
- * - On reconnect, WebSocket sends fresh data from backend
+ * Features:
+ * - Stores events in localStorage with 60 minute TTL
+ * - In-memory Map for fast lookups by ID
+ * - Automatic cleanup of expired events
+ * - Sync with reactive store for UI updates
  * 
  * @example
  * ```typescript
  * const cache = new LocalCache(storageAdapter);
- * await cache.loadFromCache(); // For offline display only
- * cache.addEvent(event);       // From WebSocket
+ * await cache.loadFromCache();
+ * cache.addEvent(event);
  * ```
  */
 
@@ -38,9 +39,6 @@ export class LocalCache {
     
     /** Cache key for localStorage */
     private readonly CACHE_KEY = 'events_geojson';
-    
-    /** Track if WebSocket has sent initial data */
-    private hasReceivedWebSocketData = false;
 
     /**
      * Create LocalCache instance
@@ -64,13 +62,10 @@ export class LocalCache {
 
     /**
      * Load events from localStorage
-     * 
-     * NOTE: This only loads into localCache for offline display.
-     * It does NOT sync with store - store is populated only via WebSocket.
      */
     async loadFromCache(): Promise<void> {
         try {
-            console.log('[LocalCache] Loading from localStorage (offline cache)...');
+            console.log('[LocalCache] Loading from cache...');
             
             const cachedData = await this.storage.getItemJSON<EventFeatureCollection>(this.CACHE_KEY);
             
@@ -80,11 +75,12 @@ export class LocalCache {
                 
                 // Clean up expired events after loading
                 const cleaned = this.cleanupExpiredEvents();
-                console.log(`[LocalCache] Loaded ${this.masterGeoJSON.features.length} events from localStorage, cleaned ${cleaned} expired`);
+                console.log(`[LocalCache] Loaded ${this.masterGeoJSON.features.length} events, cleaned ${cleaned} expired`);
                 
-                // DO NOT sync with store here - store will be populated by WebSocket
-                // localStorage is only for offline display during connection loss
-                console.log('[LocalCache] Events loaded for offline display only (waiting for WebSocket)');
+                // Sync with store
+                if (this.masterGeoJSON.features.length > 0) {
+                    this.syncWithStore();
+                }
             } else {
                 console.log('[LocalCache] No valid cache found, initializing empty');
                 this.clear();
@@ -170,9 +166,6 @@ export class LocalCache {
             console.log('[LocalCache] Added new event:', eventId);
         }
 
-        // Mark that we've received WebSocket data
-        this.hasReceivedWebSocketData = true;
-
         // Sync with store for reactive rendering
         if (isNewEvent) {
             this.syncWithStore();
@@ -212,11 +205,6 @@ export class LocalCache {
             }
         }
 
-        // Mark that we've received WebSocket data
-        if (addedCount > 0) {
-            this.hasReceivedWebSocketData = true;
-        }
-
         // Notify for new events
         if (newEvents.length > 0 && !suppressNotifications) {
             setTimeout(() => {
@@ -231,15 +219,13 @@ export class LocalCache {
     }
 
     /**
-     * Replace all events in cache (e.g., after WebSocket reconnect)
+     * Replace all events in cache (e.g., after reconnect)
      * 
      * @param events - Array of GeoJSON features
      * @param suppressNotifications - Suppress notifications flag
      * @returns Number of events replaced
      */
     replaceAllEvents(events: EventFeature[], suppressNotifications = false): number {
-        console.log('[LocalCache] replaceAllEvents: replacing with', events.length, 'events from WebSocket');
-        
         const oldEventIds = new Set(this.eventsById.keys());
         
         // Clear current data
@@ -263,10 +249,7 @@ export class LocalCache {
         // Clean up expired
         this.cleanupExpiredEvents();
 
-        // Mark that we've received WebSocket data
-        this.hasReceivedWebSocketData = true;
-
-        // Sync with store - THIS IS THE PRIMARY WAY STORE GETS POPULATED
+        // Sync with store
         this.syncWithStore();
 
         // Notify for new events
@@ -424,7 +407,7 @@ export class LocalCache {
             this.cleanupExpiredEvents();
             
             await this.storage.setItemJSON(this.CACHE_KEY, this.masterGeoJSON);
-            console.log('[LocalCache] Saved to localStorage:', this.masterGeoJSON.features.length, 'events');
+            console.log('[LocalCache] Saved to cache:', this.masterGeoJSON.features.length, 'events');
         } catch (error) {
             console.error('[LocalCache] Error saving to cache:', error);
         }
@@ -432,10 +415,9 @@ export class LocalCache {
 
     /**
      * Sync with reactive store
-     * THIS IS THE ONLY WAY STORE GETS UPDATED (from WebSocket data)
      */
     private syncWithStore(): void {
-        console.log('[LocalCache] syncWithStore: syncing', this.masterGeoJSON.features.length, 'events to store');
+        console.log('[LocalCache] syncWithStore: syncing', this.masterGeoJSON.features.length, 'events');
         
         if (typeof window.updateEventsInStore === 'function') {
             console.log('[LocalCache] Calling updateEventsInStore...');
@@ -482,21 +464,20 @@ export class LocalCache {
         };
         this.eventsById.clear();
         
-        // DO NOT save empty to localStorage - keep old data for offline display
-        // this.saveToCache();
+        // Save empty cache
+        this.saveToCache();
         
-        console.log('[LocalCache] Cleared all data from memory (localStorage preserved)');
+        console.log('[LocalCache] Cleared all data');
     }
 
     /**
      * Get cache statistics
      */
-    getStats(): { totalEvents: number; eventsById: number; ttlMinutes: number; hasWebSocketData: boolean } {
+    getStats(): { totalEvents: number; eventsById: number; ttlMinutes: number } {
         return {
             totalEvents: this.masterGeoJSON.features.length,
             eventsById: this.eventsById.size,
-            ttlMinutes: this.TTL_MS / 1000 / 60,
-            hasWebSocketData: this.hasReceivedWebSocketData
+            ttlMinutes: this.TTL_MS / 1000 / 60
         };
     }
 }
@@ -504,4 +485,4 @@ export class LocalCache {
 // Create and export singleton instance
 window.localCache = new LocalCache();
 
-console.log('✅ LocalCache initialized (localStorage for offline only, store via WebSocket)');
+console.log('✅ LocalCache initialized');

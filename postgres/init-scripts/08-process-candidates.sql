@@ -19,14 +19,14 @@ CREATE OR REPLACE FUNCTION process_candidates(
 )
 RETURNS TABLE(
     result_geom GEOMETRY,
-    result_strategy VARCHAR(20),
+    result_strategy VARCHAR(40),
     result_matches JSONB
 )
 LANGUAGE plpgsql
 AS $$
 DECLARE
     v_geom GEOMETRY;
-    v_strategy VARCHAR(20);
+    v_strategy VARCHAR(40);
     v_matches JSONB;
 BEGIN
     -- =======================================================================
@@ -66,13 +66,13 @@ BEGIN
     END IF;
 
     -- =======================================================================
-    -- СЦЕНАРИЙ 2 ( одна улица): Пересечение не найдено → полная геометрия лучшей
+    -- СЦЕНАРИЙ 2 (одна улица): Пересечение не найдено → полная геометрия лучшей
     -- =======================================================================
     IF array_length(p_street_ids, 1) = 1 THEN
-        SELECT geom INTO v_geom
+        SELECT ST_MakeValid(geom) INTO v_geom
         FROM streets
         WHERE id = p_street_ids[1];
-        
+
         v_strategy := 'single_match';
         RETURN QUERY SELECT v_geom, v_strategy, v_matches;
     END IF;
@@ -82,12 +82,13 @@ BEGIN
     -- =======================================================================
     WITH street_geoms AS (
         -- Получаем все улицы с их геометриями
-        SELECT 
+        -- ST_MakeValid защищает от невалидных геометрий (самопересечения и др.)
+        SELECT
             s.id,
             s.names[1] as name,
-            s.geom,
+            ST_MakeValid(s.geom) as geom,
             -- Хэш геометрии для группировки синонимов (дедупликация)
-            ST_AsText(ST_SnapToGrid(s.geom, 0.0001)) as geom_hash
+            ST_AsText(ST_SnapToGrid(ST_MakeValid(s.geom), 0.0001)) as geom_hash
         FROM streets s
         WHERE s.id = ANY(p_street_ids)
     ),
@@ -102,11 +103,13 @@ BEGIN
     ),
     -- Точки ПЕРЕСЕЧЕНИЯ между РАЗНЫМИ геометриями
     intersections AS (
-        SELECT 
+        SELECT
             ST_Intersection(a.geom, b.geom) as point
         FROM unique_geoms a
         CROSS JOIN unique_geoms b
-        WHERE a.id < b.id
+        WHERE a.id < b.id  -- Только РАЗНЫЕ объекты
+          AND ST_IsValid(a.geom)
+          AND ST_IsValid(b.geom)
           AND ST_Intersects(a.geom, b.geom)
           AND NOT ST_IsEmpty(ST_Intersection(a.geom, b.geom))
           AND GeometryType(ST_Intersection(a.geom, b.geom)) = 'POINT'
@@ -120,7 +123,9 @@ BEGIN
             )) as point
         FROM unique_geoms a
         CROSS JOIN unique_geoms b
-        WHERE a.id < b.id
+        WHERE a.id < b.id  -- Только РАЗНЫЕ объекты
+          AND ST_IsValid(a.geom)
+          AND ST_IsValid(b.geom)
           AND ST_DWithin(
               ST_Transform(a.geom, 3857),
               ST_Transform(b.geom, 3857),
@@ -140,9 +145,9 @@ BEGIN
                 -- НЕТ точек → СЦЕНАРИЙ 2: полная геометрия улицы с ЛУЧШИМ SCORE
                 WHEN (SELECT COUNT(*) FROM all_points WHERE point IS NOT NULL) = 0 THEN
                     (
-                        SELECT s.geom 
+                        SELECT ST_MakeValid(s.geom)
                         FROM streets s
-                        INNER JOIN unnest(p_street_ids, p_street_scores) AS u(id, score) 
+                        INNER JOIN unnest(p_street_ids, COALESCE(p_street_scores, ARRAY_FILL(1.0, ARRAY[array_length(p_street_ids, 1)]))) AS u(id, score)
                             ON s.id = u.id
                         ORDER BY u.score DESC
                         LIMIT 1
@@ -168,9 +173,9 @@ BEGIN
 
     -- Fallback: если геометрия NULL → выбираем улицу с лучшим score
     IF v_geom IS NULL THEN
-        SELECT s.geom INTO v_geom
+        SELECT ST_MakeValid(s.geom) INTO v_geom
         FROM streets s
-        INNER JOIN unnest(p_street_ids, p_street_scores) AS u(id, score) 
+        INNER JOIN unnest(p_street_ids, COALESCE(p_street_scores, ARRAY_FILL(1.0, ARRAY[array_length(p_street_ids, 1)]))) AS u(id, score)
             ON s.id = u.id
         ORDER BY u.score DESC
         LIMIT 1;

@@ -1,43 +1,73 @@
-# Dockerfile.parser - Parser service with Sliding Window + Rapidfuzz
+# Dockerfile.parser - Parser service with Semantic Search (rubert-tiny2 ONNX + pgvector)
+# Multi-stage build для минимизации размера образа
+
+# =============================================================================
+# Stage 1: Builder (установка зависимостей)
+# =============================================================================
+FROM python:3.11-slim AS builder
+
+WORKDIR /build
+
+# Устанавливаем зависимости для сборки и Python пакеты с кешированием
+RUN --mount=type=cache,target=/var/cache/apt,id=parser-apt \
+    apt-get update && apt-get install -y --no-install-recommends gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY parser/requirements.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --user -r requirements.txt && \
+    # Очистка ненужных файлов (ОСТОРОЖНО: не трогаем смонтированный /root/.cache/pip)
+    find /root/.local -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true && \
+    find /root/.local -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true && \
+    find /root/.local -type f -name "*.pyc" -delete && \
+    find /root/.local -type f -name "*.pyo" -delete && \
+    find /root/.local -type f -name "*.md" -delete
+
+# =============================================================================
+# Stage 2: Runtime (минимальный образ)
+# =============================================================================
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# CPU-only режим
+# CPU-only режим для ONNX (оптимизировано для контейнера с лимитом 1 CPU)
 ENV CUDA_VISIBLE_DEVICES=""
 ENV FORCE_CPU="1"
-ENV OMP_NUM_THREADS="4"
-ENV MKL_NUM_THREADS="4"
+ENV OMP_NUM_THREADS="2"
+ENV MKL_NUM_THREADS="2"
+ENV PYTHONUNBUFFERED="1"
+ENV PYTHONDONTWRITEBYTECODE="1"
+ENV PATH="/home/parser/.local/bin:$PATH"
 
-# Создаём директорию для временных файлов, media и кэша
-RUN mkdir -p /tmp /media/events /app/.cache && chmod 777 /tmp /app/.cache
+# Копируем установленные пакеты из builder
+COPY --from=builder /root/.local /home/parser/.local
 
-# Python зависимости
-COPY parser/requirements.txt .
+# Системные зависимости (только runtime) с кешированием
+RUN --mount=type=cache,target=/var/cache/apt,id=parser-runtime \
+    apt-get update && apt-get install -y --no-install-recommends procps \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean \
+    && apt-get autoremove -y
 
-# 1. Устанавливаем numpy
-RUN pip install --no-cache-dir "numpy>=1.24.0,<2.0"
-
-# 2. Устанавливаем основные зависимости
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Код парсера + settings + core
-COPY parser/ ./parser/
-COPY core/ ./core/
-
-# Устанавливаем procps для healthcheck (pgrep)
-RUN apt-get update && apt-get install -y --no-install-recommends procps && rm -rf /var/lib/apt/lists/*
-
-# Создаём пользователя и даём права
+# Создаём директории и пользователя (объединяем слои для меньшего размера)
 RUN useradd -m -u 1000 parser && \
-    chown -R parser:parser /app /tmp /media/events
+    mkdir -p /tmp /rubert-tiny2-onnx && \
+    chmod 1777 /tmp && \
+    chown -R parser:parser /app /tmp /home/parser/.local
 
-# Health check (быстрый старт - не нужно загружать модели)
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD pgrep -f 'python.*monitoring' >/dev/null 2>&1 || exit 1
+# ONNX модель (тяжёлый слой — кэшируется отдельно)
+COPY --chown=parser:parser rubert-tiny2-onnx/ ./rubert-tiny2-onnx/
+
+# Код парсера + settings + core (лёгкий слой — меняется чаще всего)
+COPY --chown=parser:parser parser/ ./parser/
+COPY --chown=parser:parser core/ ./core/
+
+# Health check (оптимизированный start-period)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD python -c "import os; os.kill(int(open('/tmp/parser.pid').read()), 0)" 2>/dev/null || exit 1
 
 # Переключаемся на пользователя parser
 USER parser
 
-# Запуск
-CMD ["python", "-m", "parser.monitoring"]
+# Запуск с созданием PID-файла для healthcheck
+CMD ["sh", "-c", "python -m parser.monitoring & echo $! > /tmp/parser.pid && wait"]

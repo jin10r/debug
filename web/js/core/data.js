@@ -1,4 +1,9 @@
 // data.js — интеграция с реактивным стором
+// 
+// CORRECTED LOGIC:
+// - Store is populated ONLY via WebSocket (through updateEventsInStore)
+// - localStorage is for offline display only
+// - No duplicate event addition
 
 // Экспорт константы
 window.DEFAULT_TIME_FILTER = 30;
@@ -38,12 +43,6 @@ function getEventDescription(feature) {
 // Функция фильтрации и подготовки данных для отображения
 window.getFilteredDataForRendering = function() {
     const filtered = window.store.getFilteredItems();
-    // Debug logging disabled to reduce console noise
-    // console.log('[getFilteredDataForRendering] Filtered data:', {
-    //     total_in_store: window.store.getState().events.features.length,
-    //     filtered_count: filtered.features.length,
-    //     filter_applied: window.store.getState().currentTimeFilter + ' minutes'
-    // });
     return filtered;
 };
 
@@ -55,6 +54,7 @@ window.renderDataOnMap = function() {
 };
 
 // Функция для обновления событий в сторе
+// THIS IS THE PRIMARY WAY STORE GETS POPULATED (from WebSocket via localCache)
 window.updateEventsInStore = function(eventsData) {
     console.log('[data.js] updateEventsInStore called:', eventsData.features.length, 'events');
     window.store.dispatch({
@@ -64,6 +64,7 @@ window.updateEventsInStore = function(eventsData) {
 };
 
 // Функция для добавления новых событий в стор (с дедупликацией)
+// Used only for WebSocket new events
 window.addEventsToStore = function(events) {
     console.log('[data.js] addEventsToStore called:', events.length, 'events');
     if (!events || !events.length) {
@@ -104,3 +105,4 @@ window.toggleLayerInStore = function(layer) {
     });
 };
 
+console.log('✅ data.js initialized (store via WebSocket only)');

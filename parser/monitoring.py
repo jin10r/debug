@@ -11,10 +11,10 @@ import sys
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
-import pyrogram
 from pyrogram import Client, filters
 from pyrogram.types import Message
 
+from core.settings import settings
 from .db_adapter import DBAdapter
 from .message_processor import MessageProcessor
 
@@ -33,9 +33,12 @@ class ParserBot:
         self._messages_processed = 0
         self._errors = 0
 
-        # Конфигурация из env
-        self.channel_id = os.getenv('CHANNEL_ID', '-1002050105527')
-        self.events_media_dir = os.getenv('EVENTS_MEDIA_DIR', '/media/events')
+        # Конфигурация из env через систему настроек
+        if not settings or not settings.bot or not settings.bot.channel_id:
+            logger.error("CHANNEL_ID not configured in settings")
+            sys.exit(1)
+        self.channel_id = settings.bot.channel_id
+        self.events_media_dir = os.getenv('EVENTS_MEDIA_DIR', '/app/media/events')
 
     async def initialize(self) -> bool:
         """
@@ -73,11 +76,53 @@ class ParserBot:
             # сессия уже содержит авторизацию пользователя
             logger.info("Initializing Telegram client...")
 
-            self.app = Client(
-                name="session",  # Имя файла сессии: session.session
-                workdir="/app/parser"
-                # ❌ bot_token НЕ используется — это пользовательская сессия
-            )
+            try:
+                proxy_host = os.getenv('SOCKS5_HOST') or os.getenv('PROXY_HOST')
+                proxy_config = None
+                if proxy_host:
+                    proxy_config = {
+                        "scheme": os.getenv('PROXY_SCHEME', 'socks5'),
+                        "hostname": proxy_host,
+                        "port": int(os.getenv('PROXY_PORT', '1080')),
+                    }
+                    logger.info(f"Using proxy: {proxy_config['scheme']}://{proxy_config['hostname']}:{proxy_config['port']}")
+
+                self.app = Client(
+                    name="session",
+                    workdir="/app/parser",
+                    **({"proxy": proxy_config} if proxy_config else {})
+                )
+                logger.info("✅ Telegram client created")
+                
+                # Диагностика состояния клиента перед запуском
+                logger.info("Diagnosing client state before start...")
+                logger.info(f"Client is_connected: {self.app.is_connected}")
+                logger.info(f"Client is_initialized: {self.app.is_initialized}")
+                
+                # Важно: всегда пытаемся остановить клиент перед перезапуском
+                # Это предотвращает "already connected" ошибки
+                try:
+                    if self.app.is_connected:
+                        logger.info("Stopping existing client connection...")
+                        await self.app.stop()
+                        logger.info("✅ Existing client stopped")
+                        # Даем небольшое время для завершения
+                        await asyncio.sleep(1)
+                except Exception as stop_error:
+                    logger.warning(f"Error stopping client (may be expected): {stop_error}")
+                
+                # Только после этого запускаем клиент
+                if not self.app.is_connected:
+                    logger.info("Starting Telegram client...")
+                    await self.app.start()
+                    logger.info("✅ Telegram client started successfully")
+                else:
+                    logger.warning("⚠️  Client still connected after attempted stop - this may cause issues")
+                
+            except Exception as e:
+                logger.error(f"❌ Failed to initialize Telegram client: {e}")
+                logger.error("Check if session.session file exists and is valid")
+                return False
 
             logger.info("✅ ParserBot initialized")
             return True
@@ -87,26 +132,17 @@ class ParserBot:
             return False
 
     async def _load_chat_history(self):
-        """Загрузить последние 5 сообщений из истории при первом запуске."""
+        """Загрузить последние сообщения из целевого канала."""
         try:
-            logger.info("Loading last 5 messages from chat history...")
+            logger.info(f"Loading history from channel {self.channel_id}...")
+            
+            # Клиент уже подключен из initialize(), только диагностика
+            logger.info(f"Client state - is_connected: {self.app.is_connected}, is_initialized: {self.app.is_initialized}")
 
             async for message in self.app.get_chat_history(
                 chat_id=self.channel_id,
-                limit=15
+                limit=25
             ):
-                # Обрезаем текст по ключевому слову "сообщить" (case-insensitive)
-                if message.text or message.caption:
-                    text = message.text or message.caption
-                    text_lower = text.lower()
-                    marker = 'сообщить'
-                    if marker in text_lower:
-                        idx = text_lower.index(marker)
-                        text = text[:idx].strip()
-
-                    # Обновляем message перед обработкой
-                    message.text = text
-
                 await self._process_message(message)
 
             logger.info("✅ Chat history loaded")
@@ -132,19 +168,21 @@ class ParserBot:
 
         logger.info("🚀 Starting parser bot...")
 
-        # Регистрируем обработчик сообщений
-        @self.app.on_message(
-            filters.channel
-            & filters.text
-        )
+        # Регистрируем обработчик ТОЛЬКО для целевого канала
+        target_filter = filters.chat(int(self.channel_id)) & (filters.text | filters.caption)
+        
+        @self.app.on_message(target_filter)
         async def handle_message(client: Client, message: Message):
-            """Обработка нового сообщения."""
+            """Обработка сообщения из целевого канала."""
             await self._process_message(message)
 
-        # Запускаем клиента
+        # Клиент уже запущен в initialize(), проверяем состояние
         try:
-            await self.app.start()
-            logger.info("✅ Telegram client started")
+            if not self.app.is_connected:
+                logger.error("Telegram client is not connected - check initialization")
+                raise Exception("Telegram client not properly initialized")
+            
+            logger.info("✅ Telegram client already running")
 
             # Загружаем последние 5 сообщений из истории
             await self._load_chat_history()
@@ -160,45 +198,57 @@ class ParserBot:
             logger.error(f"Telegram client error: {e}")
             raise
 
-    async def _process_message(self, message: Message):
-        """
-        Обработка одного сообщения.
+    @staticmethod
+    def _truncate_text(text: str) -> str:
+        """Отбросить текст начиная с маркеров 'сообщить', 'подписаться' или '|'."""
+        if not text:
+            return text
+        
+        text_lower = text.lower()
+        markers = ['сообщить', 'подписаться', '|']
+        
+        earliest_pos = len(text)
+        for marker in markers:
+            pos = text_lower.find(marker)
+            if pos != -1 and pos < earliest_pos:
+                earliest_pos = pos
+        
+        if earliest_pos < len(text):
+            return text[:earliest_pos].strip()
+        
+        return text.strip()
 
-        Args:
-            message: Сообщение Telegram
-        """
+    async def _process_message(self, message: Message):
+        """Обработка сообщения из целевого канала."""
+        if str(message.chat.id) != str(self.channel_id):
+            logger.debug(f"Skipping message from wrong channel: {message.chat.id}")
+            return
+        
         start_time = datetime.now(timezone.utc)
         message_id = message.id
 
         try:
-            logger.info(f"Processing message {message_id}...")
-
-            # 1. Формируем словарь с сырыми данными (БЕЗ обработки текста)
+            raw_text = message.text or message.caption or ''
+            truncated = self._truncate_text(raw_text)
+            
             msg_data = {
                 'message_id': message.id,
-                'text': message.text or message.caption,
+                'text': truncated.lower(),
                 'event_time': message.date or datetime.now(timezone.utc),
                 'photo': message.photo
             }
 
-            # 2. Скачиваем фото если есть
-            photo_path = None
             if message.photo:
-                photo_path = await self._download_photo(message)
-                msg_data['photo_path'] = photo_path
+                msg_data['photo_path'] = await self._download_photo(message)
 
-            # 3. Передаём в процессор БЕЗ предварительной обработки
             result = await self.processor.process_message(msg_data)
 
             if result:
                 self._messages_processed += 1
                 elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
-
                 logger.info(
                     f"✅ Message {message_id} processed in {elapsed:.2f}s: "
-                    f"event_id={result['event_id']}, "
-                    f"layer={result['layer']}, "
-                    f"strategy={result['strategy']}"
+                    f"event_id={result['event_id']}, layer={result['layer']}"
                 )
             else:
                 logger.warning(f"Message {message_id}: processing returned None")

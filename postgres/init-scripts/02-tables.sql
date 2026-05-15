@@ -29,12 +29,14 @@ CREATE TABLE IF NOT EXISTS events (
     photo_url TEXT,
     layer TEXT NOT NULL DEFAULT 'pig',
     matches JSONB,
-    strategy VARCHAR(20) NOT NULL CHECK (strategy IN (
+    strategy VARCHAR(40) NOT NULL CHECK (strategy IN (
         'random',
         'single_match',
         'intersection',
         'polygon_intersection',
-        'single_intersection'
+        'single_intersection',
+        'full_intersection_geometry',
+        'combined_geometries'
     )),
     geom GEOMETRY
 );

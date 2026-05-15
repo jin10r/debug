@@ -42,5 +42,9 @@ docs/
 # Legacy
 legacy/
 
+# Node modules
+node_modules/
+web/node_modules/
+
 # Session (mounted via volume)
 session.session

@@ -1,4 +1,5 @@
 const path = require('path');
+const CopyPlugin = require('copy-webpack-plugin');
 
 module.exports = {
   // Компилируем все JS/TS модули как отдельные файлы
@@ -8,6 +9,13 @@ module.exports = {
     'js/core/local_cache': './js/core/local_cache.ts',
     'js/core/websocket': './js/core/websocket.ts',
     'js/core/event_manager': './js/core/event_manager.ts',
+    'js/core/token-manager': './js/core/token-manager.js',
+    'js/core/cache': './js/core/cache.js',
+    'js/core/map': './js/core/map.js',
+    'js/core/data': './js/core/data.js',
+    'js/core/ui': './js/core/ui.js',
+    'js/modules/popups': './js/modules/popups.js',
+    'js/modules/notifications': './js/modules/notifications.js',
     'js/telegram/validator': './js/telegram/validator.ts',
   },
   output: {
@@ -68,5 +76,14 @@ module.exports = {
     splitChunks: {
       chunks: 'all'
     }
-  }
+  },
+  plugins: [
+    new CopyPlugin({
+      patterns: [
+        // Копируем только HTML файлы
+        { from: 'index.html', to: '.' },
+        { from: 'map.html', to: '.' }
+      ]
+    })
+  ]
 };

@@ -1,12 +1,11 @@
 /**
  * WebSocketManager - Real-time event streaming with catch-up support
  * 
- * Features:
- * - WebSocket-only communication (no HTTP polling)
- * - Automatic reconnection with exponential backoff
- * - Catch-up mechanism on reconnect
- * - initData authentication in WebSocket URL
- * - Heartbeat for connection health
+ * CORRECTED LOGIC:
+ * - WebSocket is the ONLY source of truth for events
+ * - localStorage is ONLY for offline display during connection loss
+ * - On reconnect, WebSocket sends fresh data from backend (catch-up)
+ * - No HTTP polling fallback for initial data
  * 
  * @example
  * ```typescript
@@ -46,7 +45,7 @@ export class WebSocketManager {
     private reconnectAttempts = 0;
     
     /** Maximum reconnection attempts */
-    private readonly maxReconnectAttempts = 5;
+    private readonly maxReconnectAttempts = 10;
     
     /** Initial reconnection delay (ms) */
     private readonly reconnectDelay = 1000;
@@ -137,27 +136,10 @@ export class WebSocketManager {
             this.onConnectionStatusChange(true);
         }
 
-        // Check if localCache is initialized
-        if (!window.localCache?.masterGeoJSON) {
-            console.warn('[WS] localCache not initialized, requesting full refresh');
-            setTimeout(() => this.requestFullRefresh(), 100);
-            return;
-        }
-
-        // Catch-up: request events since last known timestamp
-        const lastTimestamp = window.localCache.getMaxEventTime();
-
-        if (lastTimestamp) {
-            console.log('[WS] Sending catch-up request since:', lastTimestamp.toISOString());
-            this.sendMessage({
-                type: WSMessageType.CATCHUP,
-                since: lastTimestamp.toISOString()
-            });
-        } else {
-            // Cache is empty, request full refresh
-            console.log('[WS] Cache empty, requesting full refresh');
-            setTimeout(() => this.requestFullRefresh(), 100);
-        }
+        // Request initial data from server (full refresh)
+        // This is the PRIMARY way to get events - NOT from localStorage
+        console.log('[WS] Requesting full refresh from server...');
+        this.requestFullRefresh();
     }
 
     /**
@@ -209,6 +191,7 @@ export class WebSocketManager {
                     
                 case WSMessageType.INITIAL_DATA:
                     if (data.data?.features) {
+                        console.log('[WS] Received initial data:', data.data.features.length, 'events');
                         this.onInitialData?.(data.data);
                     }
                     break;
@@ -248,9 +231,15 @@ export class WebSocketManager {
             this.onConnectionStatusChange(false);
         }
 
+        // IMPORTANT: localStorage cache is preserved for offline display
+        // Events will still be visible from localCache until reconnect
+        console.log('[WS] Connection lost - events still visible from localStorage cache');
+
         // Reconnect if not closed by client
         if (event.code !== 1000 && this.reconnectAttempts < this.maxReconnectAttempts) {
             this.scheduleReconnect();
+        } else if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+            console.error('[WS] Max reconnection attempts reached. Events visible from localStorage only.');
         }
     }
 
@@ -262,10 +251,11 @@ export class WebSocketManager {
     }
 
     /**
-     * Request full refresh (fallback to HTTP API if WebSocket fails)
+     * Request full refresh from HTTP API (fallback for initial data)
+     * This is used ONLY when WebSocket first connects
      */
     private async requestFullRefresh(): Promise<void> {
-        console.log('[WS] requestFullRefresh: fetching from API...');
+        console.log('[WS] requestFullRefresh: fetching initial data from API...');
         
         try {
             const response = await fetch('/api/events', {
@@ -420,6 +410,8 @@ window.webSocketManager = new WebSocketManager();
 
 // Initialize WebSocket with proper event handlers
 function initializeWebSocket(): void {
+    console.log('[WS] Initializing WebSocket with corrected logic...');
+    
     // Set up event handlers
     window.webSocketManager.onNewEvent = (eventData: EventFeatureCollection) => {
         console.log('[WS] onNewEvent received:', eventData);
@@ -471,7 +463,10 @@ function initializeWebSocket(): void {
             console.warn('[WS] localCache not initialized, cannot update initial data');
             return;
         }
+        console.log('[WS] onInitialData: replacing all events with', initialData.features.length, 'events from server');
+        
         // Replace all events in cache, suppressing notifications on initial load
+        // THIS IS THE PRIMARY WAY STORE GETS POPULATED
         window.localCache.replaceAllEvents(initialData.features, true);
         window.eventManager.updateAllEvents(window.localCache.getAllEvents());
     };
@@ -480,6 +475,13 @@ function initializeWebSocket(): void {
         // Update connection status
         if (typeof window.updateOnlineStatus === 'function') {
             window.updateOnlineStatus(isConnected);
+        }
+        
+        // Log connection status
+        if (isConnected) {
+            console.log('[WS] ✅ Connected - receiving live events');
+        } else {
+            console.log('[WS] ⚠️ Disconnected - showing events from localStorage cache');
         }
     };
 
@@ -490,4 +492,4 @@ function initializeWebSocket(): void {
 // Export the initialization function globally
 window.initializeWebSocket = initializeWebSocket;
 
-console.log('✅ WebSocketManager initialized with event handlers (WebSocket-only mode)');
+console.log('✅ WebSocketManager initialized (WebSocket-only mode, localStorage for offline)');

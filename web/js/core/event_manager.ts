@@ -1,11 +1,10 @@
 /**
  * EventManager - Centralized event management for display and notifications
  * 
- * Features:
- * - Reactive rendering based on store changes
- * - Optimized subscription to store
- * - Render only on actual changes (events count or filter)
- * - Notification system for new events
+ * CORRECTED LOGIC:
+ * - Single subscription to store (no duplicates)
+ * - Render only on actual changes
+ * - No auto-refresh interval (WebSocket pushes updates)
  * 
  * @example
  * ```typescript
@@ -137,12 +136,15 @@ export function createEventManager(): EventManager {
 
 /**
  * Initialize EventManager with store subscription
+ * 
+ * CORRECTED: Single subscription, no auto-refresh interval
  */
 export function initializeEventManager(): EventManager {
     const eventManager = createEventManager();
 
     // Subscribe to store changes for reactive rendering
-    window.store?.subscribe((state) => {
+    // This is the ONLY subscription - no duplicates
+    const unsubscribe = window.store?.subscribe((state) => {
         const currentTimeFilter = state.currentTimeFilter;
         const eventsCount = state.events.features.length;
 
@@ -170,16 +172,11 @@ export function initializeEventManager(): EventManager {
         }
     });
 
-    console.log('[EventManager] Initialized with reactive store subscription');
+    console.log('[EventManager] Initialized with reactive store subscription (single subscriber)');
 
-    // Start auto-refresh interval (every 5 seconds)
-    window.autoRefreshInterval = setInterval(() => {
-        requestAnimationFrame(() => {
-            eventManager.render();
-        });
-    }, 5000);
-
-    console.log('[EventManager] Auto-refresh started (5 seconds)');
+    // NO auto-refresh interval - WebSocket pushes updates in real-time
+    // Rendering happens reactively when store changes
+    console.log('[EventManager] Auto-refresh disabled (WebSocket pushes updates)');
 
     return eventManager;
 }
@@ -187,4 +184,4 @@ export function initializeEventManager(): EventManager {
 // Create and export singleton instance
 window.eventManager = initializeEventManager();
 
-console.log('✅ EventManager initialized with reactive rendering');
+console.log('✅ EventManager initialized with reactive rendering (no duplicates)');

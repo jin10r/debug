@@ -56,6 +56,7 @@ class AppConfig:
 @dataclass
 class BotConfig:
     token: str
+    channel_id: str  # NEW: Add CHANNEL_ID as required field
     webapp_url: Optional[str] = None
     redirect_url: Optional[str] = None
 
@@ -80,13 +81,7 @@ class RedisConfig:
 class SimilarityConfig:
     stop_words: tuple = field(default_factory=lambda: DEFAULT_STOPWORDS)
     entity_min_word_length: int = 3  # Учитываем все слова от 3 символов
-    entity_similarity_threshold: float = 0.67  # Единый порог для фильтрации
-    buffer_radius_m: float = 100.0  # Радиус буфера вокруг точки (в метрах)
-
-    # LocationFinder параметры
-    default_threshold: float = 0.67  # Уровень сходства с сущностями
-    min_word_length: int = 3         # Учитываем все слова от 3 символов
-    max_ngram_length: int = 5        # Максимальная длина n-gram
+    entity_similarity_threshold: float = 0.6  # Порог для фильтрации
 
     # Поля для загрузки из БД
     db_stopwords: Set[str] = field(default_factory=set)
@@ -114,7 +109,7 @@ class QuestionOverlayConfig:
     """Границы зоны для событий без точной привязки к местности (круг)"""
     center_lon: float = 30.83135  # Центр по долготе
     center_lat: float = 46.49804  # Центр по широте
-    radius: float = 0.045  # Радиус круга (в градусах)
+    radius: float = 0.04  # Радиус круга (в градусах)
 
     @property
     def center(self) -> tuple:
@@ -186,6 +181,49 @@ def _get_required_secret(env: Env) -> str:
     return secret
 
 
+def _get_required_channel_id(env: Env) -> str:
+    """
+    Получить ID канала из переменных окружения.
+    
+    Требует обязательной установки CHANNEL_ID.
+    Проверяет формат Telegram channel ID (должен начинаться с -100).
+    
+    Raises:
+        ValueError: Если CHANNEL_ID не установлен или имеет неверный формат
+    """
+    channel_id = env.str("CHANNEL_ID", None)
+    
+    if channel_id is None:
+        # Provide helpful error message for Docker environment
+        logger.error("CHANNEL_ID is not set!")
+        
+        # Try to diagnose the issue by checking other env variables
+        try:
+            bot_token = env.str("BOT_TOKEN", "NOT_SET")
+            jwt_secret = env.str("JWT_SECRET", "NOT_SET")
+            
+            logger.error(f"Environment diagnosis: BOT_TOKEN present = {bot_token != 'NOT_SET'}, JWT_SECRET present = {jwt_secret != 'NOT_SET'}")
+        except Exception as e:
+            logger.error(f"Error checking environment: {e}")
+        
+        raise ValueError(
+            "CHANNEL_ID is not set! "
+            "This is a required setting for the Telegram channel parser. "
+            "Check that CHANNEL_ID is properly configured in your Docker environment. "
+            "For Docker: ensure CHANNEL_ID is in docker-compose.yml app service environment variables."
+        )
+    
+    # Проверка формата Telegram channel ID (должен начинаться с -100)
+    if not channel_id.startswith("-100"):
+        logger.warning(f"CHANNEL_ID has invalid format: {channel_id}")
+        raise ValueError(
+            f"CHANNEL_ID has invalid format! "
+            f"Telegram channel IDs should start with '-100'. Current value: {channel_id}"
+        )
+    
+    return channel_id
+
+
 def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> Settings:
     """Loads settings from environment variables."""
     env = Env()
@@ -211,6 +249,7 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
             ),
             bot=BotConfig(
                 token=env.str("BOT_TOKEN", ""),
+                channel_id=_get_required_channel_id(env),  # NEW: Add validated channel_id
                 webapp_url=env.str("WEBAPP_URL", None),
                 redirect_url=env.str("REDIRECT_URL", None)
             ),
@@ -223,8 +262,7 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
             ),
             similarity=SimilarityConfig(
                 entity_min_word_length=env.int("ENTITY_MIN_WORD_LENGTH", default=3),
-                entity_similarity_threshold=env.float("ENTITY_SIMILARITY_THRESHOLD", default=0.67),
-                buffer_radius_m=env.float("BUFFER_RADIUS_M", default=100.0)
+                entity_similarity_threshold=env.float("ENTITY_SIMILARITY_THRESHOLD", default=0.67)
             ),
             question_overlay=QuestionOverlayConfig(
                 center_lon=env.float("QUESTION_OVERLAY_CENTER_LON", default=30.83135),

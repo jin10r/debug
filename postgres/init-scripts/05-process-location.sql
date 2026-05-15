@@ -16,7 +16,7 @@ CREATE OR REPLACE FUNCTION process_location(
 RETURNS TABLE(
     event_id INT,
     result_layer TEXT,
-    result_strategy VARCHAR(20),
+    result_strategy VARCHAR(40),
     result_geom GEOMETRY,
     result_matches JSONB
 )
@@ -26,7 +26,7 @@ AS $$
 DECLARE
     v_layer TEXT := COALESCE(p_layer, 'pig');
     v_matches JSONB;
-    v_strategy VARCHAR(20) := 'random';
+    v_strategy VARCHAR(40) := 'random';
     v_geom GEOMETRY;
     v_event_id INT;
     v_buffer_radius FLOAT := 100.0;
@@ -46,16 +46,17 @@ BEGIN
 
         -- 2. Геопространственные вычисления
         IF array_length(p_street_ids, 1) = 1 THEN
-            -- Одна улица - берём геометрию
-            SELECT geom INTO v_geom
+            -- Одна улица - берём геометрию (с валидацией)
+            SELECT ST_MakeValid(geom) INTO v_geom
             FROM streets
             WHERE id = p_street_ids[1];
             v_strategy := 'single_match';
 
         ELSIF array_length(p_street_ids, 1) >= 2 THEN
             -- 2+ улицы - ищем пересечение
+            -- ST_MakeValid защищает от невалидных геометрий (самопересечения и др.)
             WITH found_objects AS (
-                SELECT s.id, s.geom
+                SELECT s.id, ST_MakeValid(s.geom) as geom
                 FROM streets s
                 WHERE s.id = ANY(p_street_ids)
             ),
@@ -73,13 +74,15 @@ BEGIN
                     ST_ClosestPoint(b.geom, a.geom) as closest_b
                 FROM found_objects a
                 CROSS JOIN found_objects b
-                WHERE a.id < b.id
+                WHERE a.id < b.id  -- Только РАЗНЫЕ объекты
+                  AND ST_IsValid(a.geom)
+                  AND ST_IsValid(b.geom)
             ),
             first_connection AS (
                 SELECT
                     CASE
                         -- Есть настоящее пересечение
-                        WHEN NOT ST_IsEmpty(intersection_geom) AND intersection_geom IS NOT NULL THEN
+                        WHEN intersection_geom IS NOT NULL AND NOT ST_IsEmpty(intersection_geom) THEN
                             ST_PointOnSurface(intersection_geom)
                         -- Улицы рядом - берём центр между ближайшими точками
                         WHEN is_nearby THEN
@@ -97,7 +100,7 @@ BEGIN
                 v_strategy := 'intersection';
             ELSE
                 -- Нет пересечения - берём первую улицу
-                SELECT geom INTO v_geom
+                SELECT ST_MakeValid(geom) INTO v_geom
                 FROM streets
                 WHERE id = p_street_ids[1];
                 v_strategy := 'single_match';

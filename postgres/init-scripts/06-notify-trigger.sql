@@ -7,7 +7,19 @@
 
 CREATE OR REPLACE FUNCTION notify_streets_updated()
 RETURNS TRIGGER AS $$
+DECLARE
+    v_street_name TEXT;
+    v_street_id INT;
 BEGIN
+    -- Определяем имя и ID улицы
+    IF TG_OP = 'DELETE' THEN
+        v_street_name := OLD.names[1];
+        v_street_id := OLD.id;
+    ELSE
+        v_street_name := NEW.names[1];
+        v_street_id := NEW.id;
+    END IF;
+
     -- Отправляем уведомление парсеру
     PERFORM pg_notify('streets_updated', jsonb_build_object(
         'operation', TG_OP,
@@ -18,11 +30,11 @@ BEGIN
 
     -- Логгируем изменение (опционально)
     IF TG_OP = 'DELETE' THEN
-        RAISE NOTICE 'Street deleted: % (%)', OLD.name, OLD.id;
+        RAISE NOTICE 'Street deleted: % (%)', v_street_name, v_street_id;
     ELSIF TG_OP = 'INSERT' THEN
-        RAISE NOTICE 'Street added: % (%)', NEW.name, NEW.id;
+        RAISE NOTICE 'Street added: % (%)', v_street_name, v_street_id;
     ELSIF TG_OP = 'UPDATE' THEN
-        RAISE NOTICE 'Street updated: % (%)', NEW.name, NEW.id;
+        RAISE NOTICE 'Street updated: % (%)', v_street_name, v_street_id;
     END IF;
 
     RETURN NULL;

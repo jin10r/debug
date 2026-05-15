@@ -20,7 +20,7 @@ async def cleanup_photos_task(shutdown_event: asyncio.Event = None):
     if events_dir:
         media_dir = Path(events_dir)
     else:
-        media_dir = Path('web/assets/images/events')
+        media_dir = Path('/app/media/events')
     cleanup_interval_seconds = 1800  # каждые 30 минут
     max_age_seconds = 3600          # 1 hour
 

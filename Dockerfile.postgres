@@ -1,9 +1,42 @@
+# Многостадийная сборка для PostgreSQL с оптимизацией кеширования
+
+# =============================================================================
+# Stage 1: Builder - сборка pgvector с кешированием
+# =============================================================================
+FROM postgis/postgis:15-3.3 AS builder
+
+# Установка build dependencies с раздельным кешированием APT для builder стадии
+RUN --mount=type=cache,target=/var/cache/apt,id=builder \
+    apt-get update && apt-get install -y \
+    build-essential \
+    git \
+    postgresql-server-dev-15 \
+    clang \
+    && rm -rf /var/lib/apt/lists/*
+
+# Сборка vector с кешированием git репозитория
+RUN --mount=type=cache,target=/tmp/git-cache \
+    git clone --depth 1 --branch v0.5.1 https://github.com/pgvector/pgvector.git /tmp/vector \
+    && cd /tmp/vector \
+    && make \
+    && make install \
+    && cd / \
+    && rm -rf /tmp/vector
+
+# =============================================================================
+# Stage 2: Runtime - финальный минимальный образ
+# =============================================================================
 FROM postgis/postgis:15-3.3
 
-# Установка pg_cron для автоматической очистки событий
-RUN apt-get update && apt-get install -y postgresql-15-cron \
+# Установка runtime dependencies с раздельным кешированием APT для runtime стадии
+RUN --mount=type=cache,target=/var/cache/apt,id=runtime \
+    apt-get update && apt-get install -y postgresql-15-cron \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# Копируем только скомпилированный пакет vector из builder stage
+COPY --from=builder /usr/share/postgresql/15/extension/vector* /usr/share/postgresql/15/extension/
+COPY --from=builder /usr/lib/postgresql/15/lib/vector.so /usr/lib/postgresql/15/lib/
 
 # Копирование конфигурации
 COPY postgres/config/postgresql.conf /etc/postgresql/postgresql.conf

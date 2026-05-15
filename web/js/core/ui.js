@@ -343,19 +343,50 @@ function addQuestionOverlay(map) {
 
 // Функция для инициализации рекламных квадратов - использует статичный banner.jpg
 function initializeAdSquares(map) {
+    console.log('[initializeAdSquares] Starting banner initialization...');
+    
     const bounds = L.latLngBounds([46.4370, 30.92288], [46.5240, 31.06208]);
     const imageUrl = '/assets/images/banner.jpg';
+    const fullUrl = imageUrl + '?v=' + Date.now();
+    console.log('[initializeAdSquares] Banner URL:', fullUrl);
+    console.log('[initializeAdSquares] Current host:', window.location.host);
+    
     const popupContent = `<h3>Исходный код приложения доступен на <a href="https://github.com/iseeupigs/iseeupigs-web" target="_blank">GitHub</h3><br>поблагодарить разработчика можно на <a href="https://bastyon.com/keep_alive_odessa?ref=PHQHKADhBPxxSwjiggV6G2BxSvy6TY1Lgb" target="_blank">bastyon</a>`;
 
     if (!window.adSquares.ad1) {
-        const overlay = L.imageOverlay(imageUrl + '?v=' + Date.now(), bounds, {
+        console.log('[initializeAdSquares] Creating image overlay...');
+        
+        // Test image loading
+        const testImg = new Image();
+        testImg.onload = function() {
+            console.log('[initializeAdSquares] Banner image preloaded successfully:', this.width, 'x', this.height);
+        };
+        testImg.onerror = function() {
+            console.error('[initializeAdSquares] Failed to preload banner image!');
+        };
+        testImg.src = fullUrl;
+        
+        const overlay = L.imageOverlay(fullUrl, bounds, {
             opacity: 1,
             interactive: true,
             pane: 'overlayPane',
             className: 'ad-overlay'
         }).addTo(map);
+        
+        console.log('[initializeAdSquares] Overlay added to map');
+        
         overlay.bindPopup(popupContent, window.DEFAULT_POPUP_OPTIONS);
         window.adSquares.ad1 = overlay;
+        
+        // Check if overlay is actually visible
+        overlay.on('load', function() {
+            console.log('[initializeAdSquares] Banner image loaded on map');
+        });
+        overlay.on('error', function() {
+            console.error('[initializeAdSquares] Banner image failed to load on map');
+        });
+    } else {
+        console.log('[initializeAdSquares] Banner already exists, skipping');
     }
 }
 

@@ -18,7 +18,8 @@ from core.middlewares.dbmiddleware import DbMiddleware
 from core.middlewares.ratelimit import RateLimiter
 from core.utils.metrics import setup_metrics_routes, set_application_info, metrics_middleware
 from core.utils.logging_config import setup_logging, logging_middleware
-from core.api.routes import setup_routes, init_redis, close_redis
+from core.api.routes import setup_routes
+from core.api.auth import init_redis, close_redis
 from core.api.websocket import WebSocketManager
 from core.tasks.background import cleanup_photos_task
 from core.middlewares.jwt_auth import jwt_auth_middleware

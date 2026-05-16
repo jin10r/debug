@@ -20,7 +20,7 @@ import re
 import logging
 from typing import Dict, List, Optional, Set, Tuple
 
-import pymorphy2
+import pymorphy3 as pymorphy2
 from rapidfuzz import process as rf_process, fuzz
 
 try:

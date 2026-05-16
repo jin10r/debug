@@ -6,7 +6,7 @@ tgcrypto>=1.2.0
 asyncpg>=0.29.0          # PostgreSQL client
 
 # Lexical entity search
-pymorphy2>=0.9.1         # Russian morphological analyzer (lemmatization + Anum detection)
+pymorphy3>=0.13.0        # Russian morphological analyzer, Python 3.11+ fork of pymorphy2
 rapidfuzz>=3.0.0         # Fast fuzzy string matching (C implementation, SIMD)
 
 # Configuration

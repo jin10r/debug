@@ -549,7 +549,7 @@ BEGIN
         'matches', top_matches,
         'geometry', jsonb_build_object(
             'type', regexp_replace(INITCAP(GeometryType(v_street_geom)), '^St_', ''),
-            'coordinates', ST_AsGeoJSON(v_street_geom)::json
+            'coordinates', (ST_AsGeoJSON(v_street_geom)::jsonb)->'coordinates'
         ),
         'name', top_matches->0->>'name',
         'coordinates', CASE 

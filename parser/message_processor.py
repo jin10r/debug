@@ -1,7 +1,7 @@
 """Message Processor - обработка текста и сохранение событий.
 
 Очищает текст от спецсимволов, определяет слой события,
-находит сущности через семантический поиск (rubert-tiny2 ONNX + pgvector),
+находит сущности через лексический поиск (pymorphy2 + rapidfuzz),
 сохраняет в БД.
 """
 
@@ -50,7 +50,7 @@ class MessageProcessor:
 
     Отвечает за:
     - Очистку текста
-    - Поиск сущностей через семантический поиск (rubert-tiny2 ONNX + pgvector)
+    - Поиск сущностей через лексический поиск (pymorphy2 + rapidfuzz)
     - Определение слоя
     - Сохранение событий в PostgreSQL
     """
@@ -59,7 +59,6 @@ class MessageProcessor:
 
     def __init__(self, db_pool: asyncpg.Pool):
         self.db_pool = db_pool
-        # Semantic matcher с ONNX эмбеддерами
         self.matcher = SemanticMatcher()
         self._pg_notify_task: Optional[asyncio.Task] = None
         self._listen_conn: Optional[asyncpg.Connection] = None
@@ -67,22 +66,19 @@ class MessageProcessor:
     async def initialize(self) -> bool:
         """Инициализация при старте."""
         try:
-            logger.info(f"✅ Using semantic similarity threshold: {SIMILARITY_THRESHOLD}")
+            logger.info(f"✅ Using lexical similarity threshold: {SIMILARITY_THRESHOLD}")
 
-            # 1. Инициализация SemanticMatcher
-            logger.info("Initializing SemanticMatcher...")
+            # 1. Инициализация LexicalMatcher
+            logger.info("Initializing LexicalMatcher...")
             success = await self.matcher.initialize(self.db_pool)
             if not success:
                 logger.error("SemanticMatcher initialization failed")
                 return False
 
-            # 2. Индексация улиц без embedding
-            logger.info("Indexing street embeddings...")
+            # 2. Индексация улиц (лемматизация aliases)
+            logger.info("Indexing street aliases...")
             indexed = await self.matcher.reindex_all(self.db_pool)
-            if indexed > 0:
-                logger.info(f"✅ Indexed {indexed} streets")
-            else:
-                logger.info("All streets already indexed")
+            logger.info(f"✅ Indexed {indexed} aliases")
 
             # 3. Подписка на уведомления от PostgreSQL
             logger.info("Setting up PostgreSQL notifications...")
@@ -181,8 +177,8 @@ class MessageProcessor:
             strategy = 'random'
 
         else:
-            # Семантический поиск сущностей
-            logger.info(f"Message {message_id}: Using semantic search (rubert-tiny2 + pgvector)...")
+            # Лексический поиск сущностей
+            logger.info(f"Message {message_id}: Using lexical search (pymorphy2 + rapidfuzz)...")
 
             entities = await self.matcher.async_find_entities(
                 cleaned,

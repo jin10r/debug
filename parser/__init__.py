@@ -5,13 +5,10 @@ __author__ = 'Survival Map Team'
 
 from .message_processor import MessageProcessor
 from .semantic_matcher import SemanticMatcher
-from .embedder import RuBertEmbedder, EMBEDDING_DIM
 from .db_adapter import DBAdapter
 
 __all__ = [
     'MessageProcessor',
     'DBAdapter',
     'SemanticMatcher',
-    'RuBertEmbedder',
-    'EMBEDDING_DIM',
 ]

@@ -294,10 +294,13 @@ class LexicalMatcher:
         best_by_street: Dict[int, Dict] = {}
 
         for ngram in ngrams:
+            # Унiграммы: fuzz.ratio — не допускает "дом" → "дом мебели" = 100
+            # Мультиграммы: token_set_ratio — допускает перестановку слов
+            scorer = fuzz.ratio if ' ' not in ngram else fuzz.token_set_ratio
             matches = rf_process.extract(
                 ngram,
                 self._alias_texts,
-                scorer=fuzz.token_set_ratio,
+                scorer=scorer,
                 score_cutoff=score_cutoff,
                 limit=10,
             )

@@ -226,35 +226,87 @@ class MessageProcessor:
                         'entity_matches': []
                     }
             else:
-                # Найдены улицы - используем лучший match
-                # Собираем matched_parts (n-gram текст) для каждой улицы
-                entity_map = {ent['street_id']: ent['text'] for ent in entities}
-                matched_parts = [entity_map.get(sid, 'full_text') for sid in street_ids]
-
+                # Найдены улицы → geometry via process_candidates (150m pseudo-radius)
                 async with self.db_pool.acquire() as conn:
                     scores_array = [float(s) for s in street_scores]
 
-                    result = await conn.fetch(
-                        "SELECT * FROM process_location_smart($1::timestamptz, $2::text, $3::text, $4::text, $5::int[], $6::double precision[], $7::text[])",
-                        kiev_time, text, layer, photo_path, street_ids, scores_array, matched_parts
+                    pc_rows = await conn.fetch(
+                        """
+                        SELECT
+                            result_strategy,
+                            result_matches,
+                            ST_AsText(result_geom)           AS geom_wkt,
+                            ST_X(ST_Centroid(result_geom))   AS centroid_lng,
+                            ST_Y(ST_Centroid(result_geom))   AS centroid_lat
+                        FROM process_candidates($1::int[], $2::double precision[], $3::float)
+                        """,
+                        street_ids, scores_array, 150.0,
                     )
-                    row = result[0] if result else None
 
-                    if row:
-                        return {
-                            'event_id': row['event_id'],
-                            'layer': row['result_layer'],
-                            'strategy': row['result_strategy'],
-                            'geom': row['result_geom'],
-                            'matches': row['result_matches'],
-                            'entity_matches': [
-                                {'id': sid, 'score': ss}
-                                for sid, ss in zip(street_ids, street_scores)
-                            ]
-                        }
+                    if not pc_rows or pc_rows[0]['geom_wkt'] is None:
+                        logger.warning(f"Message {message_id}: process_candidates returned no geometry")
+                        return None
 
-                    logger.warning(f"Message {message_id}: process_location_smart returned None")
-                    return None
+                    pc = pc_rows[0]
+                    v_strategy  = pc['result_strategy']
+                    v_geom_wkt  = pc['geom_wkt']
+                    v_matches   = pc['result_matches']
+                    centroid_lng = pc['centroid_lng']
+                    centroid_lat = pc['centroid_lat']
+
+                    logger.info(
+                        f"Message {message_id}: strategy={v_strategy}, "
+                        f"streets={street_ids}, centroid=({centroid_lng:.4f},{centroid_lat:.4f})"
+                    )
+
+                    # INSERT события
+                    event_row = await conn.fetchrow(
+                        """
+                        INSERT INTO events
+                            (event_time, description, photo_url, layer, strategy, geom, matches)
+                        VALUES ($1, $2, $3, $4, $5, ST_GeomFromText($6, 4326), $7)
+                        RETURNING id
+                        """,
+                        kiev_time, cleaned, photo_path, layer,
+                        v_strategy, v_geom_wkt, v_matches,
+                    )
+
+                    # Обновляем events_meta для WebSocket-синхронизации
+                    await conn.execute(
+                        "UPDATE events_meta SET version = version + 1, updated_at = now(), max_event_id = $1 WHERE id = 1",
+                        event_row['id'],
+                    )
+
+                    # pg_notify: отправляем центроид как Point (WebSocket клиенты)
+                    await conn.execute(
+                        "SELECT pg_notify('events_new', $1::text)",
+                        json_lib.dumps({
+                            'type': 'Feature',
+                            'geometry': {
+                                'type': 'Point',
+                                'coordinates': [centroid_lng, centroid_lat],
+                            },
+                            'properties': {
+                                'id': event_row['id'],
+                                'layer': layer,
+                                'strategy': v_strategy,
+                                'description': cleaned,
+                                'time': kiev_time.isoformat(),
+                            },
+                        }),
+                    )
+
+                    return {
+                        'event_id': event_row['id'],
+                        'layer': layer,
+                        'strategy': v_strategy,
+                        'geom': v_geom_wkt,
+                        'matches': v_matches,
+                        'entity_matches': [
+                            {'id': sid, 'score': ss}
+                            for sid, ss in zip(street_ids, street_scores)
+                        ],
+                    }
 
         # Для random - упрощённая вставка
         if strategy == 'random':

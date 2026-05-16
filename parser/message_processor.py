@@ -17,7 +17,7 @@ import asyncpg
 import pytz
 
 # Импорт модуля поиска сущностей — семантический поиск
-from .semantic_matcher import SemanticMatcher, SIMILARITY_THRESHOLD, MAX_ENTITIES
+from .lexical_matcher import LexicalMatcher, SIMILARITY_THRESHOLD, MAX_ENTITIES
 
 # Импорт настроек из локального модуля
 try:
@@ -59,7 +59,7 @@ class MessageProcessor:
 
     def __init__(self, db_pool: asyncpg.Pool):
         self.db_pool = db_pool
-        self.matcher = SemanticMatcher()
+        self.matcher = LexicalMatcher()
         self._pg_notify_task: Optional[asyncio.Task] = None
         self._listen_conn: Optional[asyncpg.Connection] = None
 
@@ -72,7 +72,7 @@ class MessageProcessor:
             logger.info("Initializing LexicalMatcher...")
             success = await self.matcher.initialize(self.db_pool)
             if not success:
-                logger.error("SemanticMatcher initialization failed")
+                logger.error("LexicalMatcher initialization failed")
                 return False
 
             # 2. Индексация улиц (лемматизация aliases)

@@ -294,9 +294,17 @@ class LexicalMatcher:
         best_by_street: Dict[int, Dict] = {}
 
         for ngram in ngrams:
+            ngram_len = len(ngram.split())
+
             # Унiграммы: fuzz.ratio — не допускает "дом" → "дом мебели" = 100
             # Мультиграммы: token_set_ratio — допускает перестановку слов
-            scorer = fuzz.ratio if ' ' not in ngram else fuzz.token_set_ratio
+            scorer = fuzz.ratio if ngram_len == 1 else fuzz.token_set_ratio
+
+            # Коэффициент длины: длинные n-граммы получают приоритет над короткими.
+            # 1-gram: ×0.85 · 2-gram: ×0.90 · 3-gram: ×0.95 · 4-gram: ×1.00
+            # Эффект: "хутор"→"Хуторская" 71×0.85=60 < порог; "червонный хутор"→96×0.90=86 ✓
+            length_bias = 0.85 + 0.05 * min(ngram_len - 1, 3)
+
             matches = rf_process.extract(
                 ngram,
                 self._alias_texts,
@@ -305,15 +313,24 @@ class LexicalMatcher:
                 limit=10,
             )
             for _matched_text, score, idx in matches:
+                adjusted = score * length_bias
+                if adjusted < score_cutoff:
+                    continue  # пересматриваем порог после корректировки
+
                 street_id, original_name = self._alias_meta[idx]
-                if street_id not in best_by_street or score > best_by_street[street_id]['score']:
+                if street_id not in best_by_street or adjusted > best_by_street[street_id]['_adjusted']:
                     best_by_street[street_id] = {
                         'street_id': street_id,
                         'matched_name': original_name,
                         'text': ngram,
-                        'score': score / 100.0,  # нормализуем в 0..1 для compat
+                        'score': adjusted / 100.0,  # нормализуем в 0..1 для compat
+                        '_adjusted': adjusted,       # внутренний ключ для сравнения
                         'source': 'lexical',
                     }
+
+        # Убираем внутренний служебный ключ перед возвратом
+        for v in best_by_street.values():
+            v.pop('_adjusted', None)
 
         entities = sorted(
             best_by_street.values(),

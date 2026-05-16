@@ -63,7 +63,7 @@ function handleNewEvents(events) {
                     : description);
             }
 
-            window.showNotification(message, 4000);
+            if (typeof window.showNotification === 'function') window.showNotification(message, 4000);
             if (typeof window.playNotificationSound === 'function') {
                 window.playNotificationSound();
             }

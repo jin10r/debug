@@ -62,12 +62,11 @@ declare global {
             getEventTime(event: EventFeature): Date | null;
             getMaxEventId(): number;
             getMaxEventTime(): Date | null;
-            eventsById: Map<string | number, EventFeature>;
-            masterGeoJSON: EventFeatureCollection;
-            loadFromCache(): Promise<void>;
-            saveToCache(): Promise<void>;
+            getLatestTimestamp(): string | null;
             cleanupExpiredEvents(): number;
             clear(): void;
+            eventsById: Map<string | number, EventFeature>;
+            masterGeoJSON: EventFeatureCollection;
         };
         
         /** Reactive store */
@@ -87,9 +86,7 @@ declare global {
             connect(): void;
             disconnect(): void;
             sendMessage(message: Record<string, unknown>): void;
-            onNewEvent: ((data: EventFeatureCollection) => void) | null;
-            onFilteredEvents: ((data: EventFeatureCollection, timeFilter: number) => void) | null;
-            onInitialData: ((data: EventFeatureCollection) => void) | null;
+            onFeature: ((feature: EventFeature) => void) | null;
             onConnectionStatusChange: ((isConnected: boolean) => void) | null;
             isConnected: boolean;
         };
@@ -102,14 +99,6 @@ declare global {
             addNewEvents(events: EventFeature[]): void;
             _lastTimeFilter: number;
             _lastEventsCount: number;
-        };
-        
-        /** Cache utility */
-        cacheUtility: {
-            loadFromCache(key: string): Promise<unknown | null>;
-            saveToCache(key: string, data: unknown): Promise<boolean>;
-            clearFromCache(key: string): Promise<boolean>;
-            getAuthHeaders(): Record<string, string>;
         };
         
         // ==================== TELEGRAM ====================
@@ -152,7 +141,7 @@ declare global {
             getUserId(): number | null;
             getUserName(): string | null;
             isValid(): boolean;
-            getTelegram(): typeof Window['Telegram']['WebApp'] | null;
+            getTelegram(): unknown;
             loadConfig(): Promise<void>;
             isValidationRequired(): boolean;
             getValidationRedirectUrl(): string | null;
@@ -161,12 +150,12 @@ declare global {
         // ==================== UTILITY FUNCTIONS ====================
         
         updateEventsInStore: (events: EventFeatureCollection) => void;
-        addEventsToStore: (events: EventFeature[]) => void;
         getFilteredDataForRendering: () => EventFeatureCollection;
         renderDataOnMap: () => void;
         initializeWebSocket: () => void;
         bootstrapUI: () => void;
         getAuthHeaders: () => Record<string, string>;
+        updateOnlineStatus: (isOnline: boolean) => void;
         
         // ==================== EVENT TRACKING ====================
         

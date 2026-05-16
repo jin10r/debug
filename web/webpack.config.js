@@ -10,7 +10,6 @@ module.exports = {
     'js/core/websocket': './js/core/websocket.ts',
     'js/core/event_manager': './js/core/event_manager.ts',
     'js/core/token-manager': './js/core/token-manager.js',
-    'js/core/cache': './js/core/cache.js',
     'js/core/map': './js/core/map.js',
     'js/core/data': './js/core/data.js',
     'js/core/ui': './js/core/ui.js',

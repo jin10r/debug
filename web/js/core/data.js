@@ -63,40 +63,6 @@ window.updateEventsInStore = function(eventsData) {
     });
 };
 
-// Функция для добавления новых событий в стор (с дедупликацией)
-// Used only for WebSocket new events
-window.addEventsToStore = function(events) {
-    console.log('[data.js] addEventsToStore called:', events.length, 'events');
-    if (!events || !events.length) {
-        console.warn('[data.js] addEventsToStore: no events provided');
-        return;
-    }
-
-    const currentState = window.store.getState();
-    const existingIds = new Set(
-        currentState.events.features
-            .map(f => getEventId(f))
-            .filter(id => id !== null)
-    );
-
-    // Фильтруем дубликаты
-    const newEvents = events.filter(event => {
-        const eventId = getEventId(event);
-        return !eventId || !existingIds.has(eventId);
-    });
-
-    console.log('[data.js] addEventsToStore: filtered to', newEvents.length, 'new events');
-
-    if (newEvents.length > 0) {
-        window.store.dispatch({
-            type: 'ADD_EVENTS',
-            payload: { events: newEvents }
-        });
-    } else {
-        console.log('[data.js] addEventsToStore: no new events to add');
-    }
-};
-
 // Функция для переключения слоя
 window.toggleLayerInStore = function(layer) {
     window.store.dispatch({

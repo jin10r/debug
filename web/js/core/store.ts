@@ -81,11 +81,7 @@ export class ReactiveStore {
                 features: []
             },
             currentTimeFilter: 30,
-            activeLayers: new Set<EventLayer>(['pig', 'cops', 'bus']),
-            isSyncInProgress: false,
-            consecutiveNetworkErrors: 0,
-            updateInterval: 15000,
-            isNetworkErrorDisplayed: false
+            activeLayers: new Set<EventLayer>(['pig', 'cops', 'bus'])
         };
 
         // Bind action handlers
@@ -373,14 +369,15 @@ export class ReactiveStore {
      */
     getEventId(feature: EventFeature): string | number | null {
         if (!feature?.properties) return null;
-        
-        return (
+
+        const id =
             feature.properties.id ??
             feature.properties.event_id ??
             feature.properties._id ??
             feature.properties.uid ??
-            null
-        );
+            null;
+
+        return id as string | number | null;
     }
 
     /**

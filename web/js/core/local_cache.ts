@@ -77,14 +77,17 @@ export class LocalCache {
             if (this.isValidGeoJSON(cachedData)) {
                 this.masterGeoJSON = cachedData!;
                 this.rebuildEventsByIdMap();
-                
-                // Clean up expired events after loading
+
+                // Remove expired events before showing
                 const cleaned = this.cleanupExpiredEvents();
                 console.log(`[LocalCache] Loaded ${this.masterGeoJSON.features.length} events from localStorage, cleaned ${cleaned} expired`);
-                
-                // DO NOT sync with store here - store will be populated by WebSocket
-                // localStorage is only for offline display during connection loss
-                console.log('[LocalCache] Events loaded for offline display only (waiting for WebSocket)');
+
+                // Sync to store immediately so the map renders from localStorage while offline.
+                // WebSocket will merge fresh features on top via addEvent() once connected.
+                if (this.masterGeoJSON.features.length > 0) {
+                    this.syncWithStore();
+                    console.log('[LocalCache] Offline cache synced to store for immediate display');
+                }
             } else {
                 console.log('[LocalCache] No valid cache found, initializing empty');
                 this.clear();
@@ -317,14 +320,15 @@ export class LocalCache {
      */
     getEventId(event: EventFeature): string | number | null {
         if (!event?.properties) return null;
-        
-        return (
+
+        const id =
             event.properties.id ??
             event.properties.event_id ??
             event.properties._id ??
             event.properties.uid ??
-            null
-        );
+            null;
+
+        return id as string | number | null;
     }
 
     /**
@@ -358,6 +362,24 @@ export class LocalCache {
         }
         
         return maxId;
+    }
+
+    /**
+     * Get the ISO-8601 timestamp of the newest event in the cache.
+     * Used by WebSocketManager to request only missed events on reconnect.
+     * Returns null when the cache is empty (triggers a full initial load).
+     */
+    getLatestTimestamp(): string | null {
+        let maxTime: Date | null = null;
+
+        for (const feature of this.masterGeoJSON.features) {
+            const t = this.getEventTime(feature);
+            if (t && (!maxTime || t > maxTime)) {
+                maxTime = t;
+            }
+        }
+
+        return maxTime ? maxTime.toISOString() : null;
     }
 
     /**

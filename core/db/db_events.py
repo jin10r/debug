@@ -98,9 +98,18 @@ class EventOperations:
     async def get_filtered_events_as_geojson(
         self,
         time_interval_minutes: int,
-        layers: Optional[List[str]] = None
+        layers: Optional[List[str]] = None,
+        since_timestamp: Optional[str] = None
     ) -> Dict:
-        """Fetch recent events filtered by time and layers as GeoJSON."""
+        """Fetch recent events as GeoJSON features.
+
+        Args:
+            time_interval_minutes: Maximum age of events to return.
+            layers: Optional layer filter list.
+            since_timestamp: ISO-8601 string. When set, returns only events newer than
+                this timestamp (catch-up after reconnect). The time_interval_minutes
+                window still applies as an upper bound.
+        """
         base_query = """
             SELECT json_build_object(
                 'type', 'FeatureCollection',
@@ -116,21 +125,23 @@ class EventOperations:
                         'matches', matches,
                         'time', event_time
                     )
-                )), '[]'::json)
+                ) ORDER BY event_time), '[]'::json)
             )
             FROM events
         """
 
-        where_clauses = [
-            "event_time >= NOW() - $1 * interval '1 minute'"
-        ]
+        where_clauses = ["event_time >= NOW() - $1 * interval '1 minute'"]
         params: List[Any] = [time_interval_minutes]
+
+        if since_timestamp:
+            params.append(since_timestamp)
+            where_clauses.append(f"event_time > ${len(params)}")
 
         if layers:
             valid_layers = [layer for layer in layers if layer]
             if valid_layers:
-                where_clauses.append(f"layer = ANY(${len(params) + 1})")
                 params.append(valid_layers)
+                where_clauses.append(f"layer = ANY(${len(params)})")
 
         query = base_query + " WHERE " + " AND ".join(where_clauses)
 

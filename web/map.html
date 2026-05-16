@@ -178,8 +178,6 @@
 
     <script src="/assets/lib/leaflet.js"></script>
     <script src="/assets/lib/leaflet.markercluster.js"></script>
-    <script src="/assets/lib/proj4.min.js"></script>
-    <script src="/assets/lib/proj4leaflet.js"></script>
 
     <!-- Initialization -->
     <script>
@@ -238,7 +236,6 @@
           await loadScript(`/dist/js/core/websocket.js?t=${cacheBuster}`);
           await loadScript(`/dist/js/core/event_manager.js?t=${cacheBuster}`);
           await loadScript(`/dist/js/core/token-manager.js?t=${cacheBuster}`);
-          await loadScript(`/dist/js/core/cache.js?t=${cacheBuster}`);
           await loadScript(`/dist/js/core/map.js?t=${cacheBuster}`);
           await loadScript(`/dist/js/core/data.js?t=${cacheBuster}`);
           await loadScript(`/dist/js/modules/popups.js?t=${cacheBuster}`);

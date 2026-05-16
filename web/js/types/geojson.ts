@@ -10,9 +10,7 @@ import {
     FeatureCollection,
     Point,
     LineString,
-    Polygon,
-    Geometry,
-    Position
+    Polygon
 } from 'geojson';
 
 /**
@@ -96,54 +94,33 @@ export interface CacheEntry {
 export interface StoreState {
     /** All events */
     events: EventFeatureCollection;
-    
+
     /** Current time filter in minutes (15, 30, or 60) */
     currentTimeFilter: 15 | 30 | 60;
-    
+
     /** Active layer filters */
     activeLayers: Set<EventLayer>;
-    
-    /** Sync in progress flag */
-    isSyncInProgress: boolean;
-    
-    /** Consecutive network errors count */
-    consecutiveNetworkErrors: number;
-    
-    /** Update interval in milliseconds */
-    updateInterval: number;
-    
-    /** Network error displayed flag */
-    isNetworkErrorDisplayed: boolean;
 }
 
 /**
  * WebSocket message types
  */
-export type WebSocketMessageType = 
-    | 'new_event'
-    | 'filtered_events'
-    | 'initial_data'
+export type WebSocketMessageType =
+    | 'feature'
     | 'pong'
-    | 'catchup'
-    | 'change_time_filter';
+    | 'events_cleaned';
 
 /**
  * WebSocket message interface
  */
 export interface WebSocketMessage {
     /** Message type */
-    type: WebSocketMessageType;
-    
-    /** Message data (optional) */
-    data?: EventFeatureCollection;
-    
-    /** Time filter in minutes (optional) */
-    time_filter?: number;
-    
-    /** Layers filter (optional) */
-    layers?: EventLayer[];
-    
-    /** Since timestamp for catch-up (optional) */
+    type: string;
+
+    /** Single GeoJSON feature (for 'feature' messages) */
+    data?: EventFeature | EventFeatureCollection;
+
+    /** Since timestamp for catch-up response */
     since?: string;
 }
 
@@ -222,6 +199,8 @@ declare global {
             getEventTime(event: EventFeature): Date | null;
             getMaxEventId(): number;
             getMaxEventTime(): Date | null;
+            getLatestTimestamp(): string | null;
+            cleanupExpiredEvents(): number;
             eventsById: Map<string | number, EventFeature>;
             masterGeoJSON: EventFeatureCollection;
         };
@@ -239,9 +218,7 @@ declare global {
             connect(): void;
             disconnect(): void;
             sendMessage(message: Record<string, unknown>): void;
-            onNewEvent: ((data: EventFeatureCollection) => void) | null;
-            onFilteredEvents: ((data: EventFeatureCollection, timeFilter: number) => void) | null;
-            onInitialData: ((data: EventFeatureCollection) => void) | null;
+            onFeature: ((feature: EventFeature) => void) | null;
             onConnectionStatusChange: ((isConnected: boolean) => void) | null;
         };
         
@@ -250,13 +227,6 @@ declare global {
             updateAllEvents(eventsData: EventFeatureCollection): void;
             notify(events: EventFeature[]): void;
             addNewEvents(events: EventFeature[]): void;
-        };
-        
-        cacheUtility: {
-            loadFromCache(key: string): Promise<unknown | null>;
-            saveToCache(key: string, data: unknown): Promise<boolean>;
-            clearFromCache(key: string): Promise<boolean>;
-            getAuthHeaders(): Record<string, string>;
         };
         
         // Telegram
@@ -298,13 +268,13 @@ declare global {
             getUserId(): number | null;
             getUserName(): string | null;
             isValid(): boolean;
-            getTelegram(): typeof Window['Telegram']['WebApp'] | null;
+            getTelegram(): unknown;
         };
         
         // Utility functions
         updateEventsInStore: (events: EventFeatureCollection) => void;
-        addEventsToStore: (events: EventFeature[]) => void;
         getFilteredDataForRendering: () => EventFeatureCollection;
+        updateOnlineStatus: (isOnline: boolean) => void;
         renderDataOnMap: () => void;
         initializeWebSocket: () => void;
         bootstrapUI: () => void;

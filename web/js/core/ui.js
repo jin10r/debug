@@ -538,40 +538,8 @@ window.renderFromCache = function() {
 
 // Функция инициализации UI
 window.bootstrapUI = function() {
-
-    // Инициализация карты
     window.initializeMap();
 
-    // Инициализация других UI компонентов
-    initializeEventHandlers();
-
-    // Принудительное обновление отображения после инициализации
-    setTimeout(() => {
-        requestAnimationFrame(() => {
-            window.eventManager.render();
-        });
-    }, 1000); // Небольшая задержка для полной инициализации компонентов
-};
-
-// Функция для инициализации обработчиков событий
-function initializeEventHandlers() {
-    // Обработчики для кнопок управления
-    document.getElementById('legendBtn')?.addEventListener('click', () => {
-        window.hapticFeedback('light');
-        showLegendPopup();
-    });
-}
-
-// Функция инициализации UI
-window.bootstrapUI = function() {
-
-    // Инициализация карты
-    window.initializeMap();
-
-    // Инициализация других UI компонентов
-    initializeEventHandlers();
-
-    // Принудительное обновление отображения после инициализации
     setTimeout(() => {
         requestAnimationFrame(() => {
             window.eventManager.render();

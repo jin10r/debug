@@ -5,9 +5,9 @@
 // Эти функции будут доступны глобально после загрузки скрипта
 
 const ICON_CONFIG = {
-    cops: { url: '/assets/images/cops.svg', size: [25, 25] },
-    bus: { url: '/assets/images/bus.svg', size: [25, 25] },
-    pig: { url: '/assets/images/pig.svg', size: [25, 25] }
+    cops: { url: '/assets/images/cops.png', size: [25, 25] },
+    bus: { url: '/assets/images/bus.png', size: [25, 25] },
+    pig: { url: '/assets/images/pig.png', size: [25, 25] }
 };
 
 window.createIcon = function(layer) {

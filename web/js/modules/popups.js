@@ -158,19 +158,19 @@ function showLegendPopup() {
             <tbody>
                 <tr>
                     <td style="padding: 10px 12px 10px 0; width: 44px;">
-                        <img src="/assets/images/bus.svg" style="width: 32px; height: 32px; display: block;" alt="Bus">
+                        <img src="/assets/images/bus.png" style="width: 32px; height: 32px; display: block;" alt="Bus">
                     </td>
                     <td style="padding: 10px 0; color: var(--tg-text-color, #000); font-size: 15px; line-height: 1.4;">Бус</td>
                 </tr>
                 <tr>
                     <td style="padding: 10px 12px 10px 0;">
-                        <img src="/assets/images/cops.svg" style="width: 32px; height: 32px; display: block;" alt="Cops">
+                        <img src="/assets/images/cops.png" style="width: 32px; height: 32px; display: block;" alt="Cops">
                     </td>
                     <td style="padding: 10px 0; color: var(--tg-text-color, #000); font-size: 15px; line-height: 1.4;">Менты либо блокпост</td>
                 </tr>
                 <tr>
                     <td style="padding: 10px 12px 10px 0;">
-                        <img src="/assets/images/pig.svg" style="width: 32px; height: 32px; display: block;" alt="Pig">
+                        <img src="/assets/images/pig.png" style="width: 32px; height: 32px; display: block;" alt="Pig">
                     </td>
                     <td style="padding: 10px 0; color: var(--tg-text-color, #000); font-size: 15px; line-height: 1.4;">Остальное</td>
                 </tr>

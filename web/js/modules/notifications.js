@@ -49,11 +49,11 @@ function handleNewEvents(events) {
             let message = '';
 
             if (event.layer === 'cops') {
-                message = '<img src="/assets/images/cops.svg" width="16" height="16" style="vertical-align: middle; margin-right: 4px;">';
+                message = '<img src="/assets/images/cops.png" width="16" height="16" style="vertical-align: middle; margin-right: 4px;">';
             } else if (event.layer === 'bus') {
-                message = '<img src="/assets/images/bus.svg" width="16" height="16" style="vertical-align: middle; margin-right: 4px;">';
+                message = '<img src="/assets/images/bus.png" width="16" height="16" style="vertical-align: middle; margin-right: 4px;">';
             } else {
-                message = '<img src="/assets/images/pig.svg" width="16" height="16" style="vertical-align: middle; margin-right: 4px;">';
+                message = '<img src="/assets/images/pig.png" width="16" height="16" style="vertical-align: middle; margin-right: 4px;">';
             }
 
             if (event.description) {

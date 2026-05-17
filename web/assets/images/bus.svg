@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Roof -->
+  <rect x="6" y="20" width="74" height="22" rx="7" fill="#388E3C" stroke="#1B5E20" stroke-width="2"/>
+  <!-- Body -->
+  <rect x="4" y="38" width="92" height="36" rx="5" fill="#4CAF50" stroke="#2E7D32" stroke-width="2"/>
+  <!-- Rear window -->
+  <rect x="8" y="24" width="14" height="14" rx="2.5" fill="#B3E5FC" stroke="#0288D1" stroke-width="1.5"/>
+  <!-- Front windshield -->
+  <path d="M76 24 L86 24 Q90 24 90 28 L90 38 L76 38 Z" fill="#B3E5FC" stroke="#0288D1" stroke-width="1.5"/>
+  <!-- Side windows -->
+  <rect x="25" y="41" width="15" height="13" rx="2.5" fill="#B3E5FC" stroke="#0288D1" stroke-width="1.5"/>
+  <rect x="44" y="41" width="15" height="13" rx="2.5" fill="#B3E5FC" stroke="#0288D1" stroke-width="1.5"/>
+  <rect x="63" y="41" width="14" height="13" rx="2.5" fill="#B3E5FC" stroke="#0288D1" stroke-width="1.5"/>
+  <!-- Sliding door line -->
+  <line x1="24" y1="38" x2="24" y2="74" stroke="#2E7D32" stroke-width="1.5"/>
+  <!-- Headlight -->
+  <rect x="88" y="46" width="8" height="8" rx="2" fill="#FFF9C4" stroke="#F9A825" stroke-width="1.5"/>
+  <!-- Tail light -->
+  <rect x="4" y="46" width="6" height="8" rx="2" fill="#EF9A9A" stroke="#C62828" stroke-width="1.5"/>
+  <!-- Front bumper -->
+  <rect x="88" y="60" width="8" height="8" rx="2" fill="#1B5E20"/>
+  <!-- Undercarriage -->
+  <rect x="4" y="72" width="92" height="6" rx="2" fill="#2E7D32"/>
+  <!-- Rear wheel -->
+  <circle cx="22" cy="82" r="12" fill="#212121" stroke="#424242" stroke-width="1.5"/>
+  <circle cx="22" cy="82" r="6" fill="#757575"/>
+  <circle cx="22" cy="82" r="2.5" fill="#BDBDBD"/>
+  <!-- Front wheel -->
+  <circle cx="76" cy="82" r="12" fill="#212121" stroke="#424242" stroke-width="1.5"/>
+  <circle cx="76" cy="82" r="6" fill="#757575"/>
+  <circle cx="76" cy="82" r="2.5" fill="#BDBDBD"/>
+</svg>

@@ -102,19 +102,7 @@ window.initializeMap = function() {
     });
     currentTileLayer.addTo(map);
 
-    // Обновляем иконку День/Ночь при инициализации
-    const dayNightIcon = document.getElementById('dayNightIcon');
-    if (dayNightIcon) {
-        if (currentTileKey === 'dark') {
-            // Ночь - показываем солнце с оранжевым фильтром
-            dayNightIcon.src = '/assets/images/sun.svg';
-            dayNightIcon.style.filter = 'invert(1) hue-rotate(180deg)';
-        } else {
-            // День - показываем луну без фильтра
-            dayNightIcon.src = '/assets/images/moon.svg';
-            dayNightIcon.style.filter = '';
-        }
-    }
+    // Иконка Day/Night — статичная, не меняется при переключении
 
     // Устанавливаем экземпляр карты в глобальное состояние
     window.setMapInstance(map);
@@ -301,18 +289,7 @@ function toggleDayNightMode() {
     
     window.switchTileLayer(newTileKey);
     
-    // Обновляем иконку: когда ночь - показываем солнце (переключить на день), когда день - показывать луну (переключить на ночь)
-    if (dayNightIcon) {
-        if (newTileKey === 'dark') {
-            // Ночь - показываем солнце с оранжевым фильтром
-            dayNightIcon.src = '/assets/images/sun.svg';
-            dayNightIcon.style.filter = 'invert(1) hue-rotate(180deg)';
-        } else {
-            // День - показываем луну без фильтра
-            dayNightIcon.src = '/assets/images/moon.svg';
-            dayNightIcon.style.filter = '';
-        }
-    }
+    // Иконка daynight.svg статична — src и filter не меняются
     
     console.log('[DayNight] Switched to:', newTileKey);
 }
@@ -341,12 +318,12 @@ function addQuestionOverlay(map) {
     });
 }
 
-// Функция для инициализации рекламных квадратов - использует статичный banner.jpg
+// Функция для инициализации рекламных квадратов - использует статичный banner.svg
 function initializeAdSquares(map) {
     console.log('[initializeAdSquares] Starting banner initialization...');
     
     const bounds = L.latLngBounds([46.4370, 30.92288], [46.5240, 31.06208]);
-    const imageUrl = '/assets/images/banner.jpg';
+    const imageUrl = '/assets/images/banner.svg';
     const fullUrl = imageUrl + '?v=' + Date.now();
     console.log('[initializeAdSquares] Banner URL:', fullUrl);
     console.log('[initializeAdSquares] Current host:', window.location.host);

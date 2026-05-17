@@ -6,12 +6,13 @@ services:
   # PostgreSQL - основной storage с PostGIS
   # =============================================================================
   postgres:
+    image: survival_postgres:latest
     build:
       context: .
       dockerfile: Dockerfile.postgres
       network: host
       cache_from:
-        - postgres:latest
+        - survival_postgres:latest
     container_name: survival_postgres
     environment:
       POSTGRES_USER: postgres
@@ -43,12 +44,13 @@ services:
   # Parser - Telegram парсер с in-memory кэшем
   # =============================================================================
   parser:
+    image: survival_parser:latest
     build:
       context: .
       dockerfile: Dockerfile.parser
       network: host
       cache_from:
-        - parser:latest
+        - survival_parser:latest
     container_name: survival_parser
     environment:
       # PostgreSQL connection
@@ -135,12 +137,13 @@ services:
   # App - API сервер (опционально)
   # =============================================================================
   app:
+    image: survival_app:latest
     build:
       context: .
       dockerfile: Dockerfile
       network: host
       cache_from:
-        - app:latest
+        - survival_app:latest
     container_name: survival_app
     environment:
       # Database

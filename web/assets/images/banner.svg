@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 440 330">
+  <!-- Background -->
+  <rect width="440" height="330" fill="#2C2C2C"/>
+  <!-- Text line 1 -->
+  <text
+    x="220" y="130"
+    font-family="'Courier New', Courier, monospace"
+    font-size="32"
+    font-weight="normal"
+    fill="#CCCCCC"
+    text-anchor="middle"
+    letter-spacing="3"
+  >STOP GENOCIDE BY</text>
+  <!-- Text line 2 -->
+  <text
+    x="220" y="195"
+    font-family="'Courier New', Courier, monospace"
+    font-size="30"
+    font-weight="normal"
+    fill="#CCCCCC"
+    text-anchor="middle"
+    letter-spacing="2"
+  >UKRAINIAN GOUVERNEMENT</text>
+</svg>

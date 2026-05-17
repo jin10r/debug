@@ -1,25 +1,43 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
   <!-- Mounting bracket -->
-  <rect x="38" y="72" width="24" height="8" rx="2" fill="#9E9E9E" stroke="#757575" stroke-width="1.5"/>
-  <rect x="44" y="78" width="12" height="6" rx="1.5" fill="#757575"/>
-  <!-- Main siren bar body -->
-  <rect x="5" y="28" width="90" height="44" rx="8" fill="#BDBDBD" stroke="#9E9E9E" stroke-width="2"/>
-  <!-- Red dome (left) -->
-  <ellipse cx="26" cy="50" rx="17" ry="16" fill="#E53935" stroke="#B71C1C" stroke-width="1.5"/>
-  <ellipse cx="26" cy="50" rx="11" ry="10" fill="#FF5252"/>
-  <!-- Red glow highlight -->
-  <ellipse cx="23" cy="44" rx="5" ry="3.5" fill="white" opacity="0.45"/>
-  <!-- Blue dome (right) -->
-  <ellipse cx="74" cy="50" rx="17" ry="16" fill="#1E88E5" stroke="#0D47A1" stroke-width="1.5"/>
-  <ellipse cx="74" cy="50" rx="11" ry="10" fill="#448AFF"/>
-  <!-- Blue glow highlight -->
-  <ellipse cx="71" cy="44" rx="5" ry="3.5" fill="white" opacity="0.45"/>
-  <!-- Center grey divider -->
-  <rect x="43" y="28" width="14" height="44" fill="#9E9E9E" stroke="#757575" stroke-width="1"/>
-  <!-- Grille slits -->
-  <line x1="47" y1="33" x2="47" y2="67" stroke="#616161" stroke-width="1.5"/>
-  <line x1="50" y1="33" x2="50" y2="67" stroke="#757575" stroke-width="1"/>
-  <line x1="53" y1="33" x2="53" y2="67" stroke="#616161" stroke-width="1.5"/>
-  <!-- Amber middle lens hint -->
-  <ellipse cx="50" cy="50" rx="4" ry="5" fill="#FF8F00" stroke="#E65100" stroke-width="1"/>
+  <rect x="40" y="72" width="20" height="7" rx="2" fill="#9E9E9E" stroke="#757575" stroke-width="1.5"/>
+  <rect x="45" y="77" width="10" height="5" rx="1" fill="#757575"/>
+
+  <!-- Main bar housing (elongated) -->
+  <rect x="4" y="30" width="92" height="42" rx="9" fill="#C0C0C0" stroke="#909090" stroke-width="2"/>
+  <!-- Metallic sheen -->
+  <rect x="4" y="30" width="92" height="10" rx="9" fill="white" opacity="0.2"/>
+
+  <!-- Red section (left half) -->
+  <rect x="4" y="30" width="44" height="42" rx="9" fill="#CC2222" stroke="none"/>
+  <rect x="4" y="30" width="44" height="10" rx="9" fill="white" opacity="0.15"/>
+
+  <!-- Blue section (right half) -->
+  <rect x="52" y="30" width="44" height="42" rx="9" fill="#1A4FCC" stroke="none"/>
+  <rect x="52" y="30" width="44" height="10" rx="9" fill="white" opacity="0.15"/>
+
+  <!-- Center gray divider -->
+  <rect x="43" y="30" width="14" height="42" fill="#B0B0B0" stroke="#909090" stroke-width="0.5"/>
+  <!-- Grille slats in center -->
+  <line x1="46" y1="34" x2="46" y2="68" stroke="#808080" stroke-width="1.5"/>
+  <line x1="50" y1="34" x2="50" y2="68" stroke="#989898" stroke-width="1"/>
+  <line x1="54" y1="34" x2="54" y2="68" stroke="#808080" stroke-width="1.5"/>
+
+  <!-- Red side: two amber lens circles -->
+  <ellipse cx="18" cy="44" rx="10" ry="9" fill="#FF8800" stroke="#CC5500" stroke-width="1.5"/>
+  <ellipse cx="18" cy="44" rx="6" ry="5.5" fill="#FFBB00"/>
+  <ellipse cx="16" cy="41" rx="3" ry="2" fill="white" opacity="0.5"/>
+
+  <ellipse cx="36" cy="44" rx="10" ry="9" fill="#FF8800" stroke="#CC5500" stroke-width="1.5"/>
+  <ellipse cx="36" cy="44" rx="6" ry="5.5" fill="#FFBB00"/>
+  <ellipse cx="34" cy="41" rx="3" ry="2" fill="white" opacity="0.5"/>
+
+  <!-- Blue side: two white/cyan lens circles -->
+  <ellipse cx="64" cy="44" rx="10" ry="9" fill="#00AAFF" stroke="#0055CC" stroke-width="1.5"/>
+  <ellipse cx="64" cy="44" rx="6" ry="5.5" fill="#AADDFF"/>
+  <ellipse cx="62" cy="41" rx="3" ry="2" fill="white" opacity="0.6"/>
+
+  <ellipse cx="82" cy="44" rx="10" ry="9" fill="#00AAFF" stroke="#0055CC" stroke-width="1.5"/>
+  <ellipse cx="82" cy="44" rx="6" ry="5.5" fill="#AADDFF"/>
+  <ellipse cx="80" cy="41" rx="3" ry="2" fill="white" opacity="0.6"/>
 </svg>

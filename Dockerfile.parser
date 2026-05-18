@@ -41,7 +41,8 @@ RUN --mount=type=cache,target=/var/cache/apt,id=parser-runtime \
 
 RUN useradd -m -u 1000 parser && \
     chmod 1777 /tmp && \
-    chown -R parser:parser /app /home/parser/.local
+    mkdir -p /media/events && \
+    chown -R parser:parser /app /home/parser/.local /media/events
 
 COPY --chown=parser:parser parser/ ./parser/
 COPY --chown=parser:parser core/ ./core/

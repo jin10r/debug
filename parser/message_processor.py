@@ -1,7 +1,7 @@
 """Message Processor - обработка текста и сохранение событий.
 
 Очищает текст от спецсимволов, определяет слой события,
-находит сущности через лексический поиск (pymorphy2 + rapidfuzz),
+находит сущности через лексический поиск (mawo_pymorphy3 + rapidfuzz),
 сохраняет в БД.
 """
 
@@ -50,7 +50,7 @@ class MessageProcessor:
 
     Отвечает за:
     - Очистку текста
-    - Поиск сущностей через лексический поиск (pymorphy2 + rapidfuzz)
+    - Поиск сущностей через лексический поиск (mawo_pymorphy3 + rapidfuzz)
     - Определение слоя
     - Сохранение событий в PostgreSQL
     """
@@ -178,7 +178,7 @@ class MessageProcessor:
 
         else:
             # Лексический поиск сущностей
-            logger.info(f"Message {message_id}: Using lexical search (pymorphy2 + rapidfuzz)...")
+            logger.info(f"Message {message_id}: Using lexical search (mawo_pymorphy3 + rapidfuzz)...")
 
             entities = await self.matcher.async_find_entities(
                 cleaned,

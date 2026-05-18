@@ -1,9 +1,9 @@
-"""LexicalMatcher — поиск улиц через pymorphy2 + rapidfuzz.
+"""LexicalMatcher — поиск улиц через mawo_pymorphy3 + rapidfuzz.
 
 Заменяет rubert-tiny2 + pgvector. Поиск полностью локальный (CPU, без ONNX).
 
 Пайплайн на каждое сообщение:
-  1. Лемматизация текста через pymorphy2 (включая конвертацию порядковых числительных в цифры)
+  1. Лемматизация текста через mawo_pymorphy3 (включая конвертацию порядковых числительных в цифры)
   2. Генерация n-грамм 1-4 слова
   3. rapidfuzz token_set_ratio каждого n-грамма против лемматизированных aliases из БД
   4. Дедупликация по street_id, топ-N по score
@@ -20,7 +20,7 @@ import re
 import logging
 from typing import Dict, List, Optional, Set, Tuple
 
-import pymorphy3 as pymorphy2
+import mawo_pymorphy3 as pymorphy3
 from rapidfuzz import process as rf_process, fuzz
 
 try:
@@ -48,7 +48,7 @@ else:
 
 MAX_ENTITIES = 3
 
-# Маппинг: нормальная форма pymorphy2 порядкового числительного → строка цифры.
+# Маппинг: нормальная форма порядкового числительного → строка цифры.
 # Покрывает станции Фонтана (1-16) и Люстдорфской (1-10) с запасом до 20.
 ORDINAL_MAP: Dict[str, str] = {
     'первый': '1',
@@ -82,7 +82,7 @@ class LexicalMatcher:
     """Поиск улиц через морфологическую нормализацию + нечёткое строковое совпадение."""
 
     def __init__(self) -> None:
-        self._morph = pymorphy2.MorphAnalyzer()
+        self._morph = pymorphy3.MorphAnalyzer()
         self._stopwords: Set[str] = set()
         # Два параллельных списка — тексты и мета. Индекс синхронизирован.
         self._alias_texts: List[str] = []

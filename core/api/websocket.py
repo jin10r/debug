@@ -27,7 +27,32 @@ class WebSocketManager:
     async def unregister_connection(self, ws: web.WebSocketResponse):
         """Unregister a WebSocket connection."""
         self.connections.discard(ws)
-        logger.info(f"WebSocket connection unregistered. Total: {len(self.connections)}")
+        logger.debug(f"WebSocket connection unregistered. Total: {len(self.connections)}")
+
+    async def _broadcast_payload(self, payload: str) -> int:
+        """Send payload string to all connected clients; remove dead ones. Returns success count."""
+        snapshot = list(self.connections)
+        if not snapshot:
+            return 0
+
+        async def _send(ws: web.WebSocketResponse) -> bool:
+            try:
+                await ws.send_str(payload)
+                return True
+            except Exception as e:
+                logger.debug(f"Broadcast send error: {e}")
+                return False
+
+        async with self.broadcast_lock:
+            results = await asyncio.gather(*[_send(ws) for ws in snapshot], return_exceptions=True)
+
+        success = 0
+        for ws, ok in zip(snapshot, results):
+            if ok is True:
+                success += 1
+            else:
+                await self.unregister_connection(ws)
+        return success
 
     async def send_events_since(
         self,
@@ -86,87 +111,28 @@ class WebSocketManager:
             logger.warning(f"broadcast_event: unexpected data type: {event_data.get('type')}")
             return
 
-        try:
-            message = {
-                'type': 'feature',
-                'data': event_data,
-                'timestamp': datetime.now(timezone.utc).isoformat()
-            }
-            payload = json.dumps(message)
+        payload = json.dumps({
+            'type': 'feature',
+            'data': event_data,
+            'timestamp': datetime.now(timezone.utc).isoformat()
+        })
 
-            async with self.broadcast_lock:
-                async def send_to_client(ws: web.WebSocketResponse):
-                    try:
-                        await ws.send_str(payload)
-                        return True
-                    except Exception as e:
-                        logger.debug(f"Error broadcasting to client: {e}")
-                        return False
-
-                tasks = [send_to_client(ws) for ws in self.connections.copy()]
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-
-                disconnected = set()
-                success_count = 0
-                for ws, result in zip(self.connections.copy(), results):
-                    if result is True:
-                        success_count += 1
-                    else:
-                        disconnected.add(ws)
-
-                for ws in disconnected:
-                    await self.unregister_connection(ws)
-
-            logger.info(
-                f"Feature broadcasted: {success_count}/{len(self.connections)} clients "
-                f"({len(disconnected)} disconnected)"
-            )
-
-        except Exception as e:
-            logger.error(f"Error broadcasting feature: {e}", exc_info=True)
+        success = await self._broadcast_payload(payload)
+        logger.info(f"Feature broadcasted: {success}/{len(self.connections)} clients")
 
     async def broadcast_events_cleaned(self, data: Dict):
         """Broadcast events_cleaned notification to all connected clients."""
         if not self.connections:
             return
 
-        try:
-            message = {
-                'type': 'events_cleaned',
-                'data': data,
-                'timestamp': datetime.now(timezone.utc).isoformat()
-            }
-            payload = json.dumps(message)
+        payload = json.dumps({
+            'type': 'events_cleaned',
+            'data': data,
+            'timestamp': datetime.now(timezone.utc).isoformat()
+        })
 
-            async with self.broadcast_lock:
-                async def send_to_client(ws: web.WebSocketResponse):
-                    try:
-                        await ws.send_str(payload)
-                        return True
-                    except Exception as e:
-                        logger.debug(f"Error broadcasting events_cleaned to client: {e}")
-                        return False
-
-                tasks = [send_to_client(ws) for ws in self.connections.copy()]
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-
-                disconnected = set()
-                success_count = 0
-                for ws, result in zip(self.connections.copy(), results):
-                    if result is True:
-                        success_count += 1
-                    else:
-                        disconnected.add(ws)
-
-                for ws in disconnected:
-                    await self.unregister_connection(ws)
-
-                logger.info(
-                    f"events_cleaned broadcasted: {success_count}/{len(self.connections)} clients"
-                )
-
-        except Exception as e:
-            logger.error(f"Error broadcasting events_cleaned: {e}", exc_info=True)
+        success = await self._broadcast_payload(payload)
+        logger.info(f"events_cleaned broadcasted: {success}/{len(self.connections)} clients")
 
 
 async def websocket_handler(request: web.Request):

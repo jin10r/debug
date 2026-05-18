@@ -48,6 +48,7 @@ def setup_routes(app: web.Application):
 
     # Authentication API
     app.router.add_get('/api/validation-config', get_validation_config_handler)
+    app.router.add_post('/api/validation-config', get_validation_config_handler)  # legacy compat
     app.router.add_post('/api/validate-init', validate_init_handler)
     app.router.add_post('/api/auth/refresh', refresh_token_handler)
 

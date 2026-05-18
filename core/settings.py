@@ -274,8 +274,4 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
         raise ValueError(f"Configuration error: {e}")
 
 
-try:
-    settings = load_settings(require_jwt=True)
-except Exception as e:
-    print(f"Failed to load settings: {e}")
-    settings = None
+settings = load_settings(require_jwt=True)

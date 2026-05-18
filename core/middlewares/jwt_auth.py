@@ -36,7 +36,7 @@ async def jwt_auth_middleware(app: web.Application, handler):
     async def middleware_handler(request: web.Request) -> web.Response:
         # Skip authentication if validation is disabled (development mode)
         validation_enabled = getattr(settings.app, 'telegram_validation_enabled', True)
-        logger.info(f"[JWT Middleware] Path: {request.path}, validation_enabled: {validation_enabled}")
+        logger.debug(f"[JWT] {request.method} {request.path} validation={validation_enabled}")
         
         if not validation_enabled:
             # No authentication, no user data

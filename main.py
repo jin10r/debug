@@ -13,7 +13,7 @@ from core.utils.logging_config import setup_logging
 
 # Configure structured logging (JSON format)
 setup_logging(
-    level=logging.INFO if os.getenv('LOG_LEVEL', 'INFO') == 'INFO' else logging.DEBUG,
+    level=getattr(logging, os.getenv('LOG_LEVEL', 'INFO').upper(), logging.INFO),
     json_format=os.getenv('LOG_FORMAT', 'json') == 'json'
 )
 logger = logging.getLogger(__name__)

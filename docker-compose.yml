@@ -65,18 +65,13 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       # Media
       EVENTS_MEDIA_DIR: /media/events
-      # Logging (optional - not implemented in code)
-      # LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      # LOG_FORMAT: ${LOG_FORMAT:-json}
-      # HuggingFace cache
-      HF_HOME: /app/.cache/huggingface
-      TRANSFORMERS_CACHE: /app/.cache/huggingface
+      # Logging
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
       # Telegram proxy (optional, for blocked networks)
       SOCKS5_HOST: ${SOCKS5_HOST:-}
       PROXY_PORT: ${PROXY_PORT:-1080}
       PROXY_SCHEME: ${PROXY_SCHEME:-socks5}
     volumes:
-      - parser_cache:/app/.cache/huggingface
       - ./parser/session.session:/app/parser/session.session:rw
       - events_media:/media/events:rw
     depends_on:
@@ -211,9 +206,16 @@ services:
       - ./web:/usr/share/nginx/html:ro
       - events_media:/media/events:ro
     depends_on:
-      - app
+      app:
+        condition: service_healthy
     networks:
       - frontend
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/health/ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     deploy:
       resources:
         limits:
@@ -242,6 +244,4 @@ volumes:
   events_media:
     driver: local
   redis_data:
-    driver: local
-  parser_cache:
     driver: local

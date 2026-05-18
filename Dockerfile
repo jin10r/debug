@@ -24,14 +24,11 @@ COPY main.py .
 # Create media directory with correct ownership
 RUN mkdir -p /app/media/events && chown -R appuser:appuser /app
 
-# Set ownership and switch to non-root user
-RUN chown -R appuser:appuser /app
 USER appuser
 
 EXPOSE 8080
 
-# Health check for app process
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD ps aux | grep -v grep | grep -q main.py || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health/live').read()" || exit 1
 
 CMD ["python", "main.py"]

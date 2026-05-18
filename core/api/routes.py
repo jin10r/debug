@@ -47,7 +47,7 @@ def setup_routes(app: web.Application):
     app.router.add_get('/health/detailed', health_detailed_handler)
 
     # Authentication API
-    app.router.add_post('/api/validation-config', get_validation_config_handler)
+    app.router.add_get('/api/validation-config', get_validation_config_handler)
     app.router.add_post('/api/validate-init', validate_init_handler)
     app.router.add_post('/api/auth/refresh', refresh_token_handler)
 
@@ -56,7 +56,6 @@ def setup_routes(app: web.Application):
     app.router.add_get('/api/events', get_events_snapshot_handler)
     app.router.add_get('/api/events/status', get_events_status_handler)
     app.router.add_post('/api/events/updates', post_events_updates_handler)
-    app.router.add_get('/api/events/snapshot', get_events_snapshot_handler)
     app.router.add_get('/api/streets', get_streets_handler)
     app.router.add_get('/api/data_status', get_data_status_handler)
 

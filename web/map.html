@@ -79,9 +79,8 @@
                 console.error('Refresh failed:', e);
               }
             }
-            // Refresh failed - redirect to gate
-            window.location.replace('/index.html');
-            return;
+            // Refresh failed - continue with defaults, WS auth handles independently
+            console.warn('[CONFIG] Auth failed, using defaults');
           }
 
           if (configResponse.ok) {

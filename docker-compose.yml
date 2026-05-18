@@ -11,8 +11,6 @@ services:
       context: .
       dockerfile: Dockerfile.postgres
       network: host
-      cache_from:
-        - survival_postgres:latest
     container_name: survival_postgres
     environment:
       POSTGRES_USER: postgres
@@ -49,8 +47,6 @@ services:
       context: .
       dockerfile: Dockerfile.parser
       network: host
-      cache_from:
-        - survival_parser:latest
     container_name: survival_parser
     environment:
       # PostgreSQL connection
@@ -137,8 +133,6 @@ services:
       context: .
       dockerfile: Dockerfile
       network: host
-      cache_from:
-        - survival_app:latest
     container_name: survival_app
     environment:
       # Database

@@ -1,448 +1,252 @@
 /**
- * ReactiveStore - Centralized state management with memoized selectors
- * 
- * Features:
- * - Reactive state management with subscribers
- * - Memoized selectors for performance
- * - Cache invalidation on state changes
- * - Sync with APP_STATE for compatibility
- * 
- * @example
- * ```typescript
- * const store = new ReactiveStore();
- * store.subscribe((state) => { console.log('State changed:', state); });
- * store.dispatch({ type: 'SET_EVENTS', payload: { events } });
- * ```
+ * Reactive store — single source of truth for events and filters.
+ *
+ * Built on zustand/vanilla. The store owns the master event collection as a
+ * Map<id, EventFeature>; localStorage (local_cache.ts) is only a persistence
+ * adapter, and WebSocket pushes events straight into the store. This removes
+ * the old aliasing between localCache.masterGeoJSON and the store state.
+ *
+ * Change detection: every data mutation bumps `revision`; a 30 s tick bumps
+ * `clockTick` (and prunes expired events). Subscribers re-render on any change
+ * — the incremental map renderer diffs what actually changed.
  */
 
-import { EventFeature, EventFeatureCollection, StoreState, EventLayer } from '../types/geojson';
+import { createStore } from 'zustand/vanilla';
+import { EventFeature, EventFeatureCollection, EventLayer } from '../types/geojson';
 
-/**
- * Action types
- */
-export enum ActionType {
-    SET_EVENTS = 'SET_EVENTS',
-    ADD_EVENTS = 'ADD_EVENTS',
-    UPDATE_CURRENT_TIME_FILTER = 'UPDATE_CURRENT_TIME_FILTER',
-    TOGGLE_LAYER = 'TOGGLE_LAYER',
-    CLEAR_EVENTS = 'CLEAR_EVENTS'
+/** Event time-to-live: 60 minutes from the event's own timestamp. */
+const TTL_MS = 60 * 60 * 1000;
+/** Tolerance for events slightly ahead of the server clock. */
+const FUTURE_TOLERANCE_MS = 5 * 60 * 1000;
+/** TTL prune / clock re-evaluation interval. */
+const TICK_INTERVAL_MS = 30 * 1000;
+
+export type TimeFilter = 15 | 30 | 60;
+
+const DEFAULT_LAYERS: EventLayer[] = ['pig', 'cops', 'bus'];
+
+/** Store state and actions. */
+export interface SurvivalState {
+    /** Master events keyed by id — O(1) upsert/dedup. */
+    eventsById: Map<string | number, EventFeature>;
+    /** Active view window in minutes. */
+    currentTimeFilter: TimeFilter;
+    /** Enabled event layers. */
+    activeLayers: Set<EventLayer>;
+    /** Monotonic counter — bumped on every data mutation. */
+    revision: number;
+    /** Monotonic counter — bumped every tick so time-based filtering re-runs. */
+    clockTick: number;
+
+    // ---- actions ----
+    /** Replace all events (e.g. hydrate from localStorage). */
+    setEvents: (features: EventFeature[]) => void;
+    /** Upsert a single event; returns true if it was new. */
+    addEvent: (feature: EventFeature) => boolean;
+    /** Upsert many events at once; returns the count of newly added ids. */
+    addEvents: (features: EventFeature[]) => number;
+    /** Change the time-filter window. */
+    updateTimeFilter: (minutes: TimeFilter) => void;
+    /** Toggle a layer on/off. */
+    toggleLayer: (layer: EventLayer) => void;
+    /** Drop events past their TTL; returns the count removed. */
+    pruneExpired: () => number;
+    /** Remove all events. */
+    clearEvents: () => void;
+    /** Advance the clock tick (re-evaluates time-based filtering). */
+    tickClock: () => void;
+
+    // ---- selectors ----
+    /** Events passing the current layer + time filter, as a FeatureCollection. */
+    getFilteredItems: () => EventFeatureCollection;
+    /** Every stored event as a FeatureCollection (for persistence). */
+    getAllEvents: () => EventFeatureCollection;
+    /** ISO-8601 timestamp of the newest event, or null when empty. */
+    getLatestTimestamp: () => string | null;
+}
+
+/** Extract a stable id from a feature. */
+export function getEventId(feature: EventFeature): string | number | null {
+    const p = feature?.properties;
+    if (!p) return null;
+    const id = p.id ?? p.event_id ?? p._id ?? p.uid ?? null;
+    return id as string | number | null;
+}
+
+/** Parse the event time from a feature. */
+export function getEventTime(feature: EventFeature): Date | null {
+    const p = feature?.properties;
+    if (!p) return null;
+    const raw = p.time ?? p.created_at ?? p.timestamp;
+    if (!raw) return null;
+    const d = new Date(raw as string | number);
+    return Number.isNaN(d.getTime()) ? null : d;
 }
 
 /**
- * Action interface
+ * An event is acceptable if it has no timestamp, or its age is within
+ * [-FUTURE_TOLERANCE_MS, TTL_MS] relative to the server (Kiev) clock.
  */
-export interface Action {
-    type: ActionType;
-    payload: unknown;
+function isAcceptable(feature: EventFeature): boolean {
+    const t = getEventTime(feature);
+    if (!t) return true;
+    const age = window.serverNow() - t.getTime();
+    return age <= TTL_MS && age >= -FUTURE_TOLERANCE_MS;
 }
 
-/**
- * Subscriber callback type
- */
-type StateSubscriber = (state: StoreState) => void;
+/** Memoized filtered-items result, keyed by every input that affects it. */
+let filterMemo: { key: string; value: EventFeatureCollection } | null = null;
 
-/**
- * Action handler type
- */
-type ActionHandler = (payload: unknown) => void;
+function computeFiltered(state: SurvivalState): EventFeatureCollection {
+    const key = `${state.revision}|${state.currentTimeFilter}|`
+        + `${[...state.activeLayers].sort().join(',')}|${state.clockTick}`;
 
-/**
- * Filter cache interface
- */
-interface FilterCache {
-    key: string;
-    value: EventFeatureCollection;
-    timestamp: number;
+    if (filterMemo && filterMemo.key === key) {
+        return filterMemo.value;
+    }
+
+    const filterMs = state.currentTimeFilter * 60 * 1000;
+    const now = window.serverNow();
+    const features: EventFeature[] = [];
+
+    for (const feature of state.eventsById.values()) {
+        const layer = (feature.properties?.layer
+            || feature.properties?.type
+            || 'unknown') as EventLayer;
+        if (!state.activeLayers.has(layer)) continue;
+
+        const t = getEventTime(feature);
+        if (t) {
+            const age = now - t.getTime();
+            if (age < -FUTURE_TOLERANCE_MS) continue;
+            if (age > filterMs) continue;
+        }
+        features.push(feature);
+    }
+
+    const value: EventFeatureCollection = { type: 'FeatureCollection', features };
+    filterMemo = { key, value };
+    return value;
 }
 
-/**
- * ReactiveStore class
- */
-export class ReactiveStore {
-    /** Current state */
-    private state: StoreState;
-    
-    /** Subscribers list */
-    private subscribers: StateSubscriber[] = [];
-    
-    /** Filter cache for memoization */
-    private filterCache: FilterCache | null = null;
-    
-    /** Action handlers */
-    private actionHandlers: Record<ActionType, ActionHandler>;
+export const store = createStore<SurvivalState>()((set, get) => ({
+    eventsById: new Map(),
+    currentTimeFilter: 30,
+    activeLayers: new Set<EventLayer>(DEFAULT_LAYERS),
+    revision: 0,
+    clockTick: 0,
 
-    /**
-     * Create ReactiveStore instance
-     */
-    constructor() {
-        this.state = {
-            events: {
-                type: 'FeatureCollection',
-                features: []
-            },
-            currentTimeFilter: 30,
-            activeLayers: new Set<EventLayer>(['pig', 'cops', 'bus'])
-        };
-
-        // Bind action handlers
-        this.actionHandlers = {
-            [ActionType.SET_EVENTS]: this.setEvents.bind(this),
-            [ActionType.ADD_EVENTS]: this.addEvents.bind(this),
-            [ActionType.UPDATE_CURRENT_TIME_FILTER]: this.updateCurrentTimeFilter.bind(this),
-            [ActionType.TOGGLE_LAYER]: this.toggleLayer.bind(this),
-            [ActionType.CLEAR_EVENTS]: this.clearEvents.bind(this)
-        };
-
-        console.log('[Store] Initialized with default state');
-    }
-
-    /**
-     * Subscribe to state changes
-     * 
-     * @param subscriber - Callback function
-     * @returns Unsubscribe function
-     */
-    subscribe(subscriber: StateSubscriber): () => void {
-        this.subscribers.push(subscriber);
-        console.log('[Store] Subscriber added, total:', this.subscribers.length);
-
-        // Return unsubscribe function
-        return () => {
-            const index = this.subscribers.indexOf(subscriber);
-            if (index > -1) {
-                this.subscribers.splice(index, 1);
-                console.log('[Store] Subscriber removed, total:', this.subscribers.length);
-            }
-        };
-    }
-
-    /**
-     * Notify all subscribers about state changes
-     */
-    notifySubscribers(): void {
-        const state = this.getState();
-        
-        // Invalidate filter cache on state change
-        this.filterCache = null;
-        
-        console.log('[Store] Notifying subscribers:', {
-            events_count: state.events.features.length,
-            currentTimeFilter: state.currentTimeFilter,
-            activeLayers: Array.from(state.activeLayers)
-        });
-
-        // Create a copy of subscribers to avoid issues if subscribers modify the list
-        const subscribersCopy = [...this.subscribers];
-        
-        subscribersCopy.forEach(subscriber => {
-            try {
-                subscriber(state);
-            } catch (error) {
-                console.error('[Store] Error in subscriber:', error);
-            }
-        });
-
-        // Sync with APP_STATE for compatibility
-        if (window.APP_STATE) {
-            window.APP_STATE.currentTimeFilter = state.currentTimeFilter;
-            window.APP_STATE.activeLayers = state.activeLayers as unknown as Set<string>;
-            window.APP_STATE.events = state.events;
+    setEvents: (features) => {
+        const next = new Map<string | number, EventFeature>();
+        for (const f of features) {
+            const id = getEventId(f);
+            if (id == null || !isAcceptable(f)) continue;
+            next.set(id, f);
         }
-    }
+        set({ eventsById: next, revision: get().revision + 1 });
+        console.log('[Store] setEvents:', next.size, 'events');
+    },
 
-    /**
-     * Get current state
-     */
-    getState(): StoreState {
-        return { ...this.state };
-    }
+    addEvent: (feature) => {
+        const id = getEventId(feature);
+        if (id == null || !isAcceptable(feature)) return false;
+        const state = get();
+        const isNew = !state.eventsById.has(id);
+        const next = new Map(state.eventsById);
+        next.set(id, feature);
+        set({ eventsById: next, revision: state.revision + 1 });
+        return isNew;
+    },
 
-    /**
-     * Dispatch an action to update state
-     *
-     * @param action - Action object with type and payload
-     */
-    dispatch(action: Action): void {
-        const handler = this.actionHandlers[action.type];
-
-        if (handler) {
-            const prevEventsCount = this.state.events.features.length;
-            const prevFilter = this.state.currentTimeFilter;
-
-            console.log('[Store] Dispatch:', action.type, 'prev count:', prevEventsCount);
-
-            // Execute action handler
-            handler(action.payload);
-
-            const newEventsCount = this.state.events.features.length;
-            const newFilter = this.state.currentTimeFilter;
-
-            // Only notify if state actually changed
-            const stateChanged = prevEventsCount !== newEventsCount || prevFilter !== newFilter;
-
-            console.log('[Store] After dispatch:', {
-                newCount: newEventsCount,
-                newFilter: newFilter,
-                stateChanged: stateChanged
-            });
-
-            if (stateChanged) {
-                console.log('[Store] State changed, notifying subscribers...');
-                this.notifySubscribers();
-            } else {
-                console.log('[Store] State unchanged, skipping notification');
+    addEvents: (features) => {
+        if (!features || features.length === 0) return 0;
+        const state = get();
+        const next = new Map(state.eventsById);
+        let added = 0;
+        let changed = false;
+        for (const f of features) {
+            const id = getEventId(f);
+            if (id == null || !isAcceptable(f)) continue;
+            if (!next.has(id)) {
+                added++;
+                changed = true;
+            } else if (next.get(id) !== f) {
+                changed = true;
             }
-        } else {
-            console.warn('[Store] Unknown action type:', action.type);
+            next.set(id, f);
         }
-    }
-
-    /**
-     * Set events action handler
-     */
-    private setEvents(payload: { events: EventFeatureCollection }): void {
-        this.state.events = payload.events || {
-            type: 'FeatureCollection',
-            features: []
-        };
-        console.log('[Store] SET_EVENTS:', this.state.events.features.length, 'events');
-    }
-
-    /**
-     * Add events action handler
-     */
-    private addEvents(payload: { events: EventFeature[] }): void {
-        const newFeatures = payload.events || [];
-        this.state.events.features = [...this.state.events.features, ...newFeatures];
-        console.log('[Store] ADD_EVENTS:', newFeatures.length, 'new events');
-    }
-
-    /**
-     * Update current time filter action handler
-     */
-    private updateCurrentTimeFilter(payload: { minutes: 15 | 30 | 60 }): void {
-        this.state.currentTimeFilter = payload.minutes;
-        console.log('[Store] UPDATE_CURRENT_TIME_FILTER:', payload.minutes, 'minutes');
-    }
-
-    /**
-     * Toggle layer action handler
-     */
-    private toggleLayer(payload: { layer: string }): void {
-        const layer = payload.layer as EventLayer;
-        
-        if (this.state.activeLayers.has(layer)) {
-            this.state.activeLayers.delete(layer);
-            console.log('[Store] TOGGLE_LAYER:', layer, '→ disabled');
-        } else {
-            this.state.activeLayers.add(layer);
-            console.log('[Store] TOGGLE_LAYER:', layer, '→ enabled');
+        if (changed) {
+            set({ eventsById: next, revision: state.revision + 1 });
         }
-    }
+        console.log('[Store] addEvents:', added, 'new of', features.length);
+        return added;
+    },
 
-    /**
-     * Clear events action handler
-     */
-    private clearEvents(): void {
-        this.state.events = {
-            type: 'FeatureCollection',
-            features: []
-        };
-        console.log('[Store] CLEAR_EVENTS');
-    }
+    updateTimeFilter: (minutes) => {
+        const state = get();
+        if (state.currentTimeFilter === minutes) return;
+        set({ currentTimeFilter: minutes, revision: state.revision + 1 });
+        console.log('[Store] timeFilter:', minutes, 'min');
+    },
 
-    /**
-     * Get filtered items with memoization
-     * 
-     * Memoization key: currentTimeFilter-eventsCount-activeLayers
-     * Cache invalidates on any state change
-     * 
-     * @returns Filtered EventFeatureCollection
-     */
-    getFilteredItems(): EventFeatureCollection {
-        const { events, currentTimeFilter, activeLayers } = this.state;
-        const filterMs = currentTimeFilter * 60 * 1000;
-        const now = Date.now();
+    toggleLayer: (layer) => {
+        const state = get();
+        const next = new Set(state.activeLayers);
+        if (next.has(layer)) next.delete(layer);
+        else next.add(layer);
+        set({ activeLayers: next, revision: state.revision + 1 });
+        console.log('[Store] toggleLayer:', layer, '→', [...next].join(','));
+    },
 
-        // Generate cache key
-        const cacheKey = `${currentTimeFilter}-${events.features.length}-${Array.from(activeLayers).sort().join(',')}`;
-
-        // Check cache
-        if (this.filterCache && this.filterCache.key === cacheKey) {
-            console.log('[Store] getFilteredItems: cache hit');
-            return this.filterCache.value;
+    pruneExpired: () => {
+        const state = get();
+        const next = new Map<string | number, EventFeature>();
+        let removed = 0;
+        for (const [id, f] of state.eventsById) {
+            if (isAcceptable(f)) next.set(id, f);
+            else removed++;
         }
-
-        console.log('[Store] getFilteredItems: cache miss, computing...');
-
-        // Compute filtered items
-        const result = this._computeFilteredItems(events, filterMs, now, activeLayers);
-
-        // Store in cache
-        this.filterCache = {
-            key: cacheKey,
-            value: result,
-            timestamp: Date.now()
-        };
-
-        return result;
-    }
-
-    /**
-     * Compute filtered items (internal)
-     */
-    private _computeFilteredItems(
-        events: EventFeatureCollection,
-        filterMs: number,
-        now: number,
-        activeLayers: Set<EventLayer>
-    ): EventFeatureCollection {
-        let filteredCount = 0;
-        let timeFilteredCount = 0;
-        let layerFilteredCount = 0;
-
-        const filteredFeatures = events.features.filter(feature => {
-            // Check layer filter first (faster)
-            const eventLayer = (feature.properties?.layer || feature.properties?.type || 'unknown') as EventLayer;
-            
-            if (!activeLayers.has(eventLayer)) {
-                layerFilteredCount++;
-                return false;
-            }
-
-            // Check time filter
-            const eventTime = this.getEventTime(feature);
-            
-            if (eventTime) {
-                const ageMs = now - eventTime.getTime();
-
-                // Reject future events (more than 5 minutes ahead)
-                if (ageMs < -5 * 60 * 1000) {
-                    return false;
-                }
-
-                // Reject too old events
-                if (ageMs > filterMs) {
-                    timeFilteredCount++;
-                    return false;
-                }
-            }
-
-            filteredCount++;
-            return true;
-        });
-
-        console.log('[Store] Filter stats:', {
-            total: events.features.length,
-            filtered: filteredCount,
-            time_filtered_out: timeFilteredCount,
-            layer_filtered_out: layerFilteredCount,
-            currentTimeFilter: this.state.currentTimeFilter,
-            activeLayers: Array.from(activeLayers)
-        });
-
-        return {
-            type: 'FeatureCollection',
-            features: filteredFeatures
-        };
-    }
-
-    /**
-     * Get event time from feature
-     */
-    getEventTime(feature: EventFeature): Date | null {
-        if (!feature?.properties) return null;
-
-        const timeStr = feature.properties.time ?? feature.properties.created_at ?? feature.properties.timestamp;
-        if (!timeStr) return null;
-
-        try {
-            return new Date(timeStr);
-        } catch (e) {
-            console.error('[Store] Error parsing event time:', timeStr, e);
-            return null;
+        if (removed > 0) {
+            set({ eventsById: next, revision: state.revision + 1 });
+            console.log('[Store] pruneExpired:', removed, 'expired');
         }
-    }
+        return removed;
+    },
 
-    /**
-     * Get event ID from feature
-     */
-    getEventId(feature: EventFeature): string | number | null {
-        if (!feature?.properties) return null;
+    clearEvents: () => {
+        set({ eventsById: new Map(), revision: get().revision + 1 });
+    },
 
-        const id =
-            feature.properties.id ??
-            feature.properties.event_id ??
-            feature.properties._id ??
-            feature.properties.uid ??
-            null;
+    tickClock: () => {
+        set({ clockTick: get().clockTick + 1 });
+    },
 
-        return id as string | number | null;
-    }
+    getFilteredItems: () => computeFiltered(get()),
 
-    /**
-     * Get maximum event ID
-     */
-    getMaxEventId(state?: StoreState): number {
-        const currentState = state || this.state;
-        let maxId = 0;
-        
-        for (const feature of currentState.events.features) {
-            const eventId = this.getEventId(feature);
-            if (eventId && typeof eventId === 'number' && eventId > maxId) {
-                maxId = eventId;
-            }
+    getAllEvents: () => ({
+        type: 'FeatureCollection',
+        features: [...get().eventsById.values()]
+    }),
+
+    getLatestTimestamp: () => {
+        let max: Date | null = null;
+        for (const f of get().eventsById.values()) {
+            const t = getEventTime(f);
+            if (t && (!max || t > max)) max = t;
         }
-        
-        return maxId;
+        return max ? max.toISOString() : null;
     }
+}));
 
-    /**
-     * Get maximum event time
-     */
-    getMaxEventTime(state?: StoreState): Date | null {
-        const currentState = state || this.state;
-        let maxTime: Date | null = null;
-        
-        for (const feature of currentState.events.features) {
-            const eventTime = this.getEventTime(feature);
-            if (eventTime && (!maxTime || eventTime > maxTime)) {
-                maxTime = eventTime;
-            }
-        }
-        
-        return maxTime;
-    }
+// Periodic tick: prune expired events and advance the filtering clock so the
+// 15/30/60-min window and the 60-min TTL stay correct without new events.
+window.setInterval(() => {
+    const s = store.getState();
+    s.pruneExpired();
+    s.tickClock();
+}, TICK_INTERVAL_MS);
 
-    /**
-     * Get store statistics
-     */
-    getStats(): {
-        totalEvents: number;
-        currentTimeFilter: number;
-        activeLayers: string[];
-        subscribers: number;
-        cacheHit: boolean;
-    } {
-        return {
-            totalEvents: this.state.events.features.length,
-            currentTimeFilter: this.state.currentTimeFilter,
-            activeLayers: Array.from(this.state.activeLayers),
-            subscribers: this.subscribers.length,
-            cacheHit: this.filterCache !== null
-        };
-    }
+// Expose the zustand store globally for the non-module scripts.
+window.store = store as unknown as Window['store'];
 
-    /**
-     * Clear filter cache (force recomputation)
-     */
-    clearFilterCache(): void {
-        this.filterCache = null;
-        console.log('[Store] Filter cache cleared');
-    }
-}
-
-// Create and export singleton instance
-window.store = new ReactiveStore();
-
-console.log('✅ ReactiveStore initialized with memoized selectors');
+console.log('✅ ReactiveStore (zustand) initialized');

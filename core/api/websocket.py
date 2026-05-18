@@ -88,6 +88,19 @@ class WebSocketManager:
                     logger.warning(f"Failed to send feature to client: {e}")
                     return
 
+            # Terminal marker for the batch. The client treats every feature
+            # received before this as a silent snapshot (initial load or
+            # reconnect catch-up); only live pushes after it raise per-event
+            # notifications.
+            try:
+                await ws.send_str(json.dumps({
+                    'type': 'events_snapshot_end',
+                    'count': len(features),
+                    'timestamp': datetime.now(timezone.utc).isoformat()
+                }))
+            except Exception as e:
+                logger.warning(f"Failed to send events_snapshot_end: {e}")
+
         except Exception as e:
             logger.error(f"Error sending events to client: {e}", exc_info=True)
 

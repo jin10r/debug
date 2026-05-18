@@ -1,0 +1,20 @@
+{
+  "name": "Survival Map",
+  "short_name": "Survival Map",
+  "description": "Карта событий — Telegram Mini App",
+  "lang": "ru",
+  "start_url": "/map.html",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#1a1a1a",
+  "theme_color": "#ffffff",
+  "icons": [
+    {
+      "src": "/assets/images/pig.png",
+      "sizes": "any",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

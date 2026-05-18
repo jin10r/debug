@@ -7,9 +7,10 @@
     <meta name="color-scheme" content="light dark">
     <title>survival_map</title>
 
-    <!-- Icons -->
+    <!-- Icons + PWA manifest -->
     <link rel="icon" href="data:,">
-    <link rel="apple-touch-icon" href="/assets/images/icon-192.png">
+    <link rel="apple-touch-icon" href="/assets/images/pig.png">
+    <link rel="manifest" href="/manifest.webmanifest">
 
     <!-- Stylesheets -->
     <link rel="stylesheet" href="/assets/lib/leaflet.css"/>
@@ -20,80 +21,19 @@
     <!-- Telegram Web App -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
-    <!-- Configuration Loader -->
+    <!-- Synchronous setup: auth headers, default config, user info -->
     <script>
-      // JWT Token Management
+      // JWT auth headers for API requests.
       window.getAuthHeaders = function() {
-        const headers = {
-          'Content-Type': 'application/json'
-        };
-
-        // Add JWT access token from sessionStorage
+        const headers = { 'Content-Type': 'application/json' };
         const token = sessionStorage.getItem('access_token');
         if (token) {
           headers['Authorization'] = 'Bearer ' + token;
         }
-
         return headers;
       };
 
-      // Check for valid session on load
-      (async function() {
-        const token = sessionStorage.getItem('access_token');
-        const devMode = sessionStorage.getItem('dev_mode') === 'true';
-
-        // Allow dev mode without token
-        if (!token && !devMode) {
-          // No token - redirect to gate page
-          window.location.replace('/index.html');
-          return;
-        }
-
-        // Load config
-        try {
-          const configResponse = await fetch('/api/config', {
-            method: 'POST',
-            headers: window.getAuthHeaders(),
-            body: JSON.stringify({})
-          });
-
-          if (configResponse.status === 401) {
-            // Token expired or invalid - try refresh
-            const refreshToken = sessionStorage.getItem('refresh_token');
-            if (refreshToken) {
-              try {
-                const refreshResponse = await fetch('/api/auth/refresh', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ refresh_token: refreshToken })
-                });
-
-                if (refreshResponse.ok) {
-                  const refreshData = await refreshResponse.json();
-                  sessionStorage.setItem('access_token', refreshData.access_token);
-                  // Reload with new token
-                  location.reload();
-                  return;
-                }
-              } catch (e) {
-                console.error('Refresh failed:', e);
-              }
-            }
-            // Refresh failed - continue with defaults, WS auth handles independently
-            console.warn('[CONFIG] Auth failed, using defaults');
-          }
-
-          if (configResponse.ok) {
-            const serverConfig = await configResponse.json();
-            window.APP_CONFIG = { ...window.APP_CONFIG, ...serverConfig };
-            console.log('[CONFIG] Loaded from server:', window.APP_CONFIG);
-          }
-        } catch (err) {
-          console.warn('[CONFIG] Failed to load from server:', err);
-        }
-      })();
-
-      // Default config values
+      // Default config — overridden by /api/config once the session is confirmed.
       window.APP_CONFIG = {
         map_center_lat: 46.4825,
         map_center_lng: 30.7233,
@@ -101,35 +41,27 @@
         enable_random_points: true
       };
 
-      // Load user info from sessionStorage
-      const userData = sessionStorage.getItem('user');
-      if (userData) {
-        try {
+      // User info from sessionStorage.
+      try {
+        const userData = sessionStorage.getItem('user');
+        if (userData) {
           const user = JSON.parse(userData);
           window.currentUserId = user.id;
           window.currentUserName = user.first_name || user.username;
-        } catch (e) {
-          console.error('Failed to parse user data:', e);
         }
+      } catch (e) {
+        console.error('Failed to parse user data:', e);
       }
-
-      // Dev mode fallback
       if (sessionStorage.getItem('dev_mode') === 'true') {
         window.currentUserId = window.currentUserId || 'dev_user';
         window.currentUserName = window.currentUserName || 'Dev User';
       }
-
       window.isAdmin = false;
-    </script>
 
-    <!-- Service Worker Registration with Hash-Based Cache -->
-    <!-- Service Worker removed - using localStorage + WebSocket for real-time updates -->
-    <script>
-      // Handle online/offline status
+      // Online/offline status indicator.
       window.addEventListener('online', () => {
         if (window.updateOnlineStatus) window.updateOnlineStatus(true);
       });
-
       window.addEventListener('offline', () => {
         if (window.updateOnlineStatus) window.updateOnlineStatus(false);
       });
@@ -178,103 +110,153 @@
     <script src="/assets/lib/leaflet.js"></script>
     <script src="/assets/lib/leaflet.markercluster.js"></script>
 
-    <!-- Initialization -->
+    <!-- Hard validation gate + bootstrap -->
     <script>
       (async function() {
-        const loadScript = (src) => new Promise((resolve, reject) => {
+        // ====================================================================
+        // Rule 2 — hard validation gate.
+        // No frontend component (/dist/js/*) is injected until the backend
+        // confirms a valid session. An invalid session bounces to the gate
+        // page (/index.html), which redirects to REDIRECT_URL.
+        // ====================================================================
+
+        const token = sessionStorage.getItem('access_token');
+        const devMode = sessionStorage.getItem('dev_mode') === 'true';
+
+        // No credentials at all → back to the validation gate page.
+        if (!token && !devMode) {
+          window.location.replace('/index.html');
+          return;
+        }
+
+        // Confirm the session with the backend before loading any component.
+        // Returns true to proceed, false when redirecting/reloading.
+        async function confirmSession() {
+          let response;
           try {
-            const s = document.createElement('script');
-            s.src = src;
-            s.defer = true;
-            s.onload = () => resolve(true);
-            s.onerror = () => reject(new Error('Failed to load ' + src));
-            document.head.appendChild(s);
-          } catch (e) {
-            reject(e);
+            response = await fetch('/api/config', {
+              method: 'POST',
+              headers: window.getAuthHeaders(),
+              body: JSON.stringify({})
+            });
+          } catch (err) {
+            // Network error → offline. PWA rule 1: trust the prior session and
+            // run from the service-worker shell + localStorage cache.
+            console.warn('[GATE] Offline — proceeding from cache:', err);
+            return true;
           }
+
+          if (response.status === 401) {
+            // Token expired/invalid — a single refresh attempt.
+            const refreshToken = sessionStorage.getItem('refresh_token');
+            if (refreshToken) {
+              try {
+                const r = await fetch('/api/auth/refresh', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ refresh_token: refreshToken })
+                });
+                if (r.ok) {
+                  const d = await r.json();
+                  sessionStorage.setItem('access_token', d.access_token);
+                  location.reload();
+                  return false;
+                }
+              } catch (e) {
+                console.error('[GATE] Refresh failed:', e);
+              }
+            }
+            // Invalid session → gate page handles REDIRECT_URL.
+            window.location.replace('/index.html');
+            return false;
+          }
+
+          if (response.ok) {
+            try {
+              const serverConfig = await response.json();
+              window.APP_CONFIG = { ...window.APP_CONFIG, ...serverConfig };
+              console.log('[GATE] Session confirmed, config loaded');
+            } catch (e) {
+              console.warn('[GATE] Config parse failed, using defaults');
+            }
+            return true;
+          }
+
+          console.warn('[GATE] Unexpected /api/config status:', response.status);
+          window.location.replace('/index.html');
+          return false;
+        }
+
+        const sessionOk = await confirmSession();
+        if (!sessionOk) return; // redirected or reloading — load nothing
+
+        // ====================================================================
+        // Session confirmed — load frontend components.
+        // ====================================================================
+        const loadScript = (src) => new Promise((resolve, reject) => {
+          const s = document.createElement('script');
+          s.src = src;
+          s.onload = () => resolve(true);
+          s.onerror = () => reject(new Error('Failed to load ' + src));
+          document.head.appendChild(s);
         });
 
-        // Use timestamp-based versioning (no server-side manifest)
-        const fallbackV = String(Date.now());
-        const integrationUrl = `/js/telegram/integration.js/__v__/${fallbackV}`;
-
-        console.log('[BOOT] User already authenticated, loading app...');
-
-        // Load tg integration only (no validator needed)
-        await loadScript(integrationUrl);
-
-        // Initialize Telegram Mini App integration
-        if (window.telegramIntegration) {
-          window.telegramIntegration.init();
-
-          window.telegramIntegration.on('onActivated', () => {
-            console.log('App activated - refreshing data');
-          });
-
-          window.telegramIntegration.on('onViewportChanged', (event) => {
-            console.log('Viewport changed:', event);
-          });
-        }
-
-        // Initialize Telegram WebApp
-        if (window.Telegram?.WebApp) {
-          window.Telegram.WebApp.ready();
-          window.Telegram.WebApp.expand();
-        }
-
-        console.log('✅ User loaded:', window.currentUserId);
-
-        // ===================================================
-        // Load all dependencies
-        // ===================================================
         try {
-          const cacheBuster = Date.now();
-          await loadScript(`/dist/js/common.js?t=${cacheBuster}`);
-          await loadScript(`/dist/js/core/store.js?t=${cacheBuster}`);
-          await loadScript(`/dist/js/core/local_cache.js?t=${cacheBuster}`);
-          await loadScript(`/dist/js/core/websocket.js?t=${cacheBuster}`);
-          await loadScript(`/dist/js/core/event_manager.js?t=${cacheBuster}`);
-          await loadScript(`/dist/js/core/token-manager.js?t=${cacheBuster}`);
-          await loadScript(`/dist/js/core/map.js?t=${cacheBuster}`);
-          await loadScript(`/dist/js/core/data.js?t=${cacheBuster}`);
-          await loadScript(`/dist/js/modules/popups.js?t=${cacheBuster}`);
-          await loadScript(`/dist/js/modules/notifications.js?t=${cacheBuster}`);
-          await loadScript(`/dist/js/core/ui.js?t=${cacheBuster}`);
+          const fallbackV = String(Date.now());
+          await loadScript(`/js/telegram/integration.js/__v__/${fallbackV}`);
 
-          console.log('✅ All scripts loaded successfully');
-
-          // Initialize token manager for auto-refresh
-          if (window.tokenManager) {
-            await window.tokenManager.init();
-            console.log('✅ Token Manager initialized');
+          if (window.telegramIntegration) {
+            window.telegramIntegration.init();
+            window.telegramIntegration.on('onActivated', () => console.log('App activated'));
+            window.telegramIntegration.on('onViewportChanged', (e) => console.log('Viewport changed:', e));
+          }
+          if (window.Telegram?.WebApp) {
+            window.Telegram.WebApp.ready();
+            window.Telegram.WebApp.expand();
           }
 
+          const v = Date.now();
+          await loadScript(`/dist/js/common.js?t=${v}`);
+          await loadScript(`/dist/js/core/store.js?t=${v}`);
+          await loadScript(`/dist/js/core/local_cache.js?t=${v}`);
+          await loadScript(`/dist/js/core/websocket.js?t=${v}`);
+          await loadScript(`/dist/js/core/event_manager.js?t=${v}`);
+          await loadScript(`/dist/js/core/token-manager.js?t=${v}`);
+          await loadScript(`/dist/js/core/map.js?t=${v}`);
+          await loadScript(`/dist/js/core/data.js?t=${v}`);
+          await loadScript(`/dist/js/modules/popups.js?t=${v}`);
+          await loadScript(`/dist/js/modules/notifications.js?t=${v}`);
+          await loadScript(`/dist/js/core/ui.js?t=${v}`);
+
+          console.log('✅ All components loaded');
+
+          if (window.tokenManager) {
+            await window.tokenManager.init();
+          }
           if (window.bootstrapUI) {
             window.bootstrapUI();
           } else {
-            console.error('❌ bootstrapUI not found!');
+            console.error('❌ bootstrapUI not found');
           }
         } catch (error) {
-          console.error('❌ Failed to load scripts:', error);
-
-          const friendlyMessage = 'Ошибка загрузки приложения. ' +
+          console.error('❌ Failed to load app:', error);
+          const msg = 'Ошибка загрузки приложения. ' +
             'Пожалуйста, закройте и заново откройте мини‑приложение.';
-
           if (window.telegramIntegration?.showAlert) {
-            try {
-              await window.telegramIntegration.showAlert(friendlyMessage);
-            } catch (e) {
-              alert(friendlyMessage);
-            }
+            try { await window.telegramIntegration.showAlert(msg); } catch (e) { alert(msg); }
           } else if (window.Telegram?.WebApp?.showAlert) {
-            try {
-              await window.Telegram.WebApp.showAlert(friendlyMessage);
-            } catch (e) {
-              alert(friendlyMessage);
-            }
+            try { await window.Telegram.WebApp.showAlert(msg); } catch (e) { alert(msg); }
           } else {
-            alert(friendlyMessage);
+            alert(msg);
           }
+        }
+
+        // Register the service worker (PWA rule 1) after boot so it never
+        // delays first paint.
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.register('/sw.js').catch((e) => {
+            console.warn('[SW] registration failed:', e);
+          });
         }
       })();
     </script>

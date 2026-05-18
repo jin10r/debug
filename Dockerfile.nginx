@@ -1,0 +1,44 @@
+# Dockerfile.nginx — frontend compilation + nginx runtime
+# Multi-stage: node/npm live only in the builder stage and never reach the
+# final image. The builder is an isolated, throwaway environment — only the
+# compiled artifacts (web/dist + static assets) are copied forward.
+
+# =============================================================================
+# Stage 1: Frontend builder (node — discarded after build)
+# =============================================================================
+FROM node:20-alpine AS frontend-builder
+
+WORKDIR /web
+
+# Install deps first — layer cached unless package*.json changes.
+# `npm install` (not `npm ci`): the committed lockfile may lag package.json
+# (deps added without a host npm); install reconciles and resolves new packages.
+COPY web/package.json web/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm install --no-audit --no-fund
+
+# Compile web/dist — layer cached unless web sources change.
+# Post-build check: fail loudly if webpack produced a broken/partial bundle
+# instead of shipping a silently broken frontend.
+COPY web/ ./
+RUN npm run build && \
+    for f in dist/js/common.js dist/js/core/store.js dist/js/core/ui.js dist/js/core/websocket.js; do \
+        test -s "$f" || { echo "Build verification failed: $f missing or empty"; exit 1; }; \
+    done
+
+# =============================================================================
+# Stage 2: nginx runtime (no node, no npm, no node_modules)
+# =============================================================================
+FROM nginx:alpine
+
+WORKDIR /usr/share/nginx/html
+
+# Static assets + compiled frontend — node_modules and build configs excluded.
+# sw.js + manifest.webmanifest are the PWA shell (served from the web root).
+COPY --from=frontend-builder /web/index.html /web/map.html /web/sw.js /web/manifest.webmanifest ./
+COPY --from=frontend-builder /web/css    ./css
+COPY --from=frontend-builder /web/assets ./assets
+COPY --from=frontend-builder /web/js     ./js
+COPY --from=frontend-builder /web/dist   ./dist
+
+# Default config (overridable via bind-mount in docker-compose.yml)
+COPY nginx.conf /etc/nginx/nginx.conf

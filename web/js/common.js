@@ -2,6 +2,19 @@
 // Оптимизированная версия — удалено дублирование с modules/notifications.js
 
 /**
+ * Синхронизация часов с сервером (киевское время).
+ *
+ * Фильтрация событий должна опираться на время сервера, а не на часы
+ * устройства: устройство может быть в другом часовом поясе или иметь
+ * сбитые часы. WebSocketManager обновляет serverClockOffsetMs из поля
+ * timestamp каждого сообщения сервера.
+ */
+window.serverClockOffsetMs = 0;
+window.serverNow = function() {
+    return Date.now() + (window.serverClockOffsetMs || 0);
+};
+
+/**
  * Функция тактильной отдачи (вибрации)
  */
 window.hapticFeedback = function(type = 'medium') {
@@ -121,11 +134,10 @@ window.playNotificationSound = (function() {
  * Функция показа уведомлений
  */
 window.showNotification = function(message, duration = 3000, type = 'info') {
-    if (type === 'error' || type === 'warning') {
-        window.hapticFeedback('heavy');
-    } else {
-        window.hapticFeedback('light');
-    }
+    // Rule 5: every notification — including errors — fires haptic feedback.
+    // Map the notification type to the matching haptic.
+    const HAPTIC_BY_TYPE = { error: 'error', warning: 'warning', success: 'success', info: 'light' };
+    window.hapticFeedback(HAPTIC_BY_TYPE[type] || 'light');
 
     let container = document.getElementById('notificationContainer');
     if (!container) {

@@ -47,6 +47,11 @@ class Database:
 
     async def connect(self, max_retries: int = 10, retry_delay: float = 2.0, **kwargs) -> bool:
         """Create connection pool with manual retry logic."""
+        # Serve all event timestamps in Kiev time so client-side time filtering
+        # is anchored to Kiev regardless of the device's timezone.
+        kwargs.setdefault('server_settings', {})
+        kwargs['server_settings'].setdefault('timezone', 'Europe/Kiev')
+
         for attempt in range(1, max_retries + 1):
             try:
                 self.pool = await asyncpg.create_pool(

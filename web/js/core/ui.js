@@ -107,6 +107,10 @@ window.initializeMap = function() {
     // Устанавливаем экземпляр карты в глобальное состояние
     window.setMapInstance(map);
 
+    // Слои карты создаются ОДИН РАЗ и переиспользуются. renderFromCache
+    // обновляет их инкрементно (diff), без пересоздания на каждое событие.
+    initializeMapLayers(map);
+
     // Инициализация UI компонентов
     initializeControls(map);
     addQuestionOverlay(map);
@@ -115,6 +119,31 @@ window.initializeMap = function() {
     // Инициализация WebSocket соединения
     window.initializeWebSocket();
 };
+
+// Создание постоянных слоёв карты (один раз за сессию)
+function initializeMapLayers(map) {
+    window.markerClusterGroup = L.markerClusterGroup({
+        chunkedLoading: true,
+        maxClusterRadius: 50,
+        spiderfyOnMaxZoom: true,
+        showCoverageOnHover: false,
+        zoomToBoundsOnClick: true,
+        iconCreateFunction: function(cluster) {
+            const childCount = cluster.getChildCount();
+            return new L.DivIcon({
+                html: '<div style="background-color: rgba(255, 87, 51, 0.8); border-radius: 50%; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 14px;">' + childCount + '</div>',
+                className: 'marker-cluster-custom',
+                iconSize: new L.Point(40, 40)
+            });
+        }
+    });
+    window.geometryLayerGroup = L.layerGroup();
+    window.randomMarkersGroup = L.layerGroup();
+
+    map.addLayer(window.markerClusterGroup);
+    map.addLayer(window.geometryLayerGroup);
+    map.addLayer(window.randomMarkersGroup);
+}
 
 // Функция для обновления индикатора статуса соединения
 window.updateOnlineStatus = function(isOnline) {
@@ -201,18 +230,16 @@ function initializeControls(map) {
             realtimeControls.querySelectorAll('button').forEach(btn => btn.classList.remove('active'));
             // Устанавливаем активный класс на нажатую кнопку
             e.target.classList.add('active');
-            // Обновляем фильтр
+            // Обновляем фильтр. Перерисовка карты произойдёт реактивно —
+            // через подписку event_manager на изменения store.
             window.updateTimeFilter(newFilter);
-
-            // Локальная фильтрация и рендер (автономный процесс)
-            // Используем requestAnimationFrame для более плавного обновления UI
-            requestAnimationFrame(() => {
-                window.eventManager.render();
-            });
         });
 
         // Устанавливаем активную кнопку в соответствии с текущим значением фильтра
-        realtimeControls.querySelector(`button[data-minutes="${window.store?.getState?.()?.currentTimeFilter || 30}"]`)?.classList.add('active');
+        const currentFilter = (window.store && window.store.getState)
+            ? window.store.getState().currentTimeFilter
+            : (window.DEFAULT_TIME_FILTER || 30);
+        realtimeControls.querySelector(`button[data-minutes="${currentFilter}"]`)?.classList.add('active');
 
         // Если не нашли кнопку для текущего значения, используем значение по умолчанию
         if (!realtimeControls.querySelector('.active')) {
@@ -283,14 +310,14 @@ function initializeInteractionControls() {
 function toggleDayNightMode() {
     const dayNightIcon = document.getElementById('dayNightIcon');
     const isDarkMode = currentTileKey === 'dark';
-    
+
     // Переключаем между 'osm' (день) и 'dark' (ночь)
     const newTileKey = isDarkMode ? 'osm' : 'dark';
-    
+
     window.switchTileLayer(newTileKey);
-    
+
     // Иконка daynight.svg статична — src и filter не меняются
-    
+
     console.log('[DayNight] Switched to:', newTileKey);
 }
 
@@ -321,18 +348,18 @@ function addQuestionOverlay(map) {
 // Функция для инициализации рекламных квадратов - использует статичный banner.svg
 function initializeAdSquares(map) {
     console.log('[initializeAdSquares] Starting banner initialization...');
-    
+
     const bounds = L.latLngBounds([46.4370, 30.92288], [46.5240, 31.06208]);
     const imageUrl = '/assets/images/banner.svg';
     const fullUrl = imageUrl + '?v=' + Date.now();
     console.log('[initializeAdSquares] Banner URL:', fullUrl);
     console.log('[initializeAdSquares] Current host:', window.location.host);
-    
+
     const popupContent = `<h3>Исходный код приложения доступен на <a href="https://github.com/iseeupigs/iseeupigs-web" target="_blank">GitHub</h3><br>поблагодарить разработчика можно на <a href="https://bastyon.com/keep_alive_odessa?ref=PHQHKADhBPxxSwjiggV6G2BxSvy6TY1Lgb" target="_blank">bastyon</a>`;
 
     if (!window.adSquares.ad1) {
         console.log('[initializeAdSquares] Creating image overlay...');
-        
+
         // Test image loading
         const testImg = new Image();
         testImg.onload = function() {
@@ -342,19 +369,19 @@ function initializeAdSquares(map) {
             console.error('[initializeAdSquares] Failed to preload banner image!');
         };
         testImg.src = fullUrl;
-        
+
         const overlay = L.imageOverlay(fullUrl, bounds, {
             opacity: 1,
             interactive: true,
             pane: 'overlayPane',
             className: 'ad-overlay'
         }).addTo(map);
-        
+
         console.log('[initializeAdSquares] Overlay added to map');
-        
+
         overlay.bindPopup(popupContent, window.DEFAULT_POPUP_OPTIONS);
         window.adSquares.ad1 = overlay;
-        
+
         // Check if overlay is actually visible
         overlay.on('load', function() {
             console.log('[initializeAdSquares] Banner image loaded on map');
@@ -368,159 +395,150 @@ function initializeAdSquares(map) {
 }
 
 
-// Функция рендеринга данных на карту
-window.renderFromCache = function() {
-    // Получаем экземпляр карты из глобального состояния
-    const map = window.currentMapInstance;
+// =============================================================================
+// Инкрементный рендер карты
+//
+// renderedById хранит, какие Leaflet-слои созданы для каждого id события и в
+// какую группу они добавлены. На каждый вызов renderFromCache() выполняется
+// diff отфильтрованного набора против отрисованного:
+//   - новые id            → создать слои и добавить в группы;
+//   - исчезнувшие id       → удалить слои из групп (истёк TTL / фильтр / слой);
+//   - изменившиеся feature → удалить старые слои и создать заново;
+//   - неизменные           → не трогать.
+// Добавление одного события стоит O(1) вместо полного пересоздания карты.
+// =============================================================================
 
+const renderedById = new Map();
+
+// Извлечение стабильного id из feature.
+function featureId(feature) {
+    const p = feature && feature.properties;
+    if (!p) return null;
+    if (p.id != null) return p.id;
+    if (p.event_id != null) return p.event_id;
+    if (p._id != null) return p._id;
+    if (p.uid != null) return p.uid;
+    return null;
+}
+
+// Удаление всех слоёв, отрисованных для данного id.
+function removeRenderedEvent(id) {
+    const record = renderedById.get(id);
+    if (!record) return;
+    for (const item of record.items) {
+        try {
+            item.group.removeLayer(item.layer);
+        } catch (e) {
+            // Слой мог быть уже удалён — игнорируем
+        }
+    }
+    renderedById.delete(id);
+}
+
+// Создание и добавление слоёв для одного feature.
+function addRenderedEvent(id, feature, map) {
+    if (!feature.geometry) return;
+
+    let elements;
+    switch (feature.geometry.type) {
+        case 'Point':
+            elements = window.createCircle(map, feature.geometry.coordinates, feature.properties, feature.properties.strategy);
+            break;
+        case 'LineString':
+            elements = window.createPolyline(map, feature.geometry.coordinates, feature.properties);
+            break;
+        case 'Polygon':
+            elements = window.createPolygon(map, feature.geometry.coordinates, feature.properties);
+            break;
+        default:
+            console.warn('[renderFromCache] Unsupported geometry type:', feature.geometry.type);
+            return;
+    }
+
+    const items = [];
+    for (const element of elements) {
+        if (!element) continue;
+
+        let group;
+        if (element instanceof L.Marker) {
+            // Случайные точки — отдельная некластеризуемая группа
+            group = (feature.properties.strategy === 'random')
+                ? window.randomMarkersGroup
+                : window.markerClusterGroup;
+        } else {
+            // Геометрия (круги, линии, полигоны)
+            group = window.geometryLayerGroup;
+        }
+
+        group.addLayer(element);
+        items.push({ layer: element, group: group });
+    }
+
+    renderedById.set(id, { featureRef: feature, items: items });
+}
+
+// Инкрементная синхронизация карты с отфильтрованным набором событий из store.
+window.renderFromCache = function() {
+    const map = window.currentMapInstance;
     if (!map) {
         console.error('[renderFromCache] Map instance not available');
         return;
     }
+    if (!window.markerClusterGroup || !window.geometryLayerGroup || !window.randomMarkersGroup) {
+        console.error('[renderFromCache] Map layers not initialized');
+        return;
+    }
 
-    // Получаем отфильтрованные данные для отображения из data.js
     const geoJsonData = window.getFilteredDataForRendering();
+    const features = (geoJsonData && geoJsonData.features) ? geoJsonData.features : [];
 
-    // Debug logging disabled to reduce console noise
-    // console.log('[renderFromCache] Rendering:', {
-    //     total_features: geoJsonData.features.length,
-    //     currentTimeFilter: window.store.getState().currentTimeFilter,
-    //     activeLayers: Array.from(window.store.getState().activeLayers)
-    // });
+    const nextIds = new Set();
+    let added = 0;
+    let updated = 0;
 
-    // Очищаем существующие маркеры и геометрию
-    if (window.markerClusterGroup) {
-        map.removeLayer(window.markerClusterGroup);
-    }
-    if (window.geometryLayerGroup) {
-        map.removeLayer(window.geometryLayerGroup);
-    }
-    if (window.randomMarkersGroup) {
-        map.removeLayer(window.randomMarkersGroup);
-    }
-
-    // Создаем новый кластер маркеров
-    const markers = L.markerClusterGroup({
-        chunkedLoading: true,
-        maxClusterRadius: 50,
-        spiderfyOnMaxZoom: true,
-        showCoverageOnHover: false,
-        zoomToBoundsOnClick: true,
-        // Важно: отключаем стандартные иконки кластеров
-        iconCreateFunction: function(cluster) {
-            const childCount = cluster.getChildCount();
-            return new L.DivIcon({
-                html: '<div style="background-color: rgba(255, 87, 51, 0.8); border-radius: 50%; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 14px;">' + childCount + '</div>',
-                className: 'marker-cluster-custom',
-                iconSize: new L.Point(40, 40)
-            });
-        }
-    });
-
-    // Группа слоев для геометрии (линии, полигоны)
-    const geometryLayers = L.layerGroup();
-
-    // Группа слоев для случайных маркеров (не кластеризуются)
-    const randomMarkers = L.layerGroup();
-
-    // Оптимизируем рендеринг для большого количества элементов
-    const features = geoJsonData.features;
-    const len = features.length;
-    
-    // Используем временное хранилище для ускорения рендеринга
-    const tempMarkersToAdd = [];
-    const tempGeometryToAdd = [];
-    const tempRandomMarkersToAdd = [];
-
-    for (let i = 0; i < len; i++) {
+    for (let i = 0; i < features.length; i++) {
         const feature = features[i];
-        if (feature.geometry) {
-            let geometryElements;
+        const id = featureId(feature);
+        if (id == null) continue;
 
-            switch (feature.geometry.type) {
-                case 'Point':
-                    // Для точек создаем круг и маркер
-                    geometryElements = window.createCircle(map, feature.geometry.coordinates, feature.properties, feature.properties.strategy);
-                    break;
+        nextIds.add(id);
 
-                case 'LineString':
-                    // Для линий создаем полилинию и маркер в центре
-                    geometryElements = window.createPolyline(map, feature.geometry.coordinates, feature.properties);
-                    break;
-
-                case 'Polygon':
-                    // Для полигонов создаем полигон и маркер в центре
-                    geometryElements = window.createPolygon(map, feature.geometry.coordinates, feature.properties);
-                    break;
-
-                default:
-                    console.warn('Unsupported geometry type:', feature.geometry.type);
-                    continue; // Пропускаем неподдерживаемые типы геометрии
-            }
-
-            // Разделяем геометрию и маркеры
-            const elementsLen = geometryElements.length;
-            for (let j = 0; j < elementsLen; j++) {
-                const element = geometryElements[j];
-                if (element) {
-                    if (element instanceof L.Marker) {
-                        // Для случайных точек добавляем маркеры в отдельную группу
-                        if (feature.properties.strategy === 'random') {
-                            tempRandomMarkersToAdd.push(element);
-                        } else {
-                            // Обычные маркеры добавляем в кластер
-                            tempMarkersToAdd.push(element);
-                        }
-                    } else {
-                        // Геометрию (линии, полигоны, круги) добавляем в группу геометрии
-                        tempGeometryToAdd.push(element);
-                    }
-                }
-            }
+        const existing = renderedById.get(id);
+        if (existing && existing.featureRef === feature) {
+            continue; // не изменилось — пропускаем
         }
-    }
-
-    // Добавляем все элементы за один раз для лучшей производительности
-    // Используем addLayer в цикле, так как layerGroup не имеет метода addLayers
-    if (tempMarkersToAdd.length > 0) {
-        // Проверяем наличие метода addLayers у marker cluster группы
-        if (markers.addLayers) {
-            markers.addLayers(tempMarkersToAdd);
+        if (existing) {
+            removeRenderedEvent(id); // изменилось — пересоздаём
+            updated++;
         } else {
-            for (const marker of tempMarkersToAdd) {
-                markers.addLayer(marker);
-            }
+            added++;
         }
+        addRenderedEvent(id, feature, map);
     }
-    if (tempGeometryToAdd.length > 0) {
-        for (const layer of tempGeometryToAdd) {
-            geometryLayers.addLayer(layer);
-        }
-    }
-    if (tempRandomMarkersToAdd.length > 0) {
-        for (const marker of tempRandomMarkersToAdd) {
-            randomMarkers.addLayer(marker);
+
+    // Удаляем слои событий, выпавших из отфильтрованного набора
+    let removed = 0;
+    for (const id of Array.from(renderedById.keys())) {
+        if (!nextIds.has(id)) {
+            removeRenderedEvent(id);
+            removed++;
         }
     }
 
-    map.addLayer(markers);
-    map.addLayer(geometryLayers);
-    map.addLayer(randomMarkers);
-
-    // Сохраняем ссылки на слои в глобальное состояние
-    window.markerClusterGroup = markers;
-    window.geometryLayerGroup = geometryLayers;
-    window.randomMarkersGroup = randomMarkers;
+    if (added || removed || updated) {
+        console.log('[renderFromCache] diff:', { added, updated, removed, total: nextIds.size });
+    }
 };
 
 // Функция инициализации UI
 window.bootstrapUI = function() {
     window.initializeMap();
 
-    setTimeout(() => {
-        requestAnimationFrame(() => {
-            window.eventManager.render();
-        });
-    }, 1000);
+    // Первичный рендер из того, что уже есть в store (гидратация из
+    // localStorage для офлайн-отображения). Все последующие изменения
+    // отрисовываются реактивно через подписку event_manager на store —
+    // никаких таймеров-костылей.
+    requestAnimationFrame(() => {
+        window.renderFromCache();
+    });
 };
-

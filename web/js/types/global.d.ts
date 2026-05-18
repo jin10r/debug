@@ -52,33 +52,19 @@ declare global {
         
         // ==================== CORE MODULES ====================
         
-        /** Local cache manager */
+        /** localStorage persistence adapter for the event store */
         localCache: {
-            addEvent(event: EventFeature): boolean;
-            addEvents(events: EventFeature[], suppressNotifications: boolean): number;
-            replaceAllEvents(events: EventFeature[], suppressNotifications: boolean): number;
-            getAllEvents(): EventFeatureCollection;
-            getEventId(event: EventFeature): string | number | null;
-            getEventTime(event: EventFeature): Date | null;
-            getMaxEventId(): number;
-            getMaxEventTime(): Date | null;
-            getLatestTimestamp(): string | null;
-            cleanupExpiredEvents(): number;
-            clear(): void;
-            eventsById: Map<string | number, EventFeature>;
-            masterGeoJSON: EventFeatureCollection;
+            loadEvents(): Promise<void>;
+            startPersisting(): void;
+            stopPersisting(): void;
         };
-        
-        /** Reactive store */
+
+        /** Reactive store (zustand vanilla) — see js/core/store.ts */
         store: {
-            getState(): StoreState;
-            dispatch(action: { type: string; payload: unknown }): void;
-            subscribe(fn: (state: StoreState) => void): () => void;
-            getFilteredItems(): EventFeatureCollection;
-            getEventTime(feature: EventFeature): Date | null;
-            getEventId(feature: EventFeature): string | number | null;
-            getMaxEventId(state?: StoreState): number;
-            getMaxEventTime(state?: StoreState): Date | null;
+            getState(): any;
+            setState(partial: any): void;
+            subscribe(listener: () => void): () => void;
+            getInitialState(): any;
         };
         
         /** WebSocket manager */
@@ -87,18 +73,14 @@ declare global {
             disconnect(): void;
             sendMessage(message: Record<string, unknown>): void;
             onFeature: ((feature: EventFeature) => void) | null;
+            onSnapshot: ((features: EventFeature[]) => void) | null;
             onConnectionStatusChange: ((isConnected: boolean) => void) | null;
             isConnected: boolean;
         };
         
-        /** Event manager for rendering */
+        /** Event manager — store subscription that drives map rendering */
         eventManager: {
             render(): void;
-            updateAllEvents(eventsData: EventFeatureCollection): void;
-            notify(events: EventFeature[]): void;
-            addNewEvents(events: EventFeature[]): void;
-            _lastTimeFilter: number;
-            _lastEventsCount: number;
         };
         
         // ==================== TELEGRAM ====================
@@ -149,6 +131,13 @@ declare global {
         
         // ==================== UTILITY FUNCTIONS ====================
         
+        // ==================== SERVER CLOCK SYNC ====================
+
+        /** Offset in ms between the server (Kiev) clock and the device clock */
+        serverClockOffsetMs: number;
+        /** Current time anchored to the server (Kiev) clock, immune to device clock/timezone */
+        serverNow: () => number;
+
         updateEventsInStore: (events: EventFeatureCollection) => void;
         getFilteredDataForRendering: () => EventFeatureCollection;
         renderDataOnMap: () => void;
@@ -185,7 +174,12 @@ declare global {
         createPopupContent: (properties: Record<string, unknown>) => string;
         processTelegramHTML: (html: string) => string;
         formatDateTime: (dateString: string) => string;
-        hapticFeedback: (type: 'light' | 'medium' | 'heavy' | 'selection_changed') => void;
+        hapticFeedback: (type?: 'light' | 'medium' | 'heavy' | 'success' | 'warning' | 'error' | 'selection_changed') => void;
+        showNotification: (message: string, duration?: number, type?: 'info' | 'warning' | 'error' | 'success') => void;
+        playNotificationSound: () => boolean;
+        handleNewEvents: (events: Array<Record<string, unknown>>) => void;
+        renderFromCache: () => void;
+        initializeMap: () => void;
         
         // ==================== DEBUG ====================
         

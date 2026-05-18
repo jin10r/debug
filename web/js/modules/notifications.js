@@ -63,11 +63,12 @@ function handleNewEvents(events) {
                     : description);
             }
 
+            // showNotification() fires haptic feedback itself (rule 5) — no
+            // separate hapticFeedback() call needed here.
             if (typeof window.showNotification === 'function') window.showNotification(message, 4000);
             if (typeof window.playNotificationSound === 'function') {
                 window.playNotificationSound();
             }
-            window.hapticFeedback('medium');
         }, index * 300);
     });
 }

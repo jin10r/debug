@@ -34,11 +34,21 @@ export class WebSocketManager {
     private missedPongs = 0;
     private readonly maxMissedPongs = 2;
 
-    /** Called once per received GeoJSON Feature */
+    /** Called once per live-pushed GeoJSON Feature (after the snapshot). */
     public onFeature: ((feature: EventFeature) => void) | null = null;
+
+    /** Called once with the full batch when an event snapshot completes. */
+    public onSnapshot: ((features: EventFeature[]) => void) | null = null;
 
     /** Called when connection status changes */
     public onConnectionStatusChange: ((connected: boolean) => void) | null = null;
+
+    // Snapshot state — features between get_events and events_snapshot_end are
+    // a batch sync (silent); features outside that window are live pushes.
+    private receivingSnapshot = false;
+    private snapshotBuffer: EventFeature[] = [];
+    private snapshotTimer: number | null = null;
+    private readonly SNAPSHOT_TIMEOUT_MS = 10_000;
 
     // ------------------------------------------------------------------ connect
 
@@ -90,9 +100,34 @@ export class WebSocketManager {
 
     /** Request events from server — called after auth_ok is received */
     private requestEvents(): void {
-        const since = window.localCache?.getLatestTimestamp?.() ?? null;
+        const since = window.store?.getState?.().getLatestTimestamp?.() ?? null;
         console.log('[WS] Requesting events since:', since ?? 'initial load');
+
+        // Enter snapshot mode: features until events_snapshot_end are a batch
+        // sync and must not raise per-event notifications.
+        this.receivingSnapshot = true;
+        this.snapshotBuffer = [];
+        if (this.snapshotTimer !== null) window.clearTimeout(this.snapshotTimer);
+        this.snapshotTimer = window.setTimeout(
+            () => this.finishSnapshot(),
+            this.SNAPSHOT_TIMEOUT_MS
+        );
+
         this.sendMessage({ type: 'get_events', since_timestamp: since });
+    }
+
+    /** Flush the buffered snapshot batch and leave snapshot mode. */
+    private finishSnapshot(): void {
+        if (this.snapshotTimer !== null) {
+            window.clearTimeout(this.snapshotTimer);
+            this.snapshotTimer = null;
+        }
+        if (!this.receivingSnapshot) return;
+        this.receivingSnapshot = false;
+        const batch = this.snapshotBuffer;
+        this.snapshotBuffer = [];
+        console.log('[WS] Snapshot complete:', batch.length, 'events (silent batch)');
+        this.onSnapshot?.(batch);
     }
 
     // ------------------------------------------------------------- sendAuth
@@ -121,16 +156,36 @@ export class WebSocketManager {
             return;
         }
 
+        // Anchor the filtering clock to the server (Kiev) time — every server
+        // envelope carries `timestamp`. This keeps time filtering correct even
+        // when the device clock or timezone is wrong.
+        if (typeof data.timestamp === 'string') {
+            const serverMs = Date.parse(data.timestamp);
+            if (!Number.isNaN(serverMs)) {
+                window.serverClockOffsetMs = serverMs - Date.now();
+            }
+        }
+
         const type = data.type as string;
 
         switch (type) {
             case 'feature': {
                 const feature = data.data as EventFeature;
                 if (feature?.type === 'Feature') {
-                    this.onFeature?.(feature);
+                    if (this.receivingSnapshot) {
+                        // Batch sync — buffer silently, flush on snapshot end.
+                        this.snapshotBuffer.push(feature);
+                    } else {
+                        // Live push — a genuinely new event.
+                        this.onFeature?.(feature);
+                    }
                 }
                 break;
             }
+
+            case 'events_snapshot_end':
+                this.finishSnapshot();
+                break;
 
             case 'auth_ok':
                 console.log('[WS] Auth acknowledged by server');
@@ -143,10 +198,7 @@ export class WebSocketManager {
 
             case 'events_cleaned':
                 console.log('[WS] events_cleaned notification');
-                if (window.localCache?.cleanupExpiredEvents) {
-                    const n = window.localCache.cleanupExpiredEvents();
-                    console.log(`[WS] Cleaned ${n} expired events from localCache`);
-                }
+                window.store?.getState?.().pruneExpired?.();
                 break;
 
             default:
@@ -263,6 +315,12 @@ export class WebSocketManager {
             window.clearTimeout(this.reconnectTimer);
             this.reconnectTimer = null;
         }
+        if (this.snapshotTimer !== null) {
+            window.clearTimeout(this.snapshotTimer);
+            this.snapshotTimer = null;
+        }
+        this.receivingSnapshot = false;
+        this.snapshotBuffer = [];
         this.reconnectAttempts = this.maxReconnectAttempts; // prevent auto-reconnect
         this.ws?.close(1000, 'client disconnect');
         this.ws = null;
@@ -282,15 +340,31 @@ export class WebSocketManager {
 
 window.webSocketManager = new WebSocketManager();
 
+/** Show a notification for a genuinely new live event (rule 4 + rule 5). */
+function notifyNewEvent(feature: EventFeature): void {
+    if (typeof window.handleNewEvents !== 'function') return;
+    const p: any = feature.properties || {};
+    window.handleNewEvents([{
+        id: p.id,
+        layer: p.layer || p.type || 'unknown',
+        description: p.description || p.name || 'Новое событие'
+    }]);
+}
+
 function initializeWebSocket(): void {
     console.log('[WS] Initializing...');
 
+    // Live push — append to the store; notify only if the event is new.
     window.webSocketManager.onFeature = (feature: EventFeature) => {
-        if (!window.localCache) {
-            console.warn('[WS] localCache not ready, dropping feature');
-            return;
+        const isNew = window.store.getState().addEvent(feature);
+        if (isNew) {
+            notifyNewEvent(feature);
         }
-        window.localCache.addEvent(feature);
+    };
+
+    // Snapshot batch (initial load or reconnect catch-up) — append silently.
+    window.webSocketManager.onSnapshot = (features: EventFeature[]) => {
+        window.store.getState().addEvents(features);
     };
 
     window.webSocketManager.onConnectionStatusChange = (connected: boolean) => {

@@ -189,29 +189,18 @@ declare global {
             events: EventFeatureCollection;
         };
         
-        // Core modules
+        // Core modules — see js/core/store.ts and js/core/local_cache.ts
         localCache: {
-            addEvent(event: EventFeature): boolean;
-            addEvents(events: EventFeature[], suppressNotifications: boolean): number;
-            replaceAllEvents(events: EventFeature[], suppressNotifications: boolean): number;
-            getAllEvents(): EventFeatureCollection;
-            getEventId(event: EventFeature): string | number | null;
-            getEventTime(event: EventFeature): Date | null;
-            getMaxEventId(): number;
-            getMaxEventTime(): Date | null;
-            getLatestTimestamp(): string | null;
-            cleanupExpiredEvents(): number;
-            eventsById: Map<string | number, EventFeature>;
-            masterGeoJSON: EventFeatureCollection;
+            loadEvents(): Promise<void>;
+            startPersisting(): void;
+            stopPersisting(): void;
         };
-        
+
         store: {
-            getState(): StoreState;
-            dispatch(action: { type: string; payload: unknown }): void;
-            subscribe(fn: (state: StoreState) => void): () => void;
-            getFilteredItems(): EventFeatureCollection;
-            getEventTime(feature: EventFeature): Date | null;
-            getEventId(feature: EventFeature): string | number | null;
+            getState(): any;
+            setState(partial: any): void;
+            subscribe(listener: () => void): () => void;
+            getInitialState(): any;
         };
         
         webSocketManager: {
@@ -219,14 +208,13 @@ declare global {
             disconnect(): void;
             sendMessage(message: Record<string, unknown>): void;
             onFeature: ((feature: EventFeature) => void) | null;
+            onSnapshot: ((features: EventFeature[]) => void) | null;
             onConnectionStatusChange: ((isConnected: boolean) => void) | null;
+            isConnected: boolean;
         };
         
         eventManager: {
             render(): void;
-            updateAllEvents(eventsData: EventFeatureCollection): void;
-            notify(events: EventFeature[]): void;
-            addNewEvents(events: EventFeature[]): void;
         };
         
         // Telegram

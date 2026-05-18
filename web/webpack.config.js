@@ -72,9 +72,12 @@ module.exports = {
   },
   optimization: {
     minimize: true,
-    splitChunks: {
-      chunks: 'all'
-    }
+    // Each entry is loaded as a standalone <script> tag (no webpack chunk
+    // loader on the page). Splitting would extract shared/vendor code (e.g.
+    // zustand) into a separate chunk file that nothing loads — keep every
+    // entry fully self-contained.
+    splitChunks: false,
+    runtimeChunk: false
   },
   plugins: [
     new CopyPlugin({

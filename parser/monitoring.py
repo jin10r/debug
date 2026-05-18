@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import json
 import logging
 import os
 import signal
@@ -40,6 +41,7 @@ class ParserBot:
         self._running = False
         self._messages_processed = 0
         self._errors = 0
+        self._cleanup_listener_task: Optional[asyncio.Task] = None  # NOTIFY-слушатель для удаления фото
 
         # Конфигурация из env через систему настроек
         if not settings or not settings.bot or not settings.bot.channel_id:
@@ -200,6 +202,11 @@ class ParserBot:
             # Отправляем сообщение о запуске
             await self._send_status_message("Parser started")
 
+            # Слушаем events_cleaned для удаления фото по команде pg_cron
+            self._cleanup_listener_task = asyncio.create_task(
+                self._run_photo_cleanup_listener()
+            )
+
             # Держим соединение
             while self._running:
                 await asyncio.sleep(1)
@@ -299,6 +306,52 @@ class ParserBot:
             logger.error(f"Failed to download photo: {e}")
             return None
 
+    async def _run_photo_cleanup_listener(self):
+        """Слушать NOTIFY events_cleaned и удалять физические файлы фото.
+
+        pg_cron запускает clean_old_events() каждые 5 минут. Если среди
+        удалённых событий есть записи с photo_url, функция передаёт их
+        список в поле photo_urls уведомления events_cleaned. Этот метод
+        получает уведомление и удаляет файлы — сервис parser монтирует
+        /media/events с правами :rw, в отличие от app (:ro).
+        """
+        conn = None
+        try:
+            conn = await self.db.pool.acquire()
+
+            def _on_notify(connection, pid, channel, payload):
+                try:
+                    data = json.loads(payload)
+                    for url in data.get('photo_urls') or []:
+                        if url and os.path.isfile(url):
+                            try:
+                                os.unlink(url)
+                                logger.info(f"Удалено устаревшее фото: {url}")
+                            except OSError as e:
+                                logger.warning(f"Не удалось удалить фото {url}: {e}")
+                except Exception as e:
+                    logger.warning(f"Ошибка обработчика events_cleaned: {e}")
+
+            await conn.add_listener('events_cleaned', _on_notify)
+            logger.info("Слушаем events_cleaned для удаления устаревших фото")
+
+            while self._running:
+                await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"Photo cleanup listener завершился с ошибкой: {e}", exc_info=True)
+        finally:
+            if conn is not None:
+                try:
+                    await conn.remove_listener('events_cleaned', _on_notify)
+                except Exception:
+                    pass
+                try:
+                    await self.db.pool.release(conn)
+                except Exception:
+                    pass
+
     async def _send_status_message(self, text: str):
         """Отправить сообщение о статусе (если настроено)."""
         try:
@@ -314,6 +367,9 @@ class ParserBot:
 
         logger.info("Shutting down parser...")
         self._running = False
+
+        if self._cleanup_listener_task and not self._cleanup_listener_task.done():
+            self._cleanup_listener_task.cancel()
 
         # Останавливаем Telegram клиента
         if self.app:

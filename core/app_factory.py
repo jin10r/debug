@@ -21,7 +21,6 @@ from core.utils.logging_config import setup_logging, logging_middleware
 from core.api.routes import setup_routes
 from core.api.auth import init_redis, close_redis
 from core.api.websocket import WebSocketManager
-from core.tasks.background import cleanup_photos_task
 from core.middlewares.jwt_auth import jwt_auth_middleware
 from core.middlewares.auth import check_redis_required_connection
 from core.middlewares.csrf import csrf_middleware
@@ -140,11 +139,10 @@ async def on_startup(app: web.Application):
     app['shutdown_event'] = shutdown_event
 
     app['bot_polling_task'] = asyncio.create_task(_run_bot_polling(app))
-    logger.info("Channel monitor runs in parser_service.py (separate microservice)")
+    logger.info("Мониторинг канала и удаление фото выполняются в сервисе parser (отдельный микросервис)")
     app['channel_monitor_task'] = None
-    app['cleanup_photos_task'] = asyncio.create_task(cleanup_photos_task(shutdown_event))
 
-    logger.info("PostgreSQL LISTEN for WebSocket events enabled")
+    logger.info("PostgreSQL LISTEN для WebSocket-событий включён")
     app['pg_notify_task'] = asyncio.create_task(_run_pg_notify_listener(app))
 
     logger.info("Step 4/4: Background tasks started.")
@@ -178,22 +176,6 @@ async def on_shutdown(app: web.Application):
                 logger.debug(f"Bot polling cancellation: {e}")
 
     shutdown_tasks.append(stop_bot_polling())
-
-    async def cancel_background_tasks():
-        cleanup_task = app.get('cleanup_photos_task')
-        tasks_to_cancel = [t for t in [cleanup_task] if t and not t.done()]
-        if tasks_to_cancel:
-            for t in tasks_to_cancel:
-                t.cancel()
-            try:
-                await asyncio.wait_for(
-                    asyncio.gather(*tasks_to_cancel, return_exceptions=True),
-                    timeout=5.0
-                )
-            except asyncio.TimeoutError:
-                logger.warning("Background tasks cancellation timeout")
-
-    shutdown_tasks.append(cancel_background_tasks())
 
     async def stop_pg_notify_listener():
         pg_task = app.get('pg_notify_task')

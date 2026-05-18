@@ -79,7 +79,7 @@ class EventOperations:
                             'strategy', strategy,
                             'photo_url', photo_url,
                             'matches', matches,
-                            'time', TO_CHAR(event_time, 'YYYY-MM-DD HH24:MI:SS')
+                            'time', event_time
                         )
                     )
                 ), '[]'::json)
@@ -101,14 +101,17 @@ class EventOperations:
         layers: Optional[List[str]] = None,
         since_timestamp: Optional[str] = None
     ) -> Dict:
-        """Fetch recent events as GeoJSON features.
+        """Вернуть последние события в формате GeoJSON FeatureCollection.
 
         Args:
-            time_interval_minutes: Maximum age of events to return.
-            layers: Optional layer filter list.
-            since_timestamp: ISO-8601 string. When set, returns only events newer than
-                this timestamp (catch-up after reconnect). The time_interval_minutes
-                window still applies as an upper bound.
+            time_interval_minutes: Верхняя граница возраста событий (в минутах).
+            layers: Опциональный фильтр по слоям.
+            since_timestamp: ISO-8601 строка (например '2026-05-18T16:37:07.000Z').
+                Если задана — возвращаются только события новее этого момента
+                (catch-up после переподключения). Окно time_interval_minutes
+                по-прежнему применяется как верхняя граница.
+                Строка конвертируется в timezone-aware datetime перед передачей
+                в asyncpg: колонка event_time имеет тип timestamptz.
         """
         base_query = """
             SELECT json_build_object(
@@ -134,8 +137,16 @@ class EventOperations:
         params: List[Any] = [time_interval_minutes]
 
         if since_timestamp:
-            params.append(since_timestamp)
-            where_clauses.append(f"event_time > ${len(params)}")
+            since_dt = since_timestamp
+            if isinstance(since_timestamp, str):
+                try:
+                    since_dt = datetime.fromisoformat(since_timestamp.replace('Z', '+00:00'))
+                except ValueError:
+                    logger.warning(f"Invalid since_timestamp '{since_timestamp}', ignoring")
+                    since_dt = None
+            if since_dt is not None:
+                params.append(since_dt)
+                where_clauses.append(f"event_time > ${len(params)}")
 
         if layers:
             valid_layers = [layer for layer in layers if layer]

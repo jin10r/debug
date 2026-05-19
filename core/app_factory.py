@@ -64,6 +64,7 @@ async def _run_bot_polling(app: web.Application):
 async def _run_pg_notify_listener(app: web.Application):
     """PostgreSQL LISTEN/NOTIFY → WebSocket bridge for parser-originated events."""
     conn = None
+    notify_tasks: set = set()  # отслеживаем broadcast-задачи, чтобы не терять их
     try:
         loop = asyncio.get_running_loop()
         db_pool = app.get('db_pool')
@@ -75,14 +76,19 @@ async def _run_pg_notify_listener(app: web.Application):
         conn = await db_pool.pool.acquire()
         app['pg_notify_conn'] = conn
 
+        def _spawn(coro):
+            # Отслеживаемая задача: ссылка хранится до завершения (иначе GC может
+            # отменить задачу), при shutdown — отменяется в finally.
+            task = loop.create_task(coro)
+            notify_tasks.add(task)
+            task.add_done_callback(notify_tasks.discard)
+
         def _on_notify(connection, pid, channel, payload):
             try:
                 if channel == 'events_new':
-                    event_data = json.loads(payload)
-                    loop.create_task(ws_manager.broadcast_event(event_data))
+                    _spawn(ws_manager.broadcast_event(json.loads(payload)))
                 elif channel == 'events_cleaned':
-                    cleaned_data = json.loads(payload)
-                    loop.create_task(ws_manager.broadcast_events_cleaned(cleaned_data))
+                    _spawn(ws_manager.broadcast_events_cleaned(json.loads(payload)))
             except Exception as e:
                 logger.warning(f"Failed to process NOTIFY {channel}: {e}")
 
@@ -98,6 +104,9 @@ async def _run_pg_notify_listener(app: web.Application):
     except Exception as e:
         logger.error(f"PG NOTIFY listener crashed: {e}", exc_info=True)
     finally:
+        for task in list(notify_tasks):
+            if not task.done():
+                task.cancel()
         if conn is not None:
             try:
                 await conn.remove_listener('events_new', _on_notify)

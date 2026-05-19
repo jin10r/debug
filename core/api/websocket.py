@@ -9,6 +9,12 @@ from core.db.dbconnect import Request
 
 logger = logging.getLogger(__name__)
 
+# Верхняя граница одновременных WS-соединений — защита от утечки/перегрузки.
+MAX_CONNECTIONS = 1000
+# Таймаут отправки одному клиенту: зависший клиент не должен тормозить
+# рассылку остальным (asyncio.gather ждёт все корутины).
+SEND_TIMEOUT = 5.0
+
 
 class WebSocketManager:
     """Manages WebSocket connections and broadcasts individual features to clients."""
@@ -19,10 +25,18 @@ class WebSocketManager:
         self.connections: Set[web.WebSocketResponse] = set()
         self.broadcast_lock = asyncio.Lock()
 
-    async def register_connection(self, ws: web.WebSocketResponse):
-        """Register a new WebSocket connection. Data is sent only after client authenticates."""
+    async def register_connection(self, ws: web.WebSocketResponse) -> bool:
+        """Register a new WebSocket connection.
+
+        Returns False if the connection limit is reached — caller must close ws.
+        Data is sent only after the client authenticates.
+        """
+        if len(self.connections) >= MAX_CONNECTIONS:
+            logger.warning(f"WebSocket connection rejected: limit {MAX_CONNECTIONS} reached")
+            return False
         self.connections.add(ws)
         logger.info(f"WebSocket connection registered. Total: {len(self.connections)}")
+        return True
 
     async def unregister_connection(self, ws: web.WebSocketResponse):
         """Unregister a WebSocket connection."""
@@ -37,10 +51,10 @@ class WebSocketManager:
 
         async def _send(ws: web.WebSocketResponse) -> bool:
             try:
-                await ws.send_str(payload)
+                await asyncio.wait_for(ws.send_str(payload), timeout=SEND_TIMEOUT)
                 return True
             except Exception as e:
-                logger.debug(f"Broadcast send error: {e}")
+                logger.debug(f"Broadcast send error/timeout: {e}")
                 return False
 
         async with self.broadcast_lock:
@@ -83,7 +97,9 @@ class WebSocketManager:
                     'timestamp': datetime.now(timezone.utc).isoformat()
                 }
                 try:
-                    await ws.send_str(json.dumps(message))
+                    await asyncio.wait_for(
+                        ws.send_str(json.dumps(message)), timeout=SEND_TIMEOUT
+                    )
                 except Exception as e:
                     logger.warning(f"Failed to send feature to client: {e}")
                     return
@@ -159,7 +175,9 @@ async def websocket_handler(request: web.Request):
         await ws.close()
         return ws
 
-    await ws_manager.register_connection(ws)
+    if not await ws_manager.register_connection(ws):
+        await ws.close(code=1013, message=b'server busy')  # 1013 = Try Again Later
+        return ws
     authenticated = False
 
     try:

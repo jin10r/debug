@@ -6,6 +6,7 @@ HTTP-эндпоинты аутентификации живут в core/api/auth
 """
 
 from typing import Optional, Dict, Tuple, Any
+from collections import OrderedDict
 import logging
 import time
 import jwt
@@ -116,9 +117,9 @@ def generate_jwt_tokens(user_data: Dict[str, Any]) -> Tuple[str, str]:
     return access_token, refresh_token
 
 
-# Кэш для верификации JWT токенов
-# Кэшируем только валидные токены, чтобы избежать кэширования атак
-_jwt_token_cache = {}
+# Кэш верификации JWT — OrderedDict как LRU: вытеснение и обновление O(1),
+# без сортировки на горячем пути. Кэшируются только валидные токены.
+_jwt_token_cache: "OrderedDict[str, dict]" = OrderedDict()
 _JWT_CACHE_MAX_SIZE = 10000
 _JWT_CACHE_TTL = 60  # секунд
 
@@ -144,20 +145,15 @@ def verify_jwt_token(token: str, token_type: str = 'access') -> Optional[Dict]:
         cached_result = _jwt_token_cache[cache_key]
         # Проверка TTL кэша
         if time.time() - cached_result['timestamp'] < _JWT_CACHE_TTL:
+            _jwt_token_cache.move_to_end(cache_key)  # LRU: освежаем запись
             return cached_result['payload']
         else:
             # Истёк TTL, удаляем из кэша
             del _jwt_token_cache[cache_key]
 
-    # Очистка кэша при превышении размера (LRU-like)
-    if len(_jwt_token_cache) >= _JWT_CACHE_MAX_SIZE:
-        # Удаляем 10% самых старых записей
-        sorted_keys = sorted(
-            _jwt_token_cache.keys(),
-            key=lambda k: _jwt_token_cache[k]['timestamp']
-        )
-        for key in sorted_keys[:_JWT_CACHE_MAX_SIZE // 10]:
-            del _jwt_token_cache[key]
+    # LRU-вытеснение: выбрасываем самые старые записи — O(1), без сортировки.
+    while len(_jwt_token_cache) >= _JWT_CACHE_MAX_SIZE:
+        _jwt_token_cache.popitem(last=False)
 
     # Верификация токена
     try:

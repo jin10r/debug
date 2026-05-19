@@ -16,12 +16,13 @@
     → rapidfuzz vs "7 ст фонтан" → score ~73  ← ниже порога
 """
 
-import re
 import logging
 from typing import Dict, List, Optional, Set, Tuple
 
 import mawo_pymorphy3 as pymorphy3
 from rapidfuzz import process as rf_process, fuzz
+
+from .text_preprocessor import clean
 
 try:
     from .settings import settings
@@ -73,11 +74,6 @@ ORDINAL_MAP: Dict[str, str] = {
     'двадцатый': '20',
 }
 
-_CLEAN_RE = re.compile(r'[^а-яА-ЯёЁa-zA-Z0-9\s]')
-_SPACES_RE = re.compile(r'\s+')
-_UA_TABLE = str.maketrans('іїє', 'ние')
-
-
 class LexicalMatcher:
     """Поиск улиц через морфологическую нормализацию + нечёткое строковое совпадение."""
 
@@ -88,6 +84,11 @@ class LexicalMatcher:
         self._alias_texts: List[str] = []
         self._alias_meta: List[Tuple[int, str]] = []  # (street_id, original_name)
         self._initialized = False
+
+    @property
+    def morph(self):
+        """Общий MorphAnalyzer — переиспользуется LayerClassifier (один на процесс)."""
+        return self._morph
 
     # ---------------------------------------------------------------- initialize
 
@@ -185,12 +186,6 @@ class LexicalMatcher:
 
     # --------------------------------------------------- morphology / lemmatize
 
-    def _clean_phrase(self, text: str) -> str:
-        """Убирает пунктуацию, украинские буквы → русские, нормализует пробелы."""
-        cleaned = _CLEAN_RE.sub(' ', text)
-        cleaned = cleaned.translate(_UA_TABLE)
-        return _SPACES_RE.sub(' ', cleaned).strip().lower()
-
     def _lemmatize_word(self, word: str) -> str:
         """Лемматизирует одно слово; порядковые числительные конвертирует в цифры."""
         if word.isdigit():
@@ -211,8 +206,8 @@ class LexicalMatcher:
         return best.normal_form
 
     def _lemmatize_phrase(self, text: str) -> str:
-        """Очищает и лемматизирует фразу целиком."""
-        words = self._clean_phrase(text).split()
+        """Очищает (text_preprocessor.clean) и лемматизирует фразу целиком."""
+        words = clean(text).split()
         return ' '.join(self._lemmatize_word(w) for w in words if w)
 
     # -------------------------------------------------------- ngram generation
@@ -343,24 +338,3 @@ class LexicalMatcher:
             f"{[(e['matched_name'], round(e['score'], 2)) for e in entities]}"
         )
         return entities
-
-    # compat: синхронная обёртка (используется в тестах)
-    def find_entities(self, text: str, top_k: int = MAX_ENTITIES,
-                      threshold: float = SIMILARITY_THRESHOLD,
-                      pg_pool=None) -> List[Dict]:
-        import asyncio
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        return loop.run_until_complete(
-            self.async_find_entities(text, top_k, threshold, pg_pool)
-        )
-
-    def get_stats(self) -> Dict:
-        return {
-            'aliases': len(self._alias_texts),
-            'stopwords': len(self._stopwords),
-            'initialized': self._initialized,
-        }

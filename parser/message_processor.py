@@ -1,66 +1,43 @@
-"""Message Processor - обработка текста и сохранение событий.
+"""Message Processor — обработка текста и сохранение событий.
 
-Очищает текст от спецсимволов, определяет слой события,
-находит сущности через лексический поиск (mawo_pymorphy3 + rapidfuzz),
-сохраняет в БД.
+Конвейер на сообщение:
+  strip_tail → clean (text_preprocessor) → определение слоя (layer_classifier)
+  → при пустом/длинном тексте strategy='random', иначе лексический поиск улиц
+  (lexical_matcher) → стратегия геометрии (process_candidates) → INSERT.
+
+Вставка идемпотентна по message_id (ON CONFLICT DO NOTHING) — повторная
+обработка одного сообщения (бэкфилл истории, ретраи воркера) не создаёт дублей.
 """
 
 import asyncio
-import html
 import json as json_lib
 import logging
-import re
 from datetime import datetime, timezone
-from typing import Dict, Optional, Any, List
+from typing import Any, Dict, Optional
 
 import asyncpg
-import pytz
 
-# Импорт модуля поиска сущностей — семантический поиск
+from .layer_classifier import LayerClassifier
 from .lexical_matcher import LexicalMatcher, SIMILARITY_THRESHOLD, MAX_ENTITIES
+from .text_preprocessor import MAX_TEXT_LENGTH, clean, strip_tail
 
-# Импорт настроек из локального модуля
 try:
-    from .settings import settings, QuestionOverlayConfig
-except Exception as e:
+    from .settings import settings
+except Exception:
     settings = None
 
 logger = logging.getLogger(__name__)
 
-# Часовой пояс Kiev
-KIEV_TZ = pytz.timezone('Europe/Kiev')
-
-
-def _get_layer_keywords(layer: str) -> tuple:
-    """Получить ключевые слова для слоя из settings."""
-    if settings and hasattr(settings, 'similarity'):
-        return settings.similarity.get_layer_keywords(layer)
-    # Fallback
-    if layer == 'cops':
-        return ('коп', 'полиц', 'мусор', 'люстр', 'бп', 'блокпост', 'мигалк', 'патрул', 'б/п', 'пост')
-    elif layer == 'bus':
-        return ('бус', 'хайс', 'автобус', 'спринтер', 'рено', 'h1', 'h2', 'h3', 'h4', 'h5', 'фольц', 'хендай', 'вито', 'сталкер', 'транспортёр')
-    elif layer == 'traffic':
-        return ('дтп', 'авар', 'пробк', 'затор', 'светофор')
-    return ()
-
 
 class MessageProcessor:
-    """Процессор сообщений Telegram.
-
-    Отвечает за:
-    - Очистку текста
-    - Поиск сущностей через лексический поиск (mawo_pymorphy3 + rapidfuzz)
-    - Определение слоя
-    - Сохранение событий в PostgreSQL
-    """
-
-    MAX_TEXT_LENGTH = 370
+    """Процессор сообщений Telegram: предобработка, классификация, сохранение."""
 
     def __init__(self, db_pool: asyncpg.Pool):
         self.db_pool = db_pool
         self.matcher = LexicalMatcher()
-        self._pg_notify_task: Optional[asyncio.Task] = None
+        # LayerClassifier переиспользует MorphAnalyzer из LexicalMatcher —
+        # один экземпляр анализатора на процесс (экономия ~15-20 МБ RAM).
+        self.layer_classifier = LayerClassifier(self.matcher.morph)
         self._listen_conn: Optional[asyncpg.Connection] = None
 
     async def initialize(self) -> bool:
@@ -103,337 +80,177 @@ class MessageProcessor:
         except Exception as e:
             logger.error(f"Failed to setup pg_notify: {e}")
 
-    async def _on_streets_updated(self, conn: asyncpg.Connection, pid: int, channel: str, payload: str):
-        """Callback при уведомлении об изменении улиц."""
-        logger.info(f"🔄 Received streets_updated notification, reindexing street...")
-        # payload содержит street_id в формате JSON
-        import json
-        
-        async def _reindex_async_wrapper(func, *args):
-            """Обертка для безопасного выполнения асинхронных задач."""
+    async def _on_streets_updated(self, conn: asyncpg.Connection, pid: int,
+                                  channel: str, payload: str):
+        """Callback pg_notify streets_updated → переиндексация alias-индекса."""
+        logger.info("🔄 streets_updated received, reindexing...")
+
+        async def _reindex(func, *args):
             try:
                 await func(*args)
-                logger.info("✅ Reindexing completed successfully")
+                logger.info("✅ Reindexing completed")
             except Exception as e:
                 logger.error(f"❌ Reindexing failed: {e}")
-        
+
         try:
-            # Использовать асинхронный executor для CPU-bound парсинга JSON
-            from concurrent.futures import ThreadPoolExecutor
-            loop = asyncio.get_running_loop()
-            
-            with ThreadPoolExecutor() as executor:
-                data = await loop.run_in_executor(executor, json.loads, payload)
-                street_id = data.get('street_id')
-                
-                if street_id:
-                    asyncio.create_task(_reindex_async_wrapper(
-                        self.matcher.reindex_street, self.db_pool, street_id
-                    ))
-                else:
-                    # Если street_id не указан, переиндексируем все
-                    asyncio.create_task(_reindex_async_wrapper(
-                        self.matcher.reindex_all, self.db_pool
-                    ))
+            street_id = json_lib.loads(payload).get('street_id')
         except Exception as e:
             logger.error(f"Failed to parse streets_updated payload: {e}")
-            # При ошибке парсинга переиндексируем все улицы
-            asyncio.create_task(_reindex_async_wrapper(
-                self.matcher.reindex_all, self.db_pool
-            ))
+            street_id = None
+
+        if street_id:
+            asyncio.create_task(_reindex(self.matcher.reindex_street, self.db_pool, street_id))
+        else:
+            # Без street_id — переиндексируем все улицы.
+            asyncio.create_task(_reindex(self.matcher.reindex_all, self.db_pool))
 
     async def process_message(self, msg_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Обработка сообщения из Telegram."""
+        """Обработать одно сообщение Telegram и сохранить событие.
+
+        Возвращает dict с event_id/layer/strategy либо None, если сообщение —
+        дубль (ON CONFLICT) или геометрия не определена.
+        """
         message_id = msg_data.get('message_id', 0)
         photo_path = msg_data.get('photo_path')
+        # Время уже в киевском поясе — конвертация выполнена в monitoring при получении.
+        event_time = msg_data.get('event_time') or datetime.now(timezone.utc)
 
-        # 1. Конвертация времени UTC → Kiev
-        utc_time = msg_data.get('event_time', datetime.now(timezone.utc))
-        kiev_time = utc_time.astimezone(KIEV_TZ)
+        raw_text = msg_data.get('text', '') or ''
 
-        # 2. Валидация текста
-        text = msg_data.get('text', '')
-        layer = 'pig'
-        street_ids: List[int] = []
-        street_scores: List[float] = []
-        geom = None
-        strategy = None
+        # Предобработка: отбрасывание хвоста → очистка.
+        cleaned = clean(strip_tail(raw_text))
 
-        # Очищаем текст
-        plain = self.extract_plain_text(text)
-        truncated = self.truncate_at_pipe(plain)
-        cleaned = self.clean_text(truncated)
+        # Определение слоя — над очищенным текстом, до проверки длины.
+        layer = self.layer_classifier.classify(cleaned)
 
-        if not text or len(text.strip()) == 0:
-            text = "без описания"
-            logger.info(f"Message {message_id}: empty text → using placeholder")
-            geom = self._generate_random_point_in_question_overlay()
-            strategy = 'random'
-
-        elif len(text) > self.MAX_TEXT_LENGTH:
-            text = "слишком длинное сообщение не является релевантной локацией"
-            logger.warning(f"Message {message_id}: text too long ({len(text)} chars) → using placeholder")
-            geom = self._generate_random_point_in_question_overlay()
-            strategy = 'random'
-
-        else:
-            # Лексический поиск сущностей
-            logger.info(f"Message {message_id}: Using lexical search (mawo_pymorphy3 + rapidfuzz)...")
-
-            entities = await self.matcher.async_find_entities(
-                cleaned,
-                top_k=MAX_ENTITIES,
-                threshold=SIMILARITY_THRESHOLD,
-                pg_pool=self.db_pool,
+        # Пустой или слишком длинный текст — не релевантная локация:
+        # поиск улиц пропускается, событию назначается случайная точка.
+        if not cleaned or len(cleaned) > MAX_TEXT_LENGTH:
+            if not cleaned:
+                description = 'без описания'
+                logger.info(f"Message {message_id}: empty text → random point")
+            else:
+                description = 'слишком длинное сообщение не является релевантной локацией'
+                logger.warning(
+                    f"Message {message_id}: text too long ({len(cleaned)}) → random point"
+                )
+            return await self._insert_event(
+                message_id=message_id, event_time=event_time, description=description,
+                photo_path=photo_path, layer=layer, strategy='random',
+                geom_wkt=self._generate_random_point_in_question_overlay(),
             )
 
-            if entities:
-                logger.info(f"   - Found {len(entities)} entities: {[e['text'] for e in entities]}")
+        # Лексический поиск улиц.
+        logger.info(f"Message {message_id}: lexical search (mawo_pymorphy3 + rapidfuzz)...")
+        entities = await self.matcher.async_find_entities(
+            cleaned, top_k=MAX_ENTITIES, threshold=SIMILARITY_THRESHOLD, pg_pool=self.db_pool,
+        )
 
-                for ent in entities:
-                    if ent['street_id'] not in street_ids:
-                        street_ids.append(ent['street_id'])
-                        street_scores.append(ent['score'])
+        street_ids: list = []
+        street_scores: list = []
+        for ent in entities:
+            if ent['street_id'] not in street_ids:
+                street_ids.append(ent['street_id'])
+                street_scores.append(ent['score'])
 
-            # Определение слоя
-            layer_from_keywords = self.detect_layer(text)
-            layer = layer_from_keywords or 'pig'
+        # Улиц не нашлось — случайная точка.
+        if not street_ids:
+            logger.info(f"Message {message_id}: no street matches → random point")
+            return await self._insert_event(
+                message_id=message_id, event_time=event_time, description=cleaned,
+                photo_path=photo_path, layer=layer, strategy='random',
+                geom_wkt=self._generate_random_point_in_question_overlay(),
+            )
 
-            logger.debug(f"Message {message_id}: layer={layer}, street_ids={len(street_ids)}")
-
-            if len(street_ids) == 0:
-                # Нет сходств с улицами
-                logger.info(f"Message {message_id}: no entity matches → using random point")
-                geom = self._generate_random_point_in_question_overlay()
-                strategy = 'random'
-
-                # Вставляем событие с random точкой
-                async with self.db_pool.acquire() as conn:
-                    row = await conn.fetchrow(
-                        """
-                        INSERT INTO events (event_time, description, photo_url, layer, strategy, geom, matches)
-                        VALUES ($1, $2, $3, $4, $5, ST_GeomFromText($6, 4326), '[]'::jsonb)
-                        RETURNING id
-                        """,
-                        kiev_time, cleaned, photo_path, layer, strategy, geom
-                    )
-                    return {
-                        'event_id': row['id'],
-                        'layer': layer,
-                        'strategy': strategy,
-                        'geom': geom,
-                        'matches': [],
-                        'entity_matches': []
-                    }
-            else:
-                # Найдены улицы → geometry via process_candidates (150m pseudo-radius)
-                async with self.db_pool.acquire() as conn:
-                    scores_array = [float(s) for s in street_scores]
-
-                    pc_rows = await conn.fetch(
-                        """
-                        SELECT
-                            result_strategy,
-                            result_matches,
-                            ST_AsText(result_geom)           AS geom_wkt,
-                            ST_X(ST_Centroid(result_geom))   AS centroid_lng,
-                            ST_Y(ST_Centroid(result_geom))   AS centroid_lat
-                        FROM process_candidates($1::int[], $2::double precision[], $3::float)
-                        """,
-                        street_ids, scores_array, 150.0,
-                    )
-
-                    if not pc_rows or pc_rows[0]['geom_wkt'] is None:
-                        logger.warning(f"Message {message_id}: process_candidates returned no geometry")
-                        return None
-
-                    pc = pc_rows[0]
-                    v_strategy  = pc['result_strategy']
-                    v_geom_wkt  = pc['geom_wkt']
-                    v_matches   = pc['result_matches']
-                    centroid_lng = pc['centroid_lng']
-                    centroid_lat = pc['centroid_lat']
-
-                    logger.info(
-                        f"Message {message_id}: strategy={v_strategy}, "
-                        f"streets={street_ids}, centroid=({centroid_lng:.4f},{centroid_lat:.4f})"
-                    )
-
-                    # INSERT события
-                    event_row = await conn.fetchrow(
-                        """
-                        INSERT INTO events
-                            (event_time, description, photo_url, layer, strategy, geom, matches)
-                        VALUES ($1, $2, $3, $4, $5, ST_GeomFromText($6, 4326), $7)
-                        RETURNING id
-                        """,
-                        kiev_time, cleaned, photo_path, layer,
-                        v_strategy, v_geom_wkt, v_matches,
-                    )
-
-                    # Обновляем events_meta для WebSocket-синхронизации
-                    await conn.execute(
-                        "UPDATE events_meta SET version = version + 1, updated_at = now(), max_event_id = $1 WHERE id = 1",
-                        event_row['id'],
-                    )
-
-                    # pg_notify: отправляем центроид как Point (WebSocket клиенты)
-                    await conn.execute(
-                        "SELECT pg_notify('events_new', $1::text)",
-                        json_lib.dumps({
-                            'type': 'Feature',
-                            'geometry': {
-                                'type': 'Point',
-                                'coordinates': [centroid_lng, centroid_lat],
-                            },
-                            'properties': {
-                                'id': event_row['id'],
-                                'layer': layer,
-                                'strategy': v_strategy,
-                                'description': cleaned,
-                                'time': kiev_time.isoformat(),
-                            },
-                        }),
-                    )
-
-                    return {
-                        'event_id': event_row['id'],
-                        'layer': layer,
-                        'strategy': v_strategy,
-                        'geom': v_geom_wkt,
-                        'matches': v_matches,
-                        'entity_matches': [
-                            {'id': sid, 'score': ss}
-                            for sid, ss in zip(street_ids, street_scores)
-                        ],
-                    }
-
-        # Для random - упрощённая вставка
-        if strategy == 'random':
-            if self.db_pool is None:
-                logger.error(f"Message {message_id}: db_pool not initialized")
+        # Улицы найдены — геометрия и стратегия через process_candidates (псевдо-радиус 150 м).
+        logger.info(f"Message {message_id}: {len(street_ids)} streets matched: {street_ids}")
+        async with self.db_pool.acquire() as conn:
+            scores_array = [float(s) for s in street_scores]
+            pc_rows = await conn.fetch(
+                """
+                SELECT result_strategy,
+                       result_matches,
+                       ST_AsText(result_geom) AS geom_wkt
+                FROM process_candidates($1::int[], $2::double precision[], $3::float)
+                """,
+                street_ids, scores_array, 150.0,
+            )
+            if not pc_rows or pc_rows[0]['geom_wkt'] is None:
+                logger.warning(f"Message {message_id}: process_candidates returned no geometry")
                 return None
 
-            logger.info(f"Message {message_id}: inserting random event with strategy='{strategy}', geom='{geom}'")
+            pc = pc_rows[0]
+            return await self._insert_event(
+                message_id=message_id, event_time=event_time, description=cleaned,
+                photo_path=photo_path, layer=layer, strategy=pc['result_strategy'],
+                geom_wkt=pc['geom_wkt'], matches=pc['result_matches'], conn=conn,
+            )
 
-            async with self.db_pool.acquire() as conn:
-                row = await conn.fetchrow(
-                    """
-                    INSERT INTO events (event_time, description, photo_url, layer, strategy, geom, matches)
-                    VALUES ($1, $2, $3, $4, $5, ST_GeomFromText($6, 4326), '[]'::jsonb)
-                    RETURNING id
-                    """,
-                    kiev_time, cleaned, photo_path, layer, strategy, geom
-                )
+    async def _insert_event(
+        self, *, message_id: int, event_time: datetime, description: str,
+        photo_path: Optional[str], layer: str, strategy: str, geom_wkt: str,
+        matches: Optional[Any] = None, conn: Optional[asyncpg.Connection] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Идемпотентно вставить событие, обновить мету, оповестить WebSocket.
 
-                await conn.execute(
-                    "UPDATE events_meta SET version = version + 1, updated_at = now(), max_event_id = $1 WHERE id = 1",
-                    row['id']
-                )
+        Объединяет три ранее дублировавшихся блока INSERT. Вставка с
+        ON CONFLICT (message_id) DO NOTHING: при повторе RETURNING пуст — это
+        дубль, возвращается None (не ошибка). Центроид геометрии вычисляется в
+        RETURNING и используется как точка для pg_notify('events_new').
+        """
+        matches_json = matches if matches is not None else '[]'
 
-                # Безопасно извлекаем координаты из WKT геометрии
-                coords = self._safe_parse_wkt_point(geom)
-                if coords is None:
-                    logger.warning(f"Failed to parse geometry: {geom}")
-                    coords = [0, 0]  # Fallback coordinates
-                    
-                await conn.execute(
-                    "SELECT pg_notify('events_new', $1::text)",
-                    json_lib.dumps({
-                        'type': 'Feature',
-                        'geometry': {'type': 'Point', 'coordinates': list(coords)},
-                        'properties': {
-                            'id': row['id'],
-                            'layer': layer,
-                            'strategy': strategy,
-                            'description': text,
-                            'time': kiev_time.isoformat()
-                        }
-                    })
-                )
+        async def _run(c: asyncpg.Connection) -> Optional[Dict[str, Any]]:
+            row = await c.fetchrow(
+                """
+                INSERT INTO events
+                    (message_id, event_time, description, photo_url,
+                     layer, strategy, geom, matches)
+                VALUES ($1, $2, $3, $4, $5, $6, ST_GeomFromText($7, 4326), $8::jsonb)
+                ON CONFLICT (message_id) DO NOTHING
+                RETURNING id,
+                          ST_X(ST_Centroid(geom)) AS lng,
+                          ST_Y(ST_Centroid(geom)) AS lat
+                """,
+                message_id, event_time, description, photo_path,
+                layer, strategy, geom_wkt, matches_json,
+            )
+            if row is None:
+                logger.info(f"Message {message_id}: duplicate, skipped")
+                return None
 
-                return {
-                    'event_id': row['id'],
-                    'layer': layer,
-                    'strategy': strategy,
-                    'geom': geom,
-                    'matches': [],
-                    'entity_matches': []
-                }
+            await c.execute(
+                "UPDATE events_meta SET version = version + 1, "
+                "updated_at = now(), max_event_id = $1 WHERE id = 1",
+                row['id'],
+            )
+            await c.execute(
+                "SELECT pg_notify('events_new', $1::text)",
+                json_lib.dumps({
+                    'type': 'Feature',
+                    'geometry': {'type': 'Point', 'coordinates': [row['lng'], row['lat']]},
+                    'properties': {
+                        'id': row['id'],
+                        'layer': layer,
+                        'strategy': strategy,
+                        'description': description,
+                        'time': event_time.isoformat(),
+                    },
+                }),
+            )
+            logger.info(
+                f"Message {message_id}: event {row['id']} saved "
+                f"(layer={layer}, strategy={strategy})"
+            )
+            return {'event_id': row['id'], 'layer': layer, 'strategy': strategy}
 
-        return None
-
-    @staticmethod
-    def extract_plain_text(text_value) -> str:
-        """Извлечь чистый текст, удалив HTML теги и декодировав entities."""
-        if text_value is None:
-            return ""
-
-        plain_text = html.unescape(str(text_value))
-        plain_text = re.sub(r'<[^>]+>', '', plain_text)
-
-        return plain_text.strip()
-
-    @staticmethod
-    def truncate_at_pipe(text: str) -> str:
-        """Обрезать текст по маркеру 'Сообщить' (case-insensitive)."""
-        if not text:
-            return ""
-        
-        # Case-insensitive поиск маркера
-        text_lower = text.lower()
-        marker = 'сообщить'
-        
-        if marker in text_lower:
-            idx = text_lower.index(marker)
-            return text[:idx].strip()
-        
-        return text.strip()
-
-    @staticmethod
-    def clean_text(text: str) -> str:
-        """Очистить текст: заменить все спецсимволы и пунктуацию на пробелы."""
-        if not text:
-            return ""
-
-        # Заменяем все не-буквенные и не-цифровые символы на пробелы
-        cleaned = re.sub(r'[^a-zA-Zа-яА-ЯёЁ0-9]', ' ', text)
-
-        # Украинские → русские буквы
-        cleaned = cleaned.replace('і', 'и').replace('ї', 'и').replace('є', 'е')
-
-        # Убираем множественные пробелы
-        cleaned = re.sub(r'\s+', ' ', cleaned)
-
-        return cleaned.strip().lower()
-
-    @staticmethod
-    def detect_layer(text: str) -> Optional[str]:
-        """Определить слой события по ключевым словам."""
-        if not text:
-            return None
-
-        text_lower = text.lower()
-        words = text_lower.split()
-
-        layers = ['bus', 'cops', 'traffic']
-        for layer in layers:
-            keywords = _get_layer_keywords(layer)
-            for word in words:
-                for keyword in keywords:
-                    # Регистронезависимое сравнение
-                    if word.startswith(keyword.lower()):
-                        logger.debug(f"Detected layer '{layer}' by keyword '{keyword}'")
-                        return layer
-
-        return None
-
-    def is_too_long(self, text: str) -> bool:
-        """Проверить, не превышает ли текст допустимую длину."""
-        return len(text) > self.MAX_TEXT_LENGTH
+        if conn is not None:
+            return await _run(conn)
+        async with self.db_pool.acquire() as c:
+            return await _run(c)
 
     def _generate_random_point_in_question_overlay(self) -> str:
-        """Сгенерировать случайную точку в круге question_overlay."""
+        """Сгенерировать случайную точку в круге question_overlay (WKT POINT)."""
         import math
         import random
 
@@ -452,23 +269,8 @@ class MessageProcessor:
 
         lng = center_lng + r * math.cos(theta)
         lat = center_lat + r * math.sin(theta)
-        
-        return f"POINT({lng} {lat})"
 
-    def _safe_parse_wkt_point(self, wkt: str) -> Optional[tuple]:
-        """Безопасное извлечение координат из WKT POINT."""
-        import re
-        try:
-            match = re.search(r'POINT\s*\(\s*([-\d.]+)\s+([-\d.]+)\s*\)', wkt)
-            if match:
-                lon = float(match.group(1))
-                lat = float(match.group(2))
-                if -180 <= lon <= 180 and -90 <= lat <= 90:
-                    return lon, lat
-            return None
-        except Exception as e:
-            logger.warning(f"Invalid WKT format: {wkt}, error: {e}")
-            return None
+        return f"POINT({lng} {lat})"
 
     async def close(self):
         """Закрытие соединений."""

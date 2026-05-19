@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS layer_keywords (
 -- Основная таблица событий (единственная, без raw_data)
 CREATE TABLE IF NOT EXISTS events (
     id SERIAL PRIMARY KEY,
+    message_id BIGINT,                 -- Telegram message id (дедупликация)
     event_time TIMESTAMPTZ NOT NULL,
     description TEXT NOT NULL,
     photo_url TEXT,
@@ -44,6 +45,14 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_time ON events(event_time);
 CREATE INDEX IF NOT EXISTS idx_events_geom ON events USING gist (geom);
 CREATE INDEX IF NOT EXISTS idx_events_layer ON events(layer);
+
+-- message_id + уникальный индекс делают вставку события идемпотентной
+-- (INSERT ... ON CONFLICT (message_id) DO NOTHING): бэкфилл истории канала и
+-- ретраи воркера не создают дублей. ALTER ... IF NOT EXISTS — совместимость с
+-- уже существующей таблицей. NULL в message_id допустимы (несколько NULL не
+-- конфликтуют) — legacy-строки не ломаются.
+ALTER TABLE events ADD COLUMN IF NOT EXISTS message_id BIGINT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_events_message_id ON events(message_id);
 
 -- Метаданные для синхронизации WebSocket
 CREATE TABLE IF NOT EXISTS events_meta (

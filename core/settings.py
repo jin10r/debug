@@ -10,12 +10,20 @@ DEFAULT_STOPWORDS = (
     "ул", "улица", "пр", "проспект", "пер", "переулок", "зеленый", "оливки", "маслины", "тцк", "планшету", "планшетом", "черном", "парковке", "парковку", "парковка", "военная", "аллея", "дорога", "таврия", "выезде", "выезд", "сильпо", "атб", "долго", "доброе", "катаются", "дастер", "Рено", "бульвар", "маршрутка", "маршрутки", "светлая", "светлый", "светлая", "светлый", "повернули", "спринтер", "сообщить", "опасности", "заявка", "подписку", "ссылке", "помочь", "каналу", "видео", "щепкино"
 )
 
+# Ключевые слова слоёв — канонические словоформы (не стемы).
+# LayerClassifier лемматизирует и ключи, и токены сообщения через mawo_pymorphy3,
+# поэтому все падежи/числа словоформ совпадают автоматически.
 DEFAULT_LAYER_KEYWORDS_COPS = (
-    'коп', 'полиц', 'мусор', 'люстр', 'бп', 'блокпост', 'мигалк', 'патрул', 'б/п', 'пост'
+    'коп', 'полиция', 'мусор', 'люстра', 'блокпост', 'мигалка', 'патруль', 'пост', 'бп'
 )
 
 DEFAULT_LAYER_KEYWORDS_BUS = (
-    'бус', 'автобус', 'спринтер', 'рено', 'h1', 'h2', 'h3', 'h4', 'h5', 'фольц', 'хендай', 'Вито'
+    'автобус', 'бус', 'хайс', 'спринтер', 'рено', 'фольксваген', 'хёндай',
+    'вито', 'сталкер', 'транспортёр', 'h1', 'h2', 'h3', 'h4', 'h5'
+)
+
+DEFAULT_LAYER_KEYWORDS_TRAFFIC = (
+    'дтп', 'авария', 'пробка', 'затор', 'светофор'
 )
 
 
@@ -101,6 +109,8 @@ class SimilarityConfig:
             return DEFAULT_LAYER_KEYWORDS_COPS
         elif layer == 'bus':
             return DEFAULT_LAYER_KEYWORDS_BUS
+        elif layer == 'traffic':
+            return DEFAULT_LAYER_KEYWORDS_TRAFFIC
         return ()
 
 
@@ -120,6 +130,7 @@ class QuestionOverlayConfig:
 class LayerConfig:
     cops: tuple = field(default_factory=lambda: DEFAULT_LAYER_KEYWORDS_COPS)
     bus: tuple = field(default_factory=lambda: DEFAULT_LAYER_KEYWORDS_BUS)
+    traffic: tuple = field(default_factory=lambda: DEFAULT_LAYER_KEYWORDS_TRAFFIC)
     pig: tuple = field(default=())
 
 

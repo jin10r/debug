@@ -47,9 +47,8 @@ RUN useradd -m -u 1000 parser && \
 COPY --chown=parser:parser parser/ ./parser/
 COPY --chown=parser:parser core/ ./core/
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
-    CMD python -c "import os; os.kill(int(open('/tmp/parser.pid').read()), 0)" 2>/dev/null || exit 1
+# Healthcheck задаётся в docker-compose.yml (pgrep на процесс monitoring).
 
 USER parser
 
-CMD ["sh", "-c", "python -m parser.monitoring & echo $! > /tmp/parser.pid && wait"]
+CMD ["python", "-m", "parser.monitoring"]

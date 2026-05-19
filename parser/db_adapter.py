@@ -47,7 +47,10 @@ class DBAdapter:
                     min_size=2,
                     max_size=10,
                     command_timeout=30,
-                    statement_cache_size=100
+                    statement_cache_size=100,
+                    # Киевский пояс на стороне сессии БД — консистентно с
+                    # core/db/db_base.py; время событий хранится привязанным к Киеву.
+                    server_settings={'timezone': 'Europe/Kiev'},
                 )
 
                 # Проверяем подключение
@@ -69,6 +72,29 @@ class DBAdapter:
                     return False
         
         return False
+
+    async def ensure_schema(self) -> bool:
+        """Идемпотентно привести схему events к требуемой parser.
+
+        Init-скрипты PostgreSQL (`/docker-entrypoint-initdb.d`) выполняются
+        только при создании тома данных; на уже существующем томе колонку
+        message_id (дедупликация по Telegram message id) нужно добавить здесь —
+        при каждом старте, безопасно для повторов.
+        """
+        try:
+            async with self.__pool.acquire() as conn:
+                await conn.execute(
+                    "ALTER TABLE events ADD COLUMN IF NOT EXISTS message_id BIGINT"
+                )
+                await conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_events_message_id "
+                    "ON events(message_id)"
+                )
+            logger.info("✅ Schema ensured: events.message_id + unique index")
+            return True
+        except Exception as e:
+            logger.error(f"❌ ensure_schema failed: {e}")
+            return False
 
     async def close(self):
         """Закрыть пул соединений."""

@@ -10,7 +10,8 @@ import os
 import signal
 import sys
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any
+from typing import Optional
+from zoneinfo import ZoneInfo
 
 from pyrogram import Client, filters
 from pyrogram.types import Message
@@ -29,6 +30,10 @@ from .message_processor import MessageProcessor
 
 logger = logging.getLogger(__name__)
 
+# Время событий от Telegram приходит в UTC; конвертируем в киевский пояс
+# сразу при получении (см. ParserBot._to_kiev).
+KIEV_TZ = ZoneInfo('Europe/Kiev')
+
 
 class ParserBot:
     """Бот для парсинга Telegram каналов."""
@@ -41,7 +46,11 @@ class ParserBot:
         self._running = False
         self._messages_processed = 0
         self._errors = 0
-        self._cleanup_listener_task: Optional[asyncio.Task] = None  # NOTIFY-слушатель для удаления фото
+        self._cleanup_listener_task: Optional[asyncio.Task] = None  # NOTIFY-слушатель удаления фото
+        # Очередь обработки: pyrogram-хендлер только кладёт сообщение в очередь,
+        # единственный воркер разбирает её последовательно — без гонок и потерь.
+        self._message_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
+        self._worker_task: Optional[asyncio.Task] = None
 
         # Конфигурация из env через систему настроек
         if not settings or not settings.bot or not settings.bot.channel_id:
@@ -69,6 +78,12 @@ class ParserBot:
                 return False
             logger.info("✅ PostgreSQL connected")
 
+            # 1a. Гарантируем схему (миграция для существующего тома БД)
+            logger.info("Ensuring database schema...")
+            if not await self.db.ensure_schema():
+                logger.error("Failed to ensure database schema, exiting")
+                return False
+
             # 2. Инициализация процессора сообщений
             logger.info("Initializing message processor...")
             self.processor = MessageProcessor(
@@ -87,6 +102,17 @@ class ParserBot:
             # api_id/api_hash не используются, авторизация делается отдельно
             # сессия уже содержит авторизацию пользователя
             logger.info("Initializing Telegram client...")
+
+            # session.session создаётся администратором вручную вне приложения
+            # и монтируется в контейнер; в рантайме сессия не создаётся.
+            session_path = os.path.join("/app/parser", "session.session")
+            if not os.path.exists(session_path):
+                logger.error(
+                    f"❌ Session file not found: {session_path}. "
+                    "Файл session.session должен быть создан администратором "
+                    "вручную и смонтирован в контейнер (volume)."
+                )
+                return False
 
             try:
                 proxy_host = os.getenv('SOCKS5_HOST') or os.getenv('PROXY_HOST')
@@ -144,21 +170,20 @@ class ParserBot:
             return False
 
     async def _load_chat_history(self):
-        """Загрузить последние сообщения из целевого канала."""
+        """Уложить последние сообщения канала в очередь обработки (бэкфилл)."""
         try:
             logger.info(f"Loading history from channel {self.channel_id}...")
-            
-            # Клиент уже подключен из initialize(), только диагностика
-            logger.info(f"Client state - is_connected: {self.app.is_connected}, is_initialized: {self.app.is_initialized}")
 
+            count = 0
             async for message in self.app.get_chat_history(
                 chat_id=self.channel_id,
                 limit=25
             ):
-                await self._process_message(message)
+                await self._message_queue.put(message)
+                count += 1
 
-            logger.info("✅ Chat history loaded")
-            
+            logger.info(f"✅ Chat history queued: {count} messages")
+
         except Exception as e:
             logger.error(f"Failed to load chat history: {e}")
 
@@ -180,27 +205,29 @@ class ParserBot:
 
         logger.info("🚀 Starting parser bot...")
 
-        # Регистрируем обработчик ТОЛЬКО для целевого канала
+        # Хендлер целевого канала: только кладёт сообщение в очередь —
+        # быстро, не блокирует апдейт-цикл pyrogram, ничего не теряет.
         target_filter = filters.chat(int(self.channel_id)) & (filters.text | filters.caption)
-        
+
         @self.app.on_message(target_filter)
         async def handle_message(client: Client, message: Message):
-            """Обработка сообщения из целевого канала."""
-            await self._process_message(message)
+            """Live-сообщение целевого канала → в очередь обработки."""
+            await self._message_queue.put(message)
 
         # Клиент уже запущен в initialize(), проверяем состояние
         try:
             if not self.app.is_connected:
                 logger.error("Telegram client is not connected - check initialization")
                 raise Exception("Telegram client not properly initialized")
-            
+
             logger.info("✅ Telegram client already running")
 
-            # Загружаем последние 5 сообщений из истории
-            await self._load_chat_history()
+            # Воркер очереди стартует до бэкфилла — сразу разбирает сообщения.
+            self._worker_task = asyncio.create_task(self._message_worker())
 
-            # Отправляем сообщение о запуске
-            await self._send_status_message("Parser started")
+            # Бэкфилл истории наполняет ту же очередь; пересечение с live
+            # снимается дедупликацией по message_id (ON CONFLICT в БД).
+            await self._load_chat_history()
 
             # Слушаем events_cleaned для удаления фото по команде pg_cron
             self._cleanup_listener_task = asyncio.create_task(
@@ -216,63 +243,88 @@ class ParserBot:
             raise
 
     @staticmethod
-    def _truncate_text(text: str) -> str:
-        """Отбросить текст начиная с маркеров 'сообщить', 'подписаться' или '|'."""
-        if not text:
-            return text
-        
-        text_lower = text.lower()
-        markers = ['сообщить', 'подписаться', '|']
-        
-        earliest_pos = len(text)
-        for marker in markers:
-            pos = text_lower.find(marker)
-            if pos != -1 and pos < earliest_pos:
-                earliest_pos = pos
-        
-        if earliest_pos < len(text):
-            return text[:earliest_pos].strip()
-        
-        return text.strip()
+    def _to_kiev(dt: Optional[datetime]) -> datetime:
+        """Привести время сообщения к киевскому поясу сразу при получении.
+
+        Telegram отдаёт время в UTC. Naive-datetime трактуется как UTC.
+        """
+        if dt is None:
+            return datetime.now(KIEV_TZ)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(KIEV_TZ)
+
+    async def _message_worker(self):
+        """Единственный воркер очереди — последовательная обработка сообщений.
+
+        Последовательность исключает гонки на пуле БД и сохраняет порядок;
+        очередь буферизует всплески, поэтому сообщения не теряются.
+        Завершается отменой задачи (CancelledError) при shutdown.
+        """
+        logger.info("Message queue worker started")
+        while True:
+            message = await self._message_queue.get()
+            try:
+                await self._process_with_retry(message)
+            finally:
+                self._message_queue.task_done()
+
+    async def _process_with_retry(self, message: Message, attempts: int = 3):
+        """Обработать сообщение с ретраями (повторы идемпотентны — ON CONFLICT)."""
+        for attempt in range(1, attempts + 1):
+            try:
+                await self._process_message(message)
+                return
+            except Exception as e:
+                if attempt < attempts:
+                    delay = 2 ** attempt
+                    logger.warning(
+                        f"Message {message.id}: attempt {attempt}/{attempts} "
+                        f"failed ({e}); retry in {delay}s"
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    self._errors += 1
+                    logger.error(
+                        f"Message {message.id}: giving up after {attempts} attempts: {e}"
+                    )
 
     async def _process_message(self, message: Message):
-        """Обработка сообщения из целевого канала."""
+        """Обработать одно сообщение канала: предобработка и сохранение события.
+
+        Исключения не подавляются — пробрасываются в _process_with_retry.
+        Сырой текст передаётся без изменений: вся предобработка централизована
+        в message_processor (text_preprocessor).
+        """
         if str(message.chat.id) != str(self.channel_id):
             logger.debug(f"Skipping message from wrong channel: {message.chat.id}")
             return
-        
+
         start_time = datetime.now(timezone.utc)
         message_id = message.id
 
-        try:
-            raw_text = message.text or message.caption or ''
-            truncated = self._truncate_text(raw_text)
-            
-            msg_data = {
-                'message_id': message.id,
-                'text': truncated.lower(),
-                'event_time': message.date or datetime.now(timezone.utc),
-                'photo': message.photo
-            }
+        msg_data = {
+            'message_id': message_id,
+            'text': message.text or message.caption or '',
+            'event_time': self._to_kiev(message.date),
+            'photo': message.photo,
+        }
 
-            if message.photo:
-                msg_data['photo_path'] = await self._download_photo(message)
+        if message.photo:
+            msg_data['photo_path'] = await self._download_photo(message)
 
-            result = await self.processor.process_message(msg_data)
+        result = await self.processor.process_message(msg_data)
 
-            if result:
-                self._messages_processed += 1
-                elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
-                logger.info(
-                    f"✅ Message {message_id} processed in {elapsed:.2f}s: "
-                    f"event_id={result['event_id']}, layer={result['layer']}"
-                )
-            else:
-                logger.warning(f"Message {message_id}: processing returned None")
-
-        except Exception as e:
-            self._errors += 1
-            logger.error(f"Error processing message {message_id}: {e}")
+        if result:
+            self._messages_processed += 1
+            elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
+            logger.info(
+                f"✅ Message {message_id} processed in {elapsed:.2f}s: "
+                f"event_id={result['event_id']}, layer={result['layer']}"
+            )
+        else:
+            # None = дубликат (ON CONFLICT) либо пустая геометрия — не ошибка.
+            logger.info(f"Message {message_id}: skipped (duplicate or no geometry)")
 
     async def _download_photo(self, message: Message) -> Optional[str]:
         """
@@ -352,14 +404,6 @@ class ParserBot:
                 except Exception:
                     pass
 
-    async def _send_status_message(self, text: str):
-        """Отправить сообщение о статусе (если настроено)."""
-        try:
-            # Можно реализовать отправку в лог-канал
-            pass
-        except Exception as e:
-            logger.debug(f"Failed to send status: {e}")
-
     async def shutdown(self):
         """Корректное завершение работы."""
         if not self._running:
@@ -368,8 +412,10 @@ class ParserBot:
         logger.info("Shutting down parser...")
         self._running = False
 
-        if self._cleanup_listener_task and not self._cleanup_listener_task.done():
-            self._cleanup_listener_task.cancel()
+        # Останавливаем воркер очереди и слушатель events_cleaned.
+        for task in (self._worker_task, self._cleanup_listener_task):
+            if task and not task.done():
+                task.cancel()
 
         # Останавливаем Telegram клиента
         if self.app:
@@ -392,14 +438,6 @@ class ParserBot:
             f"Parser stopped. Processed: {self._messages_processed}, "
             f"Errors: {self._errors}"
         )
-
-    def get_statistics(self) -> Dict[str, Any]:
-        """Получить статистику работы."""
-        return {
-            'running': self._running,
-            'messages_processed': self._messages_processed,
-            'errors': self._errors
-        }
 
 
 async def main():

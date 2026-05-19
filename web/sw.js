@@ -2,9 +2,11 @@
 //
 // Precaches the app shell (HTML/CSS/JS/Leaflet/icons) so the frontend launches
 // with no network. Event data is NOT cached here — it lives in localStorage
-// and arrives via WebSocket. Bump CACHE_VERSION to force a shell refresh.
+// and arrives via WebSocket.
 
-const CACHE_VERSION = 'v1';
+// __BUILD_ID__ подставляется на сборке (Dockerfile.nginx) — таймстамп билда.
+// Любой деплой меняет CACHE_VERSION → старая оболочка инвалидируется в activate.
+const CACHE_VERSION = '__BUILD_ID__';
 const SHELL_CACHE = `survival-shell-${CACHE_VERSION}`;
 const TILE_CACHE = `survival-tiles-${CACHE_VERSION}`;
 const TILE_CACHE_LIMIT = 300;

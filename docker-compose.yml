@@ -155,7 +155,9 @@ services:
       # App
       APP_HOST: 0.0.0.0
       APP_PORT: 8080
-      APP_TELEGRAM_VALIDATION: ${TELEGRAM_VALIDATION_ENABLED:-False}
+      # Безопасный дефолт: валидация Telegram включена, если явно не отключена
+      # в .env. Dev-режим (валидация off) включается осознанно.
+      APP_TELEGRAM_VALIDATION: ${TELEGRAM_VALIDATION_ENABLED:-True}
       # Optional
       WEBAPP_URL: ${WEBAPP_URL:-}
       REDIRECT_URL: ${REDIRECT_URL:-}

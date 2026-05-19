@@ -254,22 +254,18 @@ window.formatDateTime = function(dateTimeStr) {
 };
 
 /**
- * Функция обработки HTML для Telegram
+ * Экранирование текста описания события для безопасной вставки в попап.
+ *
+ * Описание приходит из Telegram-канала через парсер. Парсер уже очищает текст
+ * до простых символов (text_preprocessor.clean), но рендер не должен полагаться
+ * на это: текст всегда экранируется и интерпретируется только как текст —
+ * никакой разметки из данных события в DOM не попадает.
  */
-window.processTelegramHTML = function(html) {
-    if (!html) return '';
-
-    const tempDiv = document.createElement('div');
-    tempDiv.innerHTML = html;
-
-    tempDiv.querySelectorAll('a').forEach(link => {
-        link.setAttribute('target', '_blank');
-        link.setAttribute('rel', 'noopener noreferrer');
-        link.style.color = 'var(--tg-link-color, #2678b6)';
-        link.style.textDecoration = 'underline';
-    });
-
-    return tempDiv.innerHTML;
+window.processTelegramHTML = function(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = String(text);
+    return div.innerHTML; // textContent → innerHTML = HTML-экранированная строка
 };
 
 console.log('✅ Common functions loaded globally');

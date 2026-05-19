@@ -23,7 +23,9 @@ COPY web/ ./
 RUN npm run build && \
     for f in dist/js/common.js dist/js/core/store.js dist/js/core/ui.js dist/js/core/websocket.js; do \
         test -s "$f" || { echo "Build verification failed: $f missing or empty"; exit 1; }; \
-    done
+    done && \
+    sed -i "s/__BUILD_ID__/$(date +%Y%m%d%H%M%S)/" sw.js && \
+    grep -q "__BUILD_ID__" sw.js && { echo "sw.js CACHE_VERSION not stamped"; exit 1; } || true
 
 # =============================================================================
 # Stage 2: nginx runtime (no node, no npm, no node_modules)

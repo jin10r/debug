@@ -234,8 +234,10 @@ class ParserBot:
                 self._run_photo_cleanup_listener()
             )
 
-            # Держим соединение
+            # Держим соединение; heartbeat обновляется каждую секунду —
+            # healthcheck контейнера проверяет его свежесть (живость event loop).
             while self._running:
+                self._write_heartbeat()
                 await asyncio.sleep(1)
 
         except Exception as e:
@@ -253,6 +255,15 @@ class ParserBot:
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt.astimezone(KIEV_TZ)
+
+    @staticmethod
+    def _write_heartbeat():
+        """Обновить heartbeat-файл — healthcheck контейнера проверяет свежесть."""
+        try:
+            with open('/tmp/parser_heartbeat', 'w') as f:
+                f.write(str(int(datetime.now(timezone.utc).timestamp())))
+        except OSError:
+            pass
 
     async def _message_worker(self):
         """Единственный воркер очереди — последовательная обработка сообщений.

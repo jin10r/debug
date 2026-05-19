@@ -30,10 +30,10 @@ window.createCircle = function(map, coords, properties, strategy) {
     const latLng = L.latLng(coords[1], coords[0]);
     const marker = window.createMarker(map, latLng, properties);
 
-    // ВАЖНО: Все стратегии, начинающиеся с 'random_', считаются случайными точками
-    // Случайные маркеры НЕ должны иметь радиуса (круга) и НЕ должны кластеризоваться
-    // Они отображаются только маркером в зоне генерации случайных точек
-    if (typeof strategy === 'string' && strategy.startsWith('random_')) {
+    // Стратегия 'random' — событие без точной привязки к местности.
+    // Такие точки НЕ должны иметь радиуса (круга): радиус подразумевает
+    // точность, которой у случайной точки нет. Только маркер.
+    if (strategy === 'random') {
         return [marker]; // Только маркер, без круга
     }
 

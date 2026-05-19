@@ -72,10 +72,16 @@ window.switchTileLayer = function(tileKey) {
 // Инициализация карты и UI компонентов
 window.initializeMap = function() {
     // Инициализация карты (Leaflet)
+    // minZoom/maxZoom совпадают с диапазоном тайлов (см. TILE_PROVIDERS, 11–19).
+    // Это гарантирует, что зум карты никогда не опустится ниже minZoom тайлов:
+    // иначе markerCluster при addLayer уходит за вершину дерева кластеров
+    // (_topClusterLevel.__parent === undefined) и падает с TypeError.
     const map = L.map('map', {
         attributionControl: false,
         zoomControl: true,
-        preferCanvas: false
+        preferCanvas: false,
+        minZoom: 11,
+        maxZoom: 19
     }).setView([window.APP_CONFIG.map_center_lat, window.APP_CONFIG.map_center_lng], window.APP_CONFIG.map_default_zoom);
 
     // Проверяем сохраненный выбор тайла

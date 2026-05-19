@@ -117,17 +117,6 @@ declare global {
             };
         };
         
-        /** Telegram validator */
-        telegramValidator: {
-            validateAndInit(): Promise<boolean>;
-            getUserId(): number | null;
-            getUserName(): string | null;
-            isValid(): boolean;
-            getTelegram(): unknown;
-            loadConfig(): Promise<void>;
-            isValidationRequired(): boolean;
-            getValidationRedirectUrl(): string | null;
-        };
         
         // ==================== UTILITY FUNCTIONS ====================
         

@@ -15,7 +15,6 @@ module.exports = {
     'js/core/ui': './js/core/ui.js',
     'js/modules/popups': './js/modules/popups.js',
     'js/modules/notifications': './js/modules/notifications.js',
-    'js/telegram/validator': './js/telegram/validator.ts',
   },
   output: {
     filename: '[name].js',

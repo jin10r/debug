@@ -59,14 +59,16 @@ async def health_ready_handler(request: web.Request):
         checks['overall'] = 'unhealthy'
         logger.error(f"Database health check failed: {e}")
     
-    # Check Redis (warning only, not critical)
+    # Check Redis via RedisManager (auth/session store). Optional — degraded,
+    # не unhealthy, если недоступен. In-memory кэш событий (app['cache']) — отдельно.
     try:
-        if cache and cache._connected and cache.redis:
-            await cache.redis.ping()
+        from core.middlewares.auth import RedisManager
+        redis = await RedisManager().get_redis()
+        if redis is not None:
+            await redis.ping()
             checks['redis'] = {'status': 'healthy', 'message': 'Connected'}
         else:
-            checks['redis'] = {'status': 'degraded', 'message': 'Not connected (using memory cache)'}
-            # Not marking overall as unhealthy - Redis is optional
+            checks['redis'] = {'status': 'degraded', 'message': 'Not connected'}
     except Exception as e:
         checks['redis'] = {'status': 'degraded', 'message': f'Error: {str(e)}'}
         logger.warning(f"Redis health check failed: {e}")

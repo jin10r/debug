@@ -33,11 +33,8 @@ CREATE TABLE IF NOT EXISTS events (
     strategy VARCHAR(40) NOT NULL CHECK (strategy IN (
         'random',
         'single_match',
-        'intersection',
-        'polygon_intersection',
         'single_intersection',
-        'full_intersection_geometry',
-        'combined_geometries'
+        'polygon_intersection'
     )),
     geom GEOMETRY
 );
@@ -53,6 +50,12 @@ CREATE INDEX IF NOT EXISTS idx_events_layer ON events(layer);
 -- конфликтуют) — legacy-строки не ломаются.
 ALTER TABLE events ADD COLUMN IF NOT EXISTS message_id BIGINT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_events_message_id ON events(message_id);
+
+-- CHECK strategy сужен до 4 значений, которые реально выдают process_candidates
+-- и parser; для уже существующей таблицы пересоздаём ограничение идемпотентно.
+ALTER TABLE events DROP CONSTRAINT IF EXISTS events_strategy_check;
+ALTER TABLE events ADD CONSTRAINT events_strategy_check
+    CHECK (strategy IN ('random', 'single_match', 'single_intersection', 'polygon_intersection'));
 
 -- Метаданные для синхронизации WebSocket
 CREATE TABLE IF NOT EXISTS events_meta (

@@ -85,10 +85,6 @@ class Request:
             description, layer, strategy, geometry, matches, event_time, photo_url
         )
 
-    async def get_events_as_geojson(self, time_interval_hours: int) -> str:
-        """Fetch recent events as GeoJSON."""
-        return await self.events.get_events_as_geojson(time_interval_hours)
-
     async def get_all_streets_as_geojson(self) -> str:
         """Fetch all streets as GeoJSON."""
         return await self.streets.get_all_streets_as_geojson()
@@ -109,10 +105,6 @@ class Request:
     async def get_latest_events_update_time(self) -> Optional[Any]:
         """Get the timestamp of the last update for the events table."""
         return await self.events.get_latest_update_time()
-
-    async def cleanup_old_events(self, time_interval_hours: int) -> List[str]:
-        """Delete old events and return photo URLs."""
-        return await self.events.cleanup_old_events(time_interval_hours)
 
     async def delete_old_events(self, time_interval_minutes: int) -> None:
         """Delete old events from the database."""

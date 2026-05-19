@@ -63,38 +63,6 @@ class EventOperations:
             logger.error(f"Failed to add event: {e}", exc_info=True)
             return None
 
-    async def get_events_as_geojson(self, time_interval_hours: int) -> str:
-        """Fetch recent events as a GeoJSON FeatureCollection."""
-        query = f"""
-            SELECT json_build_object(
-                'type', 'FeatureCollection',
-                'features', COALESCE(json_agg(
-                    json_build_object(
-                        'type', 'Feature',
-                        'geometry', ST_AsGeoJSON(geom)::json,
-                        'properties', json_build_object(
-                            'id', id,
-                            'description', description,
-                            'layer', layer,
-                            'strategy', strategy,
-                            'photo_url', photo_url,
-                            'matches', matches,
-                            'time', event_time
-                        )
-                    )
-                ), '[]'::json)
-            )
-            FROM events
-            WHERE event_time >= NOW() - interval '{time_interval_hours} hours'
-        """
-        try:
-            async with self.db.pool.acquire() as connection:
-                result = await connection.fetchval(query)
-            return result if result else '{"type": "FeatureCollection", "features": []}'
-        except Exception as e:
-            logger.error(f"Failed to fetch events as GeoJSON: {e}")
-            return '{"type": "FeatureCollection", "features": []}'
-
     async def get_filtered_events_as_geojson(
         self,
         time_interval_minutes: int,
@@ -163,27 +131,6 @@ class EventOperations:
         except Exception as e:
             logger.error(f"Failed to fetch filtered events as GeoJSON: {e}", exc_info=True)
             return {'type': 'FeatureCollection', 'features': []}
-
-    async def cleanup_old_events(self, time_interval_hours: int) -> List[str]:
-        """Delete old events and return photo URLs for deletion."""
-        query = f"""
-            WITH deleted AS (
-                DELETE FROM events
-                WHERE event_time < NOW() - interval '{time_interval_hours} hours'
-                RETURNING photo_url
-            )
-            SELECT photo_url FROM deleted WHERE photo_url IS NOT NULL;
-        """
-        try:
-            async with self.db.pool.acquire() as connection:
-                records = await connection.fetch(query)
-            photo_urls = [dict(record)['photo_url'] for record in records if dict(record).get('photo_url')]
-            if photo_urls:
-                logger.info(f"Deleted {len(photo_urls)} old events and their photos.")
-            return photo_urls
-        except Exception as e:
-            logger.error(f"Failed to clean up old events: {e}")
-            return []
 
     async def delete_old_events(self, time_interval_minutes: int) -> None:
         """Delete events older than specified time interval."""

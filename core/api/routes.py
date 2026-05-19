@@ -20,11 +20,6 @@ from core.api.config import (
     get_config_handler
 )
 
-from core.api.location import (
-    post_location_search_handler,
-    get_location_batch_search_handler
-)
-
 from core.api.websocket import websocket_handler
 
 from core.api.auth import (
@@ -62,10 +57,6 @@ def setup_routes(app: web.Application):
 
     # Configuration API (POST для безопасности — не логируются параметры)
     app.router.add_post('/api/config', get_config_handler)
-
-    # Location search API (POST для безопасности — query может содержать чувствительные данные)
-    app.router.add_post('/api/location', post_location_search_handler)
-    app.router.add_post('/api/location/batch', get_location_batch_search_handler)
 
     # WebSocket route
     app.router.add_get('/ws', websocket_handler)

@@ -2,7 +2,7 @@
   "compilerOptions": {
     "target": "ES2020",
     "module": "ESNext",
-    "moduleResolution": "bundler",
+    "moduleResolution": "node",
     "lib": ["ES2020", "DOM"],
     "outDir": "./dist",
     "rootDir": "./js",
@@ -24,7 +24,7 @@
     "noUnusedParameters": false,
     "noImplicitReturns": false,
     "noFallthroughCasesInSwitch": true,
-    "types": ["geojson"]
+    "types": ["geojson", "leaflet"]
   },
   "include": [
     "js/**/*"

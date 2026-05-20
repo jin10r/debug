@@ -7,6 +7,36 @@
 import { EventFeature, EventFeatureCollection, AppConfig, StoreState } from './geojson';
 
 /**
+ * Leaflet type declarations (simplified)
+ */
+declare namespace L {
+    export class Map {
+        constructor(element: string | HTMLElement, options?: any);
+        setView(latlng: [number, number], zoom: number): this;
+        removeLayer(layer: any): this;
+        // ... other leaflet methods
+    }
+    
+    export class MarkerClusterGroup {
+        constructor(options?: any);
+        addLayer(layer: any): this;
+        addLayers(layers: any[]): this;
+        clearLayers(): this;
+    }
+    
+    export class LayerGroup {
+        constructor(layers?: any[]);
+        addTo(map: Map): this;
+        clearLayers(): this;
+        addLayer(layer: any): this;
+        removeLayer(layer: any): this;
+    }
+    
+    export function markerClusterGroup(options?: any): MarkerClusterGroup;
+    export function layerGroup(layers?: any[]): LayerGroup;
+}
+
+/**
  * Extended Window interface
  */
 declare global {
@@ -113,9 +143,10 @@ declare global {
         
         // ==================== MAP INSTANCES ====================
         
-        // maplibregl.Map instance (типизируем как any — модуль не имеет
-        // глобального namespace, импорт идёт через ESM)
-        currentMapInstance: any | null;
+        currentMapInstance: L.Map | null;
+        markerClusterGroup: L.MarkerClusterGroup | null;
+        geometryLayerGroup: L.LayerGroup | null;
+        randomMarkersGroup: L.LayerGroup | null;
 
         autoRefreshInterval?: number;
         
@@ -126,7 +157,7 @@ declare global {
         
         // ==================== HELPER FUNCTIONS ====================
         
-        setMapInstance: (map: any) => void;
+        setMapInstance: (map: L.Map) => void;
         updateTimeFilter: (minutes: number) => void;
         toggleLayerInStore: (layer: string) => void;
         createPopupContent: (properties: Record<string, unknown>) => string;

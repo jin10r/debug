@@ -1,405 +1,188 @@
-// ui.js — карта на MapLibre GL JS для survival_map.
-//
-// Архитектура data-driven: GeoJSON-источники + слои поверх. renderFromCache
-// делает setData; MapLibre сам диффит и перерисовывает только изменения —
-// никаких ручных «addLayer/removeLayer» на каждое событие, как было с
-// Leaflet.markercluster.
+// ui.js — UI инициализация, управление картой, попапы, оверлеи
+// Архитектурно оптимизированная версия для Telegram Mini Apps
 
-import maplibregl from 'maplibre-gl';
-
-// Доступ из других модулей (например, для маркера попапов из popups.js,
-// если понадобится в будущем).
-window.maplibregl = maplibregl;
-
-// Совместимость с предыдущей моделью (использовалось в initializeAdSquares).
+// Инициализация глобальных переменных
 window.adSquares = {};
 
-// ============================================================================
-// Тайловые провайдеры (raster для MapLibre)
-// ============================================================================
+// Доступные тайлы карт (OpenStreetMap + CartoDB Dark Matter - без API ключей)
 const TILE_PROVIDERS = {
-    osm: {
-        tiles: [
-            'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
-            'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png',
-            'https://c.tile.openstreetmap.org/{z}/{x}/{y}.png'
-        ],
-        attribution: '&copy; OpenStreetMap'
+    'osm': {
+        url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        options: {
+            subdomains: 'abc',
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+            crossOrigin: true
+        }
     },
-    dark: {
-        tiles: [
-            'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
-            'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
-            'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
-            'https://d.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png'
-        ],
-        attribution: '&copy; OpenStreetMap &copy; CARTO'
+    'dark': {
+        url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+        options: {
+            subdomains: 'abcd',
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+            crossOrigin: true
+        }
     }
 };
 
+// Текущий активный тайл
+let currentTileLayer = null;
 let currentTileKey = 'osm';
 
-function baseStyle(tileKey) {
-    const p = TILE_PROVIDERS[tileKey];
-    return {
-        version: 8,
-        sources: {
-            'raster-base': {
-                type: 'raster',
-                tiles: p.tiles,
-                tileSize: 256,
-                attribution: p.attribution
-            }
-        },
-        layers: [{
-            id: 'base-tiles',
-            type: 'raster',
-            source: 'raster-base'
-        }]
-        // glyphs не подключаем — text-field на слоях не используем.
-    };
-}
-
+// Функция для переключения тайлов
 window.switchTileLayer = function(tileKey) {
-    if (!TILE_PROVIDERS[tileKey] || tileKey === currentTileKey) return;
+    if (!TILE_PROVIDERS[tileKey] || tileKey === currentTileKey) {
+        return;
+    }
+
     const map = window.currentMapInstance;
     if (!map) {
         console.error('[switchTileLayer] Map instance not available');
         return;
     }
-    currentTileKey = tileKey;
-    try { localStorage.setItem('preferred_tile_layer', tileKey); } catch (e) {}
 
-    // setStyle пересоздаёт стиль — кастомные источники/слои нужно поднять снова
-    // после события style.load.
-    map.setStyle(baseStyle(tileKey));
-    map.once('style.load', async () => {
-        await ensureIconsLoaded(map);
-        addCustomLayers(map);
-        addQuestionOverlay(map);
-        addAdBanner(map);
-        attachLayerClickHandlers(map);
-        if (typeof window.renderFromCache === 'function') window.renderFromCache();
+    // Удаляем текущий слой
+    if (currentTileLayer) {
+        map.removeLayer(currentTileLayer);
+    }
+
+    // Создаем и добавляем новый слой
+    const provider = TILE_PROVIDERS[tileKey];
+    const newLayer = L.tileLayer(provider.url, {
+        minZoom: 11,
+        maxZoom: 19,
+        ...provider.options
     });
+
+    newLayer.addTo(map);
+    newLayer.bringToBack(); // Перемещаем тайлы на задний план
+
+    currentTileLayer = newLayer;
+    currentTileKey = tileKey;
+
+    // Сохраняем выбор в localStorage
+    try {
+        localStorage.setItem('preferred_tile_layer', tileKey);
+    } catch (e) {
+        // Игнорируем ошибки localStorage
+    }
 
     console.log('[switchTileLayer] Switched to:', tileKey);
 };
 
-// ============================================================================
-// Иконки слоёв (pig/cops/bus) — регистрируем в реестре MapLibre
-// ============================================================================
-function ensureIconsLoaded(map) {
-    const entries = Object.entries(window.ICON_URLS || {});
-    const tasks = entries.map(([layer, url]) =>
-        new Promise((resolve) => {
-            const iconId = (window.ICON_NAMES || {})[layer];
-            if (!iconId) { resolve(); return; }
-            if (map.hasImage(iconId)) { resolve(); return; }
-            map.loadImage(url).then(image => {
-                // MapLibre 4.x: { data: HTMLImageElement | ImageBitmap | ImageData }
-                const data = image && image.data ? image.data : image;
-                if (!map.hasImage(iconId)) {
-                    try { map.addImage(iconId, data); }
-                    catch (e) { console.warn('[ui] addImage failed:', iconId, e); }
-                }
-                resolve();
-            }).catch(err => {
-                console.error('[ui] icon load failed:', layer, url, err);
-                resolve();
-            });
-        })
-    );
-    return Promise.all(tasks);
-}
-
-// ============================================================================
-// Кастомные источники + слои (события)
-// ============================================================================
-function addCustomLayers(map) {
-    if (!map.getSource('events-street')) {
-        map.addSource('events-street', {
-            type: 'geojson',
-            data: { type: 'FeatureCollection', features: [] },
-            cluster: true,
-            clusterRadius: 50,
-            clusterMaxZoom: 18
-        });
-    }
-    if (!map.getSource('events-random')) {
-        map.addSource('events-random', {
-            type: 'geojson',
-            data: { type: 'FeatureCollection', features: [] }
-        });
-    }
-
-    // Кластерные кружки — размер по point_count (без текста: glyphs не
-    // подключены; число точек кодируется ступенчатым радиусом).
-    if (!map.getLayer('event-clusters')) {
-        map.addLayer({
-            id: 'event-clusters',
-            type: 'circle',
-            source: 'events-street',
-            filter: ['has', 'point_count'],
-            paint: {
-                'circle-color': 'rgba(255, 87, 51, 0.85)',
-                'circle-stroke-color': '#ffffff',
-                'circle-stroke-width': 2,
-                'circle-radius': [
-                    'step', ['get', 'point_count'],
-                    18,
-                    10, 24,
-                    30, 30,
-                    100, 38
-                ]
-            }
-        });
-    }
-
-    // Match-выражение «layer → icon-image» одинаково для street и random.
-    const iconMatch = [
-        'match', ['get', 'layer'],
-        'bus',  window.ICON_NAMES.bus,
-        'cops', window.ICON_NAMES.cops,
-        window.ICON_NAMES.pig
-    ];
-
-    if (!map.getLayer('event-points-street')) {
-        map.addLayer({
-            id: 'event-points-street',
-            type: 'symbol',
-            source: 'events-street',
-            filter: ['!', ['has', 'point_count']],
-            layout: {
-                'icon-image': iconMatch,
-                'icon-size': 1,
-                'icon-allow-overlap': true,
-                'icon-ignore-placement': true
-            }
-        });
-    }
-
-    if (!map.getLayer('event-points-random')) {
-        map.addLayer({
-            id: 'event-points-random',
-            type: 'symbol',
-            source: 'events-random',
-            layout: {
-                'icon-image': iconMatch,
-                'icon-size': 1,
-                'icon-allow-overlap': true,
-                'icon-ignore-placement': true
-            }
-        });
-    }
-}
-
-// ============================================================================
-// Click handlers для интерактивных слоёв
-// ============================================================================
-function attachLayerClickHandlers(map) {
-    // Кластер → плавный зум на раскрытие.
-    map.on('click', 'event-clusters', (e) => {
-        const features = map.queryRenderedFeatures(e.point, { layers: ['event-clusters'] });
-        if (!features.length) return;
-        const clusterId = features[0].properties.cluster_id;
-        const src = map.getSource('events-street');
-        if (!src) return;
-        src.getClusterExpansionZoom(clusterId)
-            .then(zoom => {
-                map.easeTo({
-                    center: features[0].geometry.coordinates,
-                    zoom: Math.min(zoom, 19)
-                });
-            })
-            .catch(err => console.warn('[ui] getClusterExpansionZoom failed:', err));
-    });
-
-    function openMarkerPopup(e) {
-        const feature = e.features && e.features[0];
-        if (!feature) return;
-        const coords = feature.geometry.coordinates.slice();
-        const html = window.createPopupContent(feature.properties);
-        new maplibregl.Popup({ closeButton: true, maxWidth: '400px', offset: 14 })
-            .setLngLat(coords)
-            .setHTML(html)
-            .addTo(map);
-    }
-
-    map.on('click', 'event-points-street', openMarkerPopup);
-    map.on('click', 'event-points-random', openMarkerPopup);
-
-    ['event-clusters', 'event-points-street', 'event-points-random'].forEach(layerId => {
-        map.on('mouseenter', layerId, () => { map.getCanvas().style.cursor = 'pointer'; });
-        map.on('mouseleave', layerId, () => { map.getCanvas().style.cursor = ''; });
-    });
-}
-
-// ============================================================================
-// Overlay-картинки (вопрос-зона + рекламный баннер)
-// ============================================================================
-function addQuestionOverlay(map) {
-    // bounds: [NW, NE, SE, SW] в формате [lng, lat] для MapLibre.
-    const bounds = [
-        [30.76985, 46.54304],
-        [30.89285, 46.54304],
-        [30.89285, 46.45304],
-        [30.76985, 46.45304]
-    ];
-    const url = `/assets/images/overlay.svg?v=${Date.now()}`;
-
-    if (!map.getSource('question-overlay')) {
-        map.addSource('question-overlay', { type: 'image', url, coordinates: bounds });
-    }
-    if (!map.getLayer('question-overlay-layer')) {
-        // beforeId='event-clusters' — оверлей под событиями.
-        map.addLayer({
-            id: 'question-overlay-layer',
-            type: 'raster',
-            source: 'question-overlay',
-            paint: { 'raster-opacity': 1.0 }
-        }, 'event-clusters');
-    }
-}
-
-function addAdBanner(map) {
-    const bounds = [
-        [30.92288, 46.5240],
-        [31.06208, 46.5240],
-        [31.06208, 46.4370],
-        [30.92288, 46.4370]
-    ];
-    const url = `/assets/images/banner.svg?v=${Date.now()}`;
-
-    if (!map.getSource('ad-banner')) {
-        map.addSource('ad-banner', { type: 'image', url, coordinates: bounds });
-    }
-    if (!map.getLayer('ad-banner-layer')) {
-        map.addLayer({
-            id: 'ad-banner-layer',
-            type: 'raster',
-            source: 'ad-banner',
-            paint: { 'raster-opacity': 1.0 }
-        }, 'event-clusters');
-    }
-    window.adSquares.ad1 = { bounds };
-}
-
-// Клики по оверлей-зонам ловим общим обработчиком: если в точке клика есть
-// маркер/кластер — приоритет у его попапа (слой-специфичный handler уже
-// открыл попап события).
-function attachOverlayClick(map) {
-    map.on('click', (e) => {
-        const feats = map.queryRenderedFeatures(e.point, {
-            layers: ['event-clusters', 'event-points-street', 'event-points-random']
-        });
-        if (feats.length > 0) return;
-
-        const { lng, lat } = e.lngLat;
-
-        if (lng >= 30.76985 && lng <= 30.89285 && lat >= 46.45304 && lat <= 46.54304) {
-            new maplibregl.Popup({ closeButton: true, maxWidth: '300px' })
-                .setLngLat([30.83135, 46.49804])
-                .setHTML('Здесь отображаются события не имеющие привязки к местности, либо могут быть не точными!')
-                .addTo(map);
-            return;
-        }
-
-        if (lng >= 30.92288 && lng <= 31.06208 && lat >= 46.4370 && lat <= 46.5240) {
-            const popupContent =
-                `<h3>Исходный код приложения доступен на <a href="https://github.com/iseeupigs/iseeupigs-web" target="_blank">GitHub</a></h3>`
-                + `<br>поблагодарить разработчика можно на <a href="https://bastyon.com/keep_alive_odessa?ref=PHQHKADhBPxxSwjiggV6G2BxSvy6TY1Lgb" target="_blank">bastyon</a>`;
-            new maplibregl.Popup({ closeButton: true, maxWidth: '400px' })
-                .setLngLat([lng, lat])
-                .setHTML(popupContent)
-                .addTo(map);
-        }
-    });
-}
-
-// ============================================================================
-// Главная инициализация
-// ============================================================================
+// Инициализация карты и UI компонентов
 window.initializeMap = function() {
-    // Восстановить сохранённый выбор тайла
+    // Инициализация карты (Leaflet)
+    // minZoom/maxZoom совпадают с диапазоном тайлов (см. TILE_PROVIDERS, 11–19).
+    // Это гарантирует, что зум карты никогда не опустится ниже minZoom тайлов:
+    // иначе markerCluster при addLayer уходит за вершину дерева кластеров
+    // (_topClusterLevel.__parent === undefined) и падает с TypeError.
+    const map = L.map('map', {
+        attributionControl: false,
+        zoomControl: true,
+        preferCanvas: false,
+        minZoom: 11,
+        maxZoom: 19
+    }).setView([window.APP_CONFIG.map_center_lat, window.APP_CONFIG.map_center_lng], window.APP_CONFIG.map_default_zoom);
+
+    // Проверяем сохраненный выбор тайла
     try {
-        const saved = localStorage.getItem('preferred_tile_layer');
-        if (saved && TILE_PROVIDERS[saved]) currentTileKey = saved;
-        else if (saved) localStorage.removeItem('preferred_tile_layer');
-    } catch (e) { /* ignore */ }
+        const savedTile = localStorage.getItem('preferred_tile_layer');
+        // Проверяем, что сохраненный ключ существует в TILE_PROVIDERS
+        if (savedTile && TILE_PROVIDERS[savedTile]) {
+            currentTileKey = savedTile;
+        } else if (savedTile) {
+            // Старый ключ больше не существует — очищаем localStorage
+            console.log('[initializeMap] Clearing outdated tile key from localStorage:', savedTile);
+            localStorage.removeItem('preferred_tile_layer');
+        }
+    } catch (e) {
+        // Игнорируем ошибки localStorage
+    }
 
-    // MapLibre: центр — [lng, lat]; APP_CONFIG приходит [lat, lng] отдельными полями.
-    const center = [window.APP_CONFIG.map_center_lng, window.APP_CONFIG.map_center_lat];
-    const zoom = window.APP_CONFIG.map_default_zoom;
-
-    const map = new maplibregl.Map({
-        container: 'map',
-        style: baseStyle(currentTileKey),
-        center,
-        zoom,
+    // Добавляем выбранный тайл
+    const provider = TILE_PROVIDERS[currentTileKey];
+    currentTileLayer = L.tileLayer(provider.url, {
         minZoom: 11,
         maxZoom: 19,
-        attributionControl: false,
-        // Telegram WebView: компромисс по перфомансу
-        antialias: false,
-        fadeDuration: 150
+        ...provider.options
     });
+    currentTileLayer.addTo(map);
 
-    // Нативный зум-контрол слева (правая сторона занята legend/daynight кнопками)
-    map.addControl(new maplibregl.NavigationControl({ showCompass: false, showZoom: true }), 'top-left');
+    // Иконка Day/Night — статичная, не меняется при переключении
 
+    // Устанавливаем экземпляр карты в глобальное состояние
     window.setMapInstance(map);
 
-    map.on('load', async () => {
-        await ensureIconsLoaded(map);
-        addCustomLayers(map);
-        addQuestionOverlay(map);
-        addAdBanner(map);
-        attachLayerClickHandlers(map);
-        attachOverlayClick(map);
+    // Слои карты создаются ОДИН РАЗ и переиспользуются. renderFromCache
+    // обновляет их инкрементно (diff), без пересоздания на каждое событие.
+    initializeMapLayers(map);
 
-        // Первичный рендер из store (после гидратации из localStorage)
-        if (typeof window.renderFromCache === 'function') window.renderFromCache();
-    });
-
-    // Контролы и WebSocket — независимы от готовности карты
+    // Инициализация UI компонентов
     initializeControls(map);
-    initializeInteractionControls();
-    if (typeof window.initializeWebSocket === 'function') window.initializeWebSocket();
+    addQuestionOverlay(map);
+    initializeAdSquares(map);
+
+    // Инициализация WebSocket соединения
+    window.initializeWebSocket();
 };
 
-// ============================================================================
-// Online/offline индикатор (без изменений с Leaflet-версии)
-// ============================================================================
+// Создание постоянных слоёв карты (один раз за сессию)
+function initializeMapLayers(map) {
+    window.markerClusterGroup = L.markerClusterGroup({
+        chunkedLoading: true,
+        maxClusterRadius: 50,
+        spiderfyOnMaxZoom: true,
+        showCoverageOnHover: false,
+        zoomToBoundsOnClick: true,
+        iconCreateFunction: function(cluster) {
+            const childCount = cluster.getChildCount();
+            return new L.DivIcon({
+                html: '<div style="background-color: rgba(255, 87, 51, 0.8); border-radius: 50%; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 14px;">' + childCount + '</div>',
+                className: 'marker-cluster-custom',
+                iconSize: new L.Point(40, 40)
+            });
+        }
+    });
+    window.geometryLayerGroup = L.layerGroup();
+    window.randomMarkersGroup = L.layerGroup();
+
+    map.addLayer(window.markerClusterGroup);
+    map.addLayer(window.geometryLayerGroup);
+    map.addLayer(window.randomMarkersGroup);
+}
+
+// Функция для обновления индикатора статуса соединения
 window.updateOnlineStatus = function(isOnline) {
-    const indicator = document.getElementById('connection-indicator');
-    if (!indicator) return;
-    indicator.style.display = isOnline ? 'none' : 'block';
-    if (!isOnline) indicator.textContent = '⚠️ Нет связи с сервером';
+    const connectionIndicator = document.getElementById('connection-indicator');
+    if (connectionIndicator) {
+        connectionIndicator.style.display = isOnline ? 'none' : 'block';
+        if (!isOnline) {
+            connectionIndicator.textContent = '⚠️ Нет связи с сервером';
+        }
+    }
 };
 
-// ============================================================================
-// UI контролы (свайп-слайдер панелей, time filter, day/night, легенда) —
-// не зависят от движка карты, перенесены без изменений.
-// ============================================================================
+// Функция для инициализации контролов
 function initializeControls(map) {
     const controlsContainer = document.getElementById('controlsContainer');
     const controlsSlider = document.getElementById('controlsSlider');
     const indicators = document.querySelectorAll('#controlsIndicators .dot');
 
-    if (!controlsContainer || !controlsSlider) return;
-
     let startX = 0, currentX = 0, deltaX = 0, isSwiping = false, activePanel = 0;
     const panels = Array.from(controlsSlider.querySelectorAll('.controlPanel'));
     const panelCount = Math.max(1, panels.length);
     const stepPercent = 100 / panelCount;
+    let isInitialized = false; // Флаг для отслеживания инициализации
 
-    function setPanel(idx) {
+    function setPanel(idx, skipDataLoad = false) {
         activePanel = Math.min(Math.max(idx, 0), panelCount - 1);
         controlsSlider.style.transform = `translateX(-${activePanel * stepPercent}%)`;
         indicators.forEach((el, i) => el.classList.toggle('active', i === activePanel));
+
         window.hapticFeedback('selection_changed');
     }
 
+    // Touch события
     controlsContainer.addEventListener('touchstart', e => {
         if (e.touches.length !== 1) return;
         startX = e.touches[0].clientX;
@@ -407,71 +190,100 @@ function initializeControls(map) {
         isSwiping = true;
         controlsSlider.style.transition = 'none';
     });
+
     controlsContainer.addEventListener('touchmove', e => {
         if (!isSwiping) return;
         currentX = e.touches[0].clientX;
         deltaX = currentX - startX;
         controlsSlider.style.transform = `translateX(calc(-${activePanel * stepPercent}% + ${deltaX}px))`;
     });
+
     controlsContainer.addEventListener('touchend', () => {
         if (!isSwiping) return;
         controlsSlider.style.transition = '';
-        if (Math.abs(deltaX) > 40) {
+
+        if (Math.abs(deltaX) > 40) { // minSwipe = 40
             if (deltaX < 0 && activePanel < panelCount - 1) setPanel(activePanel + 1);
             else if (deltaX > 0 && activePanel > 0) setPanel(activePanel - 1);
             else setPanel(activePanel);
         } else {
             setPanel(activePanel);
         }
+
         isSwiping = false;
         deltaX = 0;
     });
 
+    // Индикаторы
     indicators.forEach((el, idx) => {
         el.addEventListener('click', () => setPanel(idx));
     });
 
-    setPanel(0);
+    // Инициализация: устанавливаем панель 0 без загрузки данных
+    // (данные загрузит bootstrapUI() после инициализации всех компонентов)
+    setPanel(0, true);
+    isInitialized = true; // Помечаем как инициализированное после первого setPanel
 
-    // Time filter
+    // Фильтр времени
     const realtimeControls = document.querySelector('#realtimeControls .buttons');
     if (realtimeControls) {
         realtimeControls.addEventListener('click', e => {
             if (e.target.tagName !== 'BUTTON') return;
+
             window.hapticFeedback('light');
             const newFilter = parseInt(e.target.dataset.minutes, 10);
-            realtimeControls.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+            // Снимаем активный класс со всех кнопок
+            realtimeControls.querySelectorAll('button').forEach(btn => btn.classList.remove('active'));
+            // Устанавливаем активный класс на нажатую кнопку
             e.target.classList.add('active');
-            if (typeof window.updateTimeFilter === 'function') window.updateTimeFilter(newFilter);
+            // Обновляем фильтр. Перерисовка карты произойдёт реактивно —
+            // через подписку event_manager на изменения store.
+            window.updateTimeFilter(newFilter);
         });
+
+        // Устанавливаем активную кнопку в соответствии с текущим значением фильтра
         const currentFilter = (window.store && window.store.getState)
             ? window.store.getState().currentTimeFilter
             : (window.DEFAULT_TIME_FILTER || 30);
         realtimeControls.querySelector(`button[data-minutes="${currentFilter}"]`)?.classList.add('active');
+
+        // Если не нашли кнопку для текущего значения, используем значение по умолчанию
         if (!realtimeControls.querySelector('.active')) {
             realtimeControls.querySelector(`button[data-minutes="${window.DEFAULT_TIME_FILTER || 30}"]`)?.classList.add('active');
         }
     }
 
-    // Tile switcher
+    // Переключение тайлов карты
     const tileControls = document.querySelector('#mapTileControls .tile-buttons');
     if (tileControls) {
         tileControls.addEventListener('click', e => {
             if (e.target.tagName !== 'BUTTON') return;
+
             window.hapticFeedback('light');
             const tileKey = e.target.dataset.tile;
-            tileControls.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+
+            // Снимаем активный класс со всех кнопок
+            tileControls.querySelectorAll('button').forEach(btn => btn.classList.remove('active'));
+            // Устанавливаем активный класс на нажатую кнопку
             e.target.classList.add('active');
+
+            // Переключаем тайл
             window.switchTileLayer(tileKey);
         });
+
+        // Устанавливаем активную кнопку в соответствии с текущим тайлом
         const activeTileButton = tileControls.querySelector(`button[data-tile="${currentTileKey}"]`);
         if (activeTileButton) {
-            tileControls.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+            tileControls.querySelectorAll('button').forEach(btn => btn.classList.remove('active'));
             activeTileButton.classList.add('active');
         }
     }
+
+    // Кнопки взаимодействия
+    initializeInteractionControls();
 }
 
+// Функция для инициализации кнопок взаимодействия
 function initializeInteractionControls() {
     const legendBtn = document.getElementById('legendBtn');
     const dayNightBtn = document.getElementById('dayNightBtn');
@@ -480,104 +292,259 @@ function initializeInteractionControls() {
 
     legendBtn?.addEventListener('click', () => {
         window.hapticFeedback('light');
-        if (typeof window.showLegendPopup === 'function') window.showLegendPopup();
+        showLegendPopup();
     });
+
+    // Кнопка День/Ночь
     dayNightBtn?.addEventListener('click', () => {
         window.hapticFeedback('light');
         toggleDayNightMode();
     });
+
     closeBtn?.addEventListener('click', () => {
         window.hapticFeedback('light');
-        if (typeof window.hideCenterPopup === 'function') window.hideCenterPopup();
+        hideCenterPopup();
     });
+
     overlay?.addEventListener('click', () => {
         window.hapticFeedback('light');
-        if (typeof window.hideCenterPopup === 'function') window.hideCenterPopup();
+        hideCenterPopup();
     });
 }
 
+// Функция переключения режима День/Ночь
 function toggleDayNightMode() {
-    const newKey = currentTileKey === 'dark' ? 'osm' : 'dark';
-    window.switchTileLayer(newKey);
-    console.log('[DayNight] Switched to:', newKey);
+    const dayNightIcon = document.getElementById('dayNightIcon');
+    const isDarkMode = currentTileKey === 'dark';
+
+    // Переключаем между 'osm' (день) и 'dark' (ночь)
+    const newTileKey = isDarkMode ? 'osm' : 'dark';
+
+    window.switchTileLayer(newTileKey);
+
+    // Иконка daynight.svg статична — src и filter не меняются
+
+    console.log('[DayNight] Switched to:', newTileKey);
 }
 
-// ============================================================================
-// Инкрементный рендер: setData на каждый источник.
-// MapLibre сам диффит и перерисовывает изменённые точки.
-// ============================================================================
+// Функция для добавления оверлея вопроса
+function addQuestionOverlay(map) {
+    const questionBounds = L.latLngBounds(
+        [46.45304, 30.76985],
+        [46.54304, 30.89285]
+    );
+
+    // Добавляем версионирование для обхода кеша
+    const overlayUrl = `/assets/images/overlay.svg?v=${Date.now()}`;
+
+    const questionOverlay = L.imageOverlay(overlayUrl, questionBounds, {
+        interactive: true,
+        opacity: 1.0,
+        zIndex: 1000
+    }).addTo(map);
+
+    questionOverlay.on('click', () => {
+        const popup = window.createTelegramPopup(
+            "Здесь отображаются события не имеющие привязки к местности, либо могут быть не точными!"
+        );
+        popup.setLatLng([46.49804, 30.83135]).openOn(map);
+    });
+}
+
+// Функция для инициализации рекламных квадратов - использует статичный banner.svg
+function initializeAdSquares(map) {
+    console.log('[initializeAdSquares] Starting banner initialization...');
+
+    const bounds = L.latLngBounds([46.4370, 30.92288], [46.5240, 31.06208]);
+    const imageUrl = '/assets/images/banner.svg';
+    const fullUrl = imageUrl + '?v=' + Date.now();
+    console.log('[initializeAdSquares] Banner URL:', fullUrl);
+    console.log('[initializeAdSquares] Current host:', window.location.host);
+
+    const popupContent = `<h3>Исходный код приложения доступен на <a href="https://github.com/iseeupigs/iseeupigs-web" target="_blank">GitHub</h3><br>поблагодарить разработчика можно на <a href="https://bastyon.com/keep_alive_odessa?ref=PHQHKADhBPxxSwjiggV6G2BxSvy6TY1Lgb" target="_blank">bastyon</a>`;
+
+    if (!window.adSquares.ad1) {
+        console.log('[initializeAdSquares] Creating image overlay...');
+
+        // Test image loading
+        const testImg = new Image();
+        testImg.onload = function() {
+            console.log('[initializeAdSquares] Banner image preloaded successfully:', this.width, 'x', this.height);
+        };
+        testImg.onerror = function() {
+            console.error('[initializeAdSquares] Failed to preload banner image!');
+        };
+        testImg.src = fullUrl;
+
+        const overlay = L.imageOverlay(fullUrl, bounds, {
+            opacity: 1,
+            interactive: true,
+            pane: 'overlayPane',
+            className: 'ad-overlay'
+        }).addTo(map);
+
+        console.log('[initializeAdSquares] Overlay added to map');
+
+        overlay.bindPopup(popupContent, window.DEFAULT_POPUP_OPTIONS);
+        window.adSquares.ad1 = overlay;
+
+        // Check if overlay is actually visible
+        overlay.on('load', function() {
+            console.log('[initializeAdSquares] Banner image loaded on map');
+        });
+        overlay.on('error', function() {
+            console.error('[initializeAdSquares] Banner image failed to load on map');
+        });
+    } else {
+        console.log('[initializeAdSquares] Banner already exists, skipping');
+    }
+}
+
+
+// =============================================================================
+// Инкрементный рендер карты
+//
+// renderedById хранит, какие Leaflet-слои созданы для каждого id события и в
+// какую группу они добавлены. На каждый вызов renderFromCache() выполняется
+// diff отфильтрованного набора против отрисованного:
+//   - новые id            → создать слои и добавить в группы;
+//   - исчезнувшие id       → удалить слои из групп (истёк TTL / фильтр / слой);
+//   - изменившиеся feature → удалить старые слои и создать заново;
+//   - неизменные           → не трогать.
+// Добавление одного события стоит O(1) вместо полного пересоздания карты.
+// =============================================================================
+
+const renderedById = new Map();
+
+// Извлечение стабильного id из feature.
+function featureId(feature) {
+    const p = feature && feature.properties;
+    if (!p) return null;
+    if (p.id != null) return p.id;
+    if (p.event_id != null) return p.event_id;
+    if (p._id != null) return p._id;
+    if (p.uid != null) return p.uid;
+    return null;
+}
+
+// Удаление всех слоёв, отрисованных для данного id.
+function removeRenderedEvent(id) {
+    const record = renderedById.get(id);
+    if (!record) return;
+    for (const item of record.items) {
+        try {
+            item.group.removeLayer(item.layer);
+        } catch (e) {
+            // Слой мог быть уже удалён — игнорируем
+        }
+    }
+    renderedById.delete(id);
+}
+
+// Создание и добавление слоёв для одного feature.
+function addRenderedEvent(id, feature, map) {
+    if (!feature.geometry) return;
+
+    let elements;
+    switch (feature.geometry.type) {
+        case 'Point':
+            elements = window.createCircle(map, feature.geometry.coordinates, feature.properties, feature.properties.strategy);
+            break;
+        case 'LineString':
+            elements = window.createPolyline(map, feature.geometry.coordinates, feature.properties);
+            break;
+        case 'Polygon':
+            elements = window.createPolygon(map, feature.geometry.coordinates, feature.properties);
+            break;
+        default:
+            console.warn('[renderFromCache] Unsupported geometry type:', feature.geometry.type);
+            return;
+    }
+
+    const items = [];
+    for (const element of elements) {
+        if (!element) continue;
+
+        let group;
+        if (element instanceof L.Marker) {
+            // Случайные точки — отдельная некластеризуемая группа
+            group = (feature.properties.strategy === 'random')
+                ? window.randomMarkersGroup
+                : window.markerClusterGroup;
+        } else {
+            // Геометрия (круги, линии, полигоны)
+            group = window.geometryLayerGroup;
+        }
+
+        group.addLayer(element);
+        items.push({ layer: element, group: group });
+    }
+
+    renderedById.set(id, { featureRef: feature, items: items });
+}
+
+// Инкрементная синхронизация карты с отфильтрованным набором событий из store.
 window.renderFromCache = function() {
     const map = window.currentMapInstance;
     if (!map) {
         console.error('[renderFromCache] Map instance not available');
         return;
     }
-    if (!map.isStyleLoaded()) {
-        // Стиль ещё не загружен — initializeMap сам вызовет renderFromCache
-        // в map.on('load') после готовности источников.
+    if (!window.markerClusterGroup || !window.geometryLayerGroup || !window.randomMarkersGroup) {
+        console.error('[renderFromCache] Map layers not initialized');
         return;
     }
-    const streetSrc = map.getSource('events-street');
-    const randomSrc = map.getSource('events-random');
-    if (!streetSrc || !randomSrc) return;
 
-    const fc = window.getFilteredDataForRendering();
-    const features = (fc && fc.features) ? fc.features : [];
+    const geoJsonData = window.getFilteredDataForRendering();
+    const features = (geoJsonData && geoJsonData.features) ? geoJsonData.features : [];
 
-    const street = [];
-    const random = [];
-    for (const f of features) {
-        const pt = toPointFeature(f);
-        if (!pt) continue;
-        const isRandom = f.properties && f.properties.strategy === 'random';
-        (isRandom ? random : street).push(pt);
+    const nextIds = new Set();
+    let added = 0;
+    let updated = 0;
+
+    for (let i = 0; i < features.length; i++) {
+        const feature = features[i];
+        const id = featureId(feature);
+        if (id == null) continue;
+
+        nextIds.add(id);
+
+        const existing = renderedById.get(id);
+        if (existing && existing.featureRef === feature) {
+            continue; // не изменилось — пропускаем
+        }
+        if (existing) {
+            removeRenderedEvent(id); // изменилось — пересоздаём
+            updated++;
+        } else {
+            added++;
+        }
+        addRenderedEvent(id, feature, map);
     }
 
-    streetSrc.setData({ type: 'FeatureCollection', features: street });
-    randomSrc.setData({ type: 'FeatureCollection', features: random });
+    // Удаляем слои событий, выпавших из отфильтрованного набора
+    let removed = 0;
+    for (const id of Array.from(renderedById.keys())) {
+        if (!nextIds.has(id)) {
+            removeRenderedEvent(id);
+            removed++;
+        }
+    }
+
+    if (added || removed || updated) {
+        console.log('[renderFromCache] diff:', { added, updated, removed, total: nextIds.size });
+    }
 };
 
-// Привести feature к Point: для LineString — серединная точка,
-// для Polygon — центроид первого кольца. Symbol-слой принимает только Point.
-function toPointFeature(f) {
-    if (!f || !f.geometry) return null;
-    let coords = null;
-    switch (f.geometry.type) {
-        case 'Point':
-            coords = f.geometry.coordinates;
-            break;
-        case 'LineString': {
-            const c = f.geometry.coordinates;
-            if (!c || !c.length) return null;
-            coords = c[Math.floor(c.length / 2)];
-            break;
-        }
-        case 'Polygon': {
-            const ring = f.geometry.coordinates && f.geometry.coordinates[0];
-            if (!ring || !ring.length) return null;
-            let sx = 0, sy = 0;
-            for (const p of ring) { sx += p[0]; sy += p[1]; }
-            coords = [sx / ring.length, sy / ring.length];
-            break;
-        }
-        default:
-            return null;
-    }
-    if (!Array.isArray(coords) || coords.length < 2) return null;
-    return {
-        type: 'Feature',
-        geometry: { type: 'Point', coordinates: [coords[0], coords[1]] },
-        properties: f.properties || {}
-    };
-}
-
-// ============================================================================
-// Bootstrap UI — точка входа после store-гидратации и инициализации модулей.
-// renderFromCache первый раз вызовется внутри map.on('load') в initializeMap.
-// Дальнейшие обновления идут реактивно через event_manager → store.subscribe.
-// ============================================================================
+// Функция инициализации UI
 window.bootstrapUI = function() {
     window.initializeMap();
-};
 
-console.log('✅ ui.js (MapLibre GL) loaded');
+    // Первичный рендер из того, что уже есть в store (гидратация из
+    // localStorage для офлайн-отображения). Все последующие изменения
+    // отрисовываются реактивно через подписку event_manager на store —
+    // никаких таймеров-костылей.
+    requestAnimationFrame(() => {
+        window.renderFromCache();
+    });
+};

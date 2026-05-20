@@ -271,9 +271,11 @@ declare global {
         // Event tracking
         eventTracker: EventTracker;
         
-        // Map instance: maplibregl.Map (типизируем как any — глобального
-        // namespace у MapLibre нет, импорт через ESM в ui.js).
-        currentMapInstance: any;
+        // Map instances
+        currentMapInstance: any; // L.Map from leaflet
+        markerClusterGroup: any; // L.MarkerClusterGroup
+        geometryLayerGroup: any; // L.LayerGroup
+        randomMarkersGroup: any; // L.LayerGroup
         
         // Default constants
         DEFAULT_TIME_FILTER: number;

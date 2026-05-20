@@ -1,5 +1,9 @@
 """
 Structured JSON logging configuration (Docker-optimized version)
+
+Модуль импортируется и парсером, и app-сервисом. Парсер не имеет aiohttp в
+зависимостях — импорт `aiohttp.web` делаем опциональным, middleware
+определяется только если aiohttp доступен.
 """
 import logging
 import json
@@ -8,8 +12,14 @@ import traceback
 import uuid
 import os
 from datetime import datetime
-from aiohttp import web
 from contextvars import ContextVar
+
+try:
+    from aiohttp import web
+    _HAS_AIOHTTP = True
+except ImportError:
+    web = None  # type: ignore[assignment]
+    _HAS_AIOHTTP = False
 
 
 _request_id_var: ContextVar[str] = ContextVar('request_id', default='-')
@@ -128,91 +138,101 @@ def setup_logging(
 
 
 # ============================================
-# Request ID Middleware
+# Request ID Middleware (aiohttp-only — определяется лишь если aiohttp доступен)
 # ============================================
 
-@web.middleware
-async def logging_middleware(request: web.Request, handler):
-    """
-    Middleware to add request ID to all logs
-    
-    Also adds response time and status code logging
-    """
-    # Generate unique request ID
-    request_id = str(uuid.uuid4())
-    request['request_id'] = request_id
-
-    # Use ContextVar so request_id is correct in async concurrent requests
-    token = _request_id_var.set(request_id)
-
-    # Store original log record factory
-    old_factory = logging.getLogRecordFactory()
-
-    def record_factory(*args, **kwargs):
-        record = old_factory(*args, **kwargs)
-        record.request_id = _request_id_var.get()
-        return record
-
-    # Set new factory with request ID
-    logging.setLogRecordFactory(record_factory)
-    
-    # Log request
-    logger = logging.getLogger('aiohttp.access')
-    logger.info(
-        f"{request.method} {request.path}",
-        extra={
-            'method': request.method,
-            'path': request.path,
-            'remote': request.remote,
-            'user_agent': request.headers.get('User-Agent')
-        }
-    )
-    
-    # Time the request
-    import time
-    start_time = time.time()
-    
-    try:
-        response = await handler(request)
-        status = response.status
-        
-        # Add request ID to response headers
-        response.headers['X-Request-ID'] = request_id
-        
-        return response
-    
-    except web.HTTPException as e:
-        status = e.status
-        raise
-    
-    except Exception as e:
-        status = 500
-        logger.error(
-            f"Unhandled exception in {request.method} {request.path}",
-            exc_info=True,
-            extra={}
+if not _HAS_AIOHTTP:
+    # Stub для окружений без aiohttp (например, parser): попытка реально
+    # подключить middleware к aiohttp-приложению вернёт явную ошибку.
+    async def logging_middleware(*args, **kwargs):  # type: ignore[misc]
+        raise RuntimeError(
+            "logging_middleware requires aiohttp, but aiohttp is not installed "
+            "in this environment"
         )
-        raise
-    
-    finally:
-        duration = time.time() - start_time
+
+else:
+    @web.middleware
+    async def logging_middleware(request: web.Request, handler):
+        """
+        Middleware to add request ID to all logs
+
+        Also adds response time and status code logging
+        """
+        # Generate unique request ID
+        request_id = str(uuid.uuid4())
+        request['request_id'] = request_id
+
+        # Use ContextVar so request_id is correct in async concurrent requests
+        token = _request_id_var.set(request_id)
+
+        # Store original log record factory
+        old_factory = logging.getLogRecordFactory()
+
+        def record_factory(*args, **kwargs):
+            record = old_factory(*args, **kwargs)
+            record.request_id = _request_id_var.get()
+            return record
+
+        # Set new factory with request ID
+        logging.setLogRecordFactory(record_factory)
         
-        # Log response
+        # Log request
+        logger = logging.getLogger('aiohttp.access')
         logger.info(
-            f"{request.method} {request.path} -> {status}",
+            f"{request.method} {request.path}",
             extra={
                 'method': request.method,
                 'path': request.path,
-                'status': status,
-                'duration_ms': round(duration * 1000, 2)
+                'remote': request.remote,
+                'user_agent': request.headers.get('User-Agent')
             }
         )
         
-        # Restore original factory
-        logging.setLogRecordFactory(old_factory)
+        # Time the request
+        import time
+        start_time = time.time()
+        
+        try:
+            response = await handler(request)
+            status = response.status
+            
+            # Add request ID to response headers
+            response.headers['X-Request-ID'] = request_id
+            
+            return response
+        
+        except web.HTTPException as e:
+            status = e.status
+            raise
+        
+        except Exception as e:
+            status = 500
+            logger.error(
+                f"Unhandled exception in {request.method} {request.path}",
+                exc_info=True,
+                extra={}
+            )
+            raise
+        
+        finally:
+            duration = time.time() - start_time
+            
+            # Log response
+            logger.info(
+                f"{request.method} {request.path} -> {status}",
+                extra={
+                    'method': request.method,
+                    'path': request.path,
+                    'status': status,
+                    'duration_ms': round(duration * 1000, 2)
+                }
+            )
+            
+            # Restore original factory
+            logging.setLogRecordFactory(old_factory)
 
-        # Restore context var
-        _request_id_var.reset(token)
+            # Restore context var
+            _request_id_var.reset(token)
 
 
 # ============================================

@@ -22,13 +22,18 @@ CREATE TABLE IF NOT EXISTS layer_keywords (
 );
 
 -- Основная таблица событий (единственная, без raw_data)
+-- Инварианты:
+--   layer — закрытое множество слоёв (см. parser/layer_classifier.py);
+--   description — ограничение 500 символов (parser limit-ит до 380 через
+--     MAX_TEXT_LENGTH, БД страхует на случай bypass).
 CREATE TABLE IF NOT EXISTS events (
     id SERIAL PRIMARY KEY,
     message_id BIGINT,                 -- Telegram message id (дедупликация)
     event_time TIMESTAMPTZ NOT NULL,
-    description TEXT NOT NULL,
+    description TEXT NOT NULL CHECK (char_length(description) <= 500),
     photo_url TEXT,
-    layer TEXT NOT NULL DEFAULT 'pig',
+    layer TEXT NOT NULL DEFAULT 'pig'
+        CHECK (layer IN ('pig', 'cops', 'bus', 'traffic')),
     matches JSONB,
     strategy VARCHAR(40) NOT NULL CHECK (strategy IN (
         'random',
@@ -56,6 +61,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_events_message_id ON events(message_id);
 ALTER TABLE events DROP CONSTRAINT IF EXISTS events_strategy_check;
 ALTER TABLE events ADD CONSTRAINT events_strategy_check
     CHECK (strategy IN ('random', 'single_match', 'single_intersection', 'polygon_intersection'));
+
+-- Идемпотентные ALTER-блоки для уже существующих таблиц (events.layer
+-- допустимые значения и events.description длина). На новой БД ограничения
+-- уже стоят в CREATE TABLE — DROP+ADD пересоздаёт их под тем же именем.
+ALTER TABLE events DROP CONSTRAINT IF EXISTS events_layer_check;
+ALTER TABLE events ADD CONSTRAINT events_layer_check
+    CHECK (layer IN ('pig', 'cops', 'bus', 'traffic'));
+
+ALTER TABLE events DROP CONSTRAINT IF EXISTS events_description_length;
+ALTER TABLE events ADD CONSTRAINT events_description_length
+    CHECK (char_length(description) <= 500);
 
 -- Метаданные для синхронизации WebSocket
 CREATE TABLE IF NOT EXISTS events_meta (

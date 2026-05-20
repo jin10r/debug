@@ -13,9 +13,7 @@
     <link rel="manifest" href="/manifest.webmanifest">
 
     <!-- Stylesheets -->
-    <link rel="stylesheet" href="/assets/lib/leaflet.css"/>
-    <link rel="stylesheet" href="/assets/lib/MarkerCluster.css" />
-    <link rel="stylesheet" href="/assets/lib/MarkerCluster.Default.css" />
+    <link rel="stylesheet" href="/dist/assets/lib/maplibre-gl.css"/>
     <link rel="stylesheet" href="css/styles.css">
 
     <!-- Telegram Web App -->
@@ -107,8 +105,7 @@
         </div>
     </div>
 
-    <script src="/assets/lib/leaflet.js"></script>
-    <script src="/assets/lib/leaflet.markercluster.js"></script>
+    <!-- MapLibre GL JS bundled into /dist/js/core/ui.js by webpack — no separate script tag. -->
 
     <!-- Hard validation gate + bootstrap -->
     <script>

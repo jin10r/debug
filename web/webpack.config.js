@@ -81,9 +81,12 @@ module.exports = {
   plugins: [
     new CopyPlugin({
       patterns: [
-        // Копируем только HTML файлы
+        // HTML
         { from: 'index.html', to: '.' },
-        { from: 'map.html', to: '.' }
+        { from: 'map.html', to: '.' },
+        // MapLibre GL CSS из node_modules — копируется в dist/assets/lib/,
+        // отдаётся nginx-ом и подключается из map.html.
+        { from: 'node_modules/maplibre-gl/dist/maplibre-gl.css', to: 'assets/lib/maplibre-gl.css' }
       ]
     })
   ]

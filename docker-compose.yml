@@ -6,12 +6,12 @@ services:
   # PostgreSQL - основной storage с PostGIS
   # =============================================================================
   postgres:
-    image: survival_postgres:latest
+    image: postgres:latest
     build:
       context: .
       dockerfile: Dockerfile.postgres
       network: host
-    container_name: survival_postgres
+    container_name: postgres
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
@@ -42,12 +42,12 @@ services:
   # Parser - Telegram парсер с in-memory кэшем
   # =============================================================================
   parser:
-    image: survival_parser:latest
+    image: parser:latest
     build:
       context: .
       dockerfile: Dockerfile.parser
       network: host
-    container_name: survival_parser
+    container_name: parser
     environment:
       # PostgreSQL connection
       DB_HOST: postgres
@@ -106,7 +106,7 @@ services:
   # =============================================================================
   redis:
     image: redis:7-alpine
-    container_name: survival_redis
+    container_name: redis
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru --requirepass ${REDIS_PASSWORD:-}
     volumes:
       - redis_data:/data
@@ -130,12 +130,12 @@ services:
   # App - API сервер (опционально)
   # =============================================================================
   app:
-    image: survival_app:latest
+    image: core:latest
     build:
       context: .
       dockerfile: Dockerfile
       network: host
-    container_name: survival_app
+    container_name: core
     environment:
       # Database
       DB_HOST: postgres
@@ -195,12 +195,12 @@ services:
   # Nginx - reverse proxy
   # =============================================================================
   nginx:
-    image: survival_nginx:latest
+    image: nginx:latest
     build:
       context: .
       dockerfile: Dockerfile.nginx
       network: host
-    container_name: survival_nginx
+    container_name: web
     ports:
       - "80:80"
     volumes:
@@ -228,8 +228,8 @@ services:
   # DB Backup - ежедневный pg_dump в отдельный том (retention 7)
   # =============================================================================
   db-backup:
-    image: survival_postgres:latest
-    container_name: survival_db_backup
+    image: postgres:latest
+    container_name: db_backup
     environment:
       PGPASSWORD: ${POSTGRES_PASSWORD:-postgres}
     volumes:
@@ -243,6 +243,13 @@ services:
     command:
       - |
         echo "DB backup service started (daily, retention 7)"
+        # depends_on: service_healthy не гарантирует accept_conn до прогрева
+        # пула — даём postgres дополнительные секунды и только потом первый дамп.
+        until pg_isready -h postgres -U postgres -d postgres -q; do
+          echo "waiting for postgres..."
+          sleep 2
+        done
+        echo "postgres reachable, starting backup loop"
         while true; do
           ts=$$(date +%Y%m%d_%H%M%S)
           if pg_dump -h postgres -U postgres -d postgres -Fc -f /backups/survival_$$ts.dump; then

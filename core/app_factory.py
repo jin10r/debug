@@ -39,7 +39,7 @@ async def _run_bot_polling(app: web.Application):
         return
 
     delay = 30
-    max_delay = 300
+    max_delay = 60  # 60s вместо 300s — graceful shutdown не должен ждать 5 минут
 
     while not shutdown_event.is_set():
         try:
@@ -285,21 +285,32 @@ async def create_app():
     setup_metrics_routes(app)
     setup_routes(app)
 
-    # CORS: credentials only allowed for explicit origins, never for wildcard
-    allowed_origins = [o.strip() for o in os.getenv('ALLOWED_ORIGINS', '*').split(',')]
-    cors_defaults = {
-        origin: aiohttp_cors.ResourceOptions(
-            allow_credentials=(origin != '*'),
-            expose_headers="*",
-            allow_headers="*",
-            allow_methods=["GET", "POST", "OPTIONS"]
-        )
-        for origin in allowed_origins
-    }
+    # CORS: фронтенд приходит через тот же nginx (same-origin) — CORS вообще
+    # не нужен в нормальном режиме. Если ALLOWED_ORIGINS не задан или равен
+    # '*', НЕ включаем CORS (закрытое API, кросс-доменные запросы блокирует
+    # браузер). Только при явно перечисленных origins-ах включаем CORS с
+    # credentials на каждый перечисленный домен.
+    allowed_origins_raw = os.getenv('ALLOWED_ORIGINS', '').strip()
+    allowed_origins = [
+        o.strip() for o in allowed_origins_raw.split(',')
+        if o.strip() and o.strip() != '*'
+    ]
 
-    cors = aiohttp_cors.setup(app, defaults=cors_defaults)
-    for route in list(app.router.routes()):
-        cors.add(route)
+    if allowed_origins:
+        cors_defaults = {
+            origin: aiohttp_cors.ResourceOptions(
+                allow_credentials=True,
+                expose_headers="*",
+                allow_headers="*",
+                allow_methods=["GET", "POST", "OPTIONS"]
+            )
+            for origin in allowed_origins
+        }
+        cors = aiohttp_cors.setup(app, defaults=cors_defaults)
+        for route in list(app.router.routes()):
+            cors.add(route)
+        logger.info(f"CORS configured for explicit origins: {allowed_origins}")
+    else:
+        logger.info("CORS disabled (same-origin only) — ALLOWED_ORIGINS not set")
 
-    logger.info(f"CORS configured for origins: {allowed_origins}")
     return app

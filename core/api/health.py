@@ -1,10 +1,41 @@
 """Health check endpoints for monitoring and orchestration"""
 import asyncio
 import logging
+import time
 from aiohttp import web
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+# TTL-кэш результата DB-probe: probe'ы летят каждые 15-30с со стороны
+# docker/nginx healthcheck — не имеет смысла каждый раз гонять SELECT 1.
+# Кэшируем результат на _DB_PROBE_TTL_SEC секунд; если за это время БД упадёт,
+# probe увидит это с задержкой до TTL, что приемлемо.
+_DB_PROBE_TTL_SEC = 5.0
+_db_probe_cache: dict = {'ts': 0.0, 'ok': False, 'error': None}
+
+
+async def _check_db_cached(db_request) -> tuple[bool, str]:
+    """Закешированная проверка PostgreSQL. Возвращает (ok, message)."""
+    now = time.monotonic()
+    if now - _db_probe_cache['ts'] < _DB_PROBE_TTL_SEC:
+        if _db_probe_cache['ok']:
+            return True, 'Connected (cached)'
+        return False, _db_probe_cache['error'] or 'Not connected (cached)'
+
+    try:
+        if db_request and db_request.db.is_connected:
+            await db_request.db.fetchval('SELECT 1')
+            _db_probe_cache.update({'ts': now, 'ok': True, 'error': None})
+            return True, 'Connected'
+        msg = 'Not connected'
+        _db_probe_cache.update({'ts': now, 'ok': False, 'error': msg})
+        return False, msg
+    except Exception as e:
+        msg = f'Error: {e}'
+        _db_probe_cache.update({'ts': now, 'ok': False, 'error': msg})
+        logger.error(f"Database health check failed: {e}")
+        return False, msg
 
 
 async def health_live_handler(request: web.Request):
@@ -45,19 +76,13 @@ async def health_ready_handler(request: web.Request):
         'overall': 'healthy'
     }
     
-    # Check PostgreSQL
-    try:
-        if db_request and db_request.db.is_connected:
-            # Simple query to verify connection
-            await db_request.db.fetchval('SELECT 1')
-            checks['database'] = {'status': 'healthy', 'message': 'Connected'}
-        else:
-            checks['database'] = {'status': 'unhealthy', 'message': 'Not connected'}
-            checks['overall'] = 'unhealthy'
-    except Exception as e:
-        checks['database'] = {'status': 'unhealthy', 'message': f'Error: {str(e)}'}
+    # Check PostgreSQL — кэшируется на 5 с (см. _check_db_cached)
+    db_ok, db_msg = await _check_db_cached(db_request)
+    if db_ok:
+        checks['database'] = {'status': 'healthy', 'message': db_msg}
+    else:
+        checks['database'] = {'status': 'unhealthy', 'message': db_msg}
         checks['overall'] = 'unhealthy'
-        logger.error(f"Database health check failed: {e}")
     
     # Check Redis via RedisManager (auth/session store). Optional — degraded,
     # не unhealthy, если недоступен. In-memory кэш событий (app['cache']) — отдельно.

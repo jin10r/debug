@@ -18,11 +18,24 @@ from pyrogram.types import Message
 
 # Настраиваем логирование на уровне модуля — до любых импортов,
 # чтобы ошибки при загрузке зависимостей были видны в docker logs.
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    force=True,
-)
+# LOG_FORMAT=json (по умолчанию, симметрично main.py app-сервиса) → JSON-логи
+# через core.utils.logging_config.JSONFormatter; LOG_FORMAT=text — человеко-
+# читаемые логи для локальной разработки.
+_LOG_LEVEL = getattr(logging, os.getenv('LOG_LEVEL', 'INFO').upper(), logging.INFO)
+_LOG_FORMAT = os.getenv('LOG_FORMAT', 'json').lower()
+
+if _LOG_FORMAT == 'json':
+    from core.utils.logging_config import JSONFormatter
+    _formatter = JSONFormatter()
+else:
+    _formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+
+_handler = logging.StreamHandler(sys.stdout)
+_handler.setFormatter(_formatter)
+logging.root.handlers = [_handler]
+logging.root.setLevel(_LOG_LEVEL)
 
 from core.settings import settings
 from .db_adapter import DBAdapter

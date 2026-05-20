@@ -61,8 +61,9 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       # Media
       EVENTS_MEDIA_DIR: /media/events
-      # Logging
+      # Logging — json для агрегации, text для локального чтения логов
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
       # Telegram proxy (optional, for blocked networks)
       SOCKS5_HOST: ${SOCKS5_HOST:-}
       PROXY_PORT: ${PROXY_PORT:-1080}
@@ -163,6 +164,12 @@ services:
       # Optional
       WEBAPP_URL: ${WEBAPP_URL:-}
       REDIRECT_URL: ${REDIRECT_URL:-}
+      # CORS — пустое значение или '*' = CORS выключен (same-origin only).
+      # Только перечисленные через запятую origins включают CORS.
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+      # Logging — json для агрегации, text для локального чтения
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
       # Media
       EVENTS_MEDIA_DIR: /media/events
     volumes:

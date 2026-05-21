@@ -14,15 +14,24 @@
     → n-граммы: ["5 фонтан", "фонтан", "5", ...]
     → rapidfuzz vs "5 ст фонтан" → score 100  ← winner
     → rapidfuzz vs "7 ст фонтан" → score ~73  ← ниже порога
+
+  "едут с 4й фонтана"
+    → лемматизация: "ехать с 4 фонтан"   ← "4й" (Anum) → "4"
+    → n-граммы: ["4 фонтан", ...]
+    → token_set_ratio("4 фонтан", "4 ст фонтан") = 100  ← winner
 """
 
 import logging
+import re
 from typing import Dict, List, Optional, Set, Tuple
 
 import mawo_pymorphy3 as pymorphy3
 from rapidfuzz import process as rf_process, fuzz
 
 from .text_preprocessor import clean
+
+# Числово-буквенные порядковые ("4й", "10-й") → числовой префикс
+_DIGIT_PREFIX_RE = re.compile(r'^(\d+)')
 
 try:
     from .settings import settings
@@ -199,9 +208,14 @@ class LexicalMatcher:
 
         # Порядковое числительное любого рода/падежа/числа → арабская цифра
         if 'Anum' in best.tag:
+            # Словесное: "четвёртый" → "4"
             digit = ORDINAL_MAP.get(best.normal_form)
             if digit:
                 return digit
+            # Цифровое: "4й", "4-й" → "4" (ORDINAL_MAP не покрывает числовые формы)
+            m = _DIGIT_PREFIX_RE.match(word)
+            if m:
+                return m.group(1)
 
         return best.normal_form
 

@@ -16,9 +16,9 @@
     → rapidfuzz vs "7 ст фонтан" → score ~73  ← ниже порога
 
   "едут с 4й фонтана"
-    → лемматизация: "ехать с 4 фонтан"   ← "4й" (Anum) → "4"
+    → лемматизация: "ехать с 4 фонтан"   ← "4й" (UNKN/Anum) → "4"
     → n-граммы: ["4 фонтан", ...]
-    → token_set_ratio("4 фонтан", "4 ст фонтан") = 100  ← winner
+    → token_set_ratio("4 фонтан", "4 фонтан") = 100  ← winner
 """
 
 import logging
@@ -30,8 +30,11 @@ from rapidfuzz import process as rf_process, fuzz
 
 from .text_preprocessor import clean
 
-# Числово-буквенные порядковые ("4й", "10-й") → числовой префикс
-_DIGIT_PREFIX_RE = re.compile(r'^(\d+)')
+# Числово-буквенные порядковые ("4й", "5ой", "10й") → числовой префикс.
+# Применяется и когда pymorphy3 помечает слово как Anum, и когда UNKN
+# (mawo_pymorphy3 возвращает UNKN для "4й", "10й" и подобных форм).
+# Суффикс должен быть кириллическим — исключаем "4g", "4b", латинские аббревиатуры.
+_NUMORD_RE = re.compile(r'^(\d+)[а-яёА-ЯЁ]+$')
 
 try:
     from .settings import settings
@@ -200,22 +203,24 @@ class LexicalMatcher:
         if word.isdigit():
             return word
 
+        # Цифровое порядковое вида "4й", "5ой", "10я" — кириллический суффикс.
+        # Проверяем до морфоанализа: mawo_pymorphy3 возвращает UNKN для таких
+        # форм и не распознаёт их как Anum, поэтому regex надёжнее тега.
+        m = _NUMORD_RE.match(word)
+        if m:
+            return m.group(1)
+
         parses = self._morph.parse(word)
         if not parses:
             return word
 
         best = parses[0]
 
-        # Порядковое числительное любого рода/падежа/числа → арабская цифра
+        # Словесное порядковое числительное любого рода/падежа ("четвёртый" → "4")
         if 'Anum' in best.tag:
-            # Словесное: "четвёртый" → "4"
             digit = ORDINAL_MAP.get(best.normal_form)
             if digit:
                 return digit
-            # Цифровое: "4й", "4-й" → "4" (ORDINAL_MAP не покрывает числовые формы)
-            m = _DIGIT_PREFIX_RE.match(word)
-            if m:
-                return m.group(1)
 
         return best.normal_form
 

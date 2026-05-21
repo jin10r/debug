@@ -166,7 +166,7 @@ class StreetOperations:
                         'type', 'Feature',
                         'geometry', ST_AsGeoJSON(geom)::json,
                         'properties', json_build_object(
-                            'name', name,
+                            'name', array_to_string(names, '|'),
                             'id', id
                         )
                     )

@@ -231,42 +231,6 @@ services:
           memory: 128M
     restart: unless-stopped
 
-  # =============================================================================
-  # DB Backup - ежедневный pg_dump в отдельный том (retention 7)
-  # =============================================================================
-  db-backup:
-    image: survival_postgres:latest
-    container_name: survival_db_backup
-    environment:
-      PGPASSWORD: ${POSTGRES_PASSWORD:-postgres}
-    volumes:
-      - pg_backups:/backups
-    networks:
-      - db
-    depends_on:
-      postgres:
-        condition: service_healthy
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        echo "DB backup service started (daily, retention 7)"
-        while true; do
-          ts=$$(date +%Y%m%d_%H%M%S)
-          if pg_dump -h postgres -U postgres -d postgres -Fc -f /backups/survival_$$ts.dump; then
-            echo "backup ok: survival_$$ts.dump"
-          else
-            echo "backup FAILED"
-          fi
-          ls -1t /backups/*.dump 2>/dev/null | tail -n +8 | xargs -r rm -f
-          sleep 86400
-        done
-    deploy:
-      resources:
-        limits:
-          cpus: '0.25'
-          memory: 128M
-    restart: unless-stopped
-
 # =============================================================================
 # Networks
 # =============================================================================
@@ -288,6 +252,4 @@ volumes:
   events_media:
     driver: local
   redis_data:
-    driver: local
-  pg_backups:
     driver: local

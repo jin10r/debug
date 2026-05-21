@@ -16,10 +16,19 @@
     <link rel="stylesheet" href="/assets/lib/leaflet.css"/>
     <link rel="stylesheet" href="/assets/lib/MarkerCluster.css" />
     <link rel="stylesheet" href="/assets/lib/MarkerCluster.Default.css" />
+    <!-- MapLibre GL JS — используется только как basemap-слой через
+         плагин @maplibre/maplibre-gl-leaflet. Leaflet остаётся хозяином
+         карты (маркеры, кластеры, попапы, оверлеи), MapLibre заменяет
+         растровые тайлы на vector-тайлы OpenFreeMap с кастомной палитрой. -->
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
     <link rel="stylesheet" href="css/styles.css">
 
     <!-- Telegram Web App -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+
+    <!-- MapLibre GL JS — без зависимости от L. Плагин (см. ниже) грузится
+         после leaflet.js, потому что расширяет L.maplibreGL. -->
+    <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 
     <!-- Synchronous setup: auth headers, default config, user info -->
     <script>
@@ -109,6 +118,11 @@
 
     <script src="/assets/lib/leaflet.js"></script>
     <script src="/assets/lib/leaflet.markercluster.js"></script>
+    <!-- maplibre-gl-leaflet расширяет L (нужно после leaflet.js). Регистрирует
+         L.maplibreGL — фабрику слоя, который рендерит MapLibre canvas внутри
+         tilePane Leaflet'а (z-index 200), pointer-events: none, поэтому все
+         клики получают Leaflet-маркеры/попапы поверх. -->
+    <script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.0.22/leaflet-maplibre-gl.js"></script>
 
     <!-- Hard validation gate + bootstrap -->
     <script>

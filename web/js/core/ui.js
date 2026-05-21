@@ -1,63 +1,145 @@
 // ui.js — UI инициализация, управление картой, попапы, оверлеи
 // Архитектурно оптимизированная версия для Telegram Mini Apps
+//
+// Карта = Leaflet 1.9. Полотно (basemap) — vector-тайлы OpenFreeMap
+// через MapLibre GL JS, встроенный в Leaflet через плагин
+// @maplibre/maplibre-gl-leaflet (L.maplibreGL). Маркеры/кластеры/попапы/
+// оверлеи остаются нативно-Leaflet'овыми и рендерятся поверх MapLibre
+// canvas (markerPane z=600, popupPane z=700 vs tilePane z=200).
+//
+// Лейблов (symbol-слои) на карте нет — все скрываются через
+// applyPaletteAndHideLabels после загрузки стиля.
 
 // Инициализация глобальных переменных
 window.adSquares = {};
 
-// Доступные тайлы карт (OpenStreetMap + CartoDB Dark Matter - без API ключей)
-const TILE_PROVIDERS = {
-    'osm': {
-        url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-        options: {
-            subdomains: 'abc',
-            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-            crossOrigin: true
-        }
+// Палитры — порт Telegram-style из libre.html. Ключи 'osm'/'dark'
+// сохранены ради совместимости с UI-кнопками и localStorage-флагом.
+const STYLE_PALETTES = {
+    osm: {
+        // Light Telegram-style
+        water: '#a6c8e6', land: '#f5f0e8', roads: '#ffffff',
+        roadsAlt: '#e8e0d4', buildings: '#d4cdc4', parks: '#a8d5a3',
+        labels: '#3d3d3d'
     },
-    'dark': {
-        url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-        options: {
-            subdomains: 'abcd',
-            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-            crossOrigin: true
-        }
+    dark: {
+        // Dark Telegram-style (тёмно-синяя суша, оранжевые primary roads)
+        water: '#62a0ea', land: '#1a2e3d', roads: '#ffbe6f',
+        roadsAlt: '#1a2e3d', buildings: '#5e5c64', parks: '#26a269',
+        labels: '#c8b58d'
     }
 };
 
-// Текущий активный тайл
-let currentTileLayer = null;
+const STYLE_URL = 'https://tiles.openfreemap.org/styles/positron';
+
+let currentTileLayer = null;     // L.maplibreGL instance
 let currentTileKey = 'osm';
 
-// Функция для переключения тайлов
+/**
+ * Классифицируем слой OpenFreeMap-стиля по id/source-layer/type —
+ * нужно, чтобы знать, какой paint-property менять (line-color для дорог,
+ * fill-color для воды и т.д.) и какие слои являются «лейблами» (symbol).
+ *
+ * Порт из libre.html.
+ */
+function classifyLayer(layer) {
+    const id = (layer.id || '').toLowerCase();
+    const srcLayer = (layer['source-layer'] || '').toLowerCase();
+    const t = layer.type;
+    if (t === 'background') return 'background';
+    if (/water|ocean|sea|lake|river|pond|reservoir/.test(id) || /water|waterway|ocean/.test(srcLayer)) return 'water';
+    if (/park|landcover|landuse_park|wood|forest|grass|cemetery|pitch|recreation|nature/.test(id)) return 'parks';
+    if (/building/.test(id) || srcLayer === 'building') return 'buildings';
+    if (/transit|rail|tram|subway|aerialway|ferry/.test(id)) return 'transit';
+    if (t === 'line' && (/road|street|highway|motorway|trunk|service|residential|tertiary|secondary|primary|track|path|tunnel|bridge|transportation/.test(id) || /transportation|road/.test(srcLayer))) {
+        if (/motorway|trunk|primary|major/.test(id)) return 'road-primary';
+        return 'road-secondary';
+    }
+    if (/boundary|admin|country|state/.test(id)) return 'boundary';
+    if (/landuse|land(?!cover)/.test(id)) return 'landuse';
+    if (t === 'symbol') return 'label';   // Все символьные слои = лейблы
+    return 'other';
+}
+
+/**
+ * Применяем палитру (Telegram-style) к загруженному style'у MapLibre
+ * через setPaintProperty + скрываем все symbol-слои (лейблы) через
+ * setLayoutProperty('visibility','none').
+ *
+ * Идемпотентно — можно вызывать многократно (day/night toggle).
+ * Кастомные слои отсутствуют (мы используем MapLibre только как
+ * basemap), поэтому setStyle тут не нужен — setPaintProperty
+ * достаточно.
+ */
+function applyPaletteAndHideLabels(glMap, palette) {
+    const layers = glMap.getStyle().layers || [];
+    layers.forEach((layer) => {
+        const id = layer.id;
+        const kind = classifyLayer(layer);
+        try {
+            switch (kind) {
+                case 'background':
+                    glMap.setPaintProperty(id, 'background-color', palette.land);
+                    break;
+                case 'landuse':
+                    if (layer.type === 'fill') glMap.setPaintProperty(id, 'fill-color', palette.land);
+                    break;
+                case 'water':
+                    if (layer.type === 'fill') glMap.setPaintProperty(id, 'fill-color', palette.water);
+                    if (layer.type === 'line') glMap.setPaintProperty(id, 'line-color', palette.water);
+                    break;
+                case 'parks':
+                    if (layer.type === 'fill') glMap.setPaintProperty(id, 'fill-color', palette.parks);
+                    if (layer.type === 'line') glMap.setPaintProperty(id, 'line-color', palette.parks);
+                    break;
+                case 'buildings':
+                    if (layer.type === 'fill') glMap.setPaintProperty(id, 'fill-color', palette.buildings);
+                    if (layer.type === 'fill-extrusion') glMap.setPaintProperty(id, 'fill-extrusion-color', palette.buildings);
+                    break;
+                case 'road-primary':
+                    glMap.setPaintProperty(id, 'line-color', palette.roads);
+                    break;
+                case 'road-secondary':
+                    glMap.setPaintProperty(id, 'line-color', palette.roadsAlt);
+                    break;
+                case 'transit':
+                    glMap.setPaintProperty(id, 'line-color', palette.roadsAlt);
+                    glMap.setLayoutProperty(id, 'visibility', 'none');
+                    break;
+                case 'boundary':
+                    glMap.setPaintProperty(id, 'line-color', palette.labels);
+                    break;
+                case 'label':
+                    // Лейблы скрываем — требование архитектуры
+                    glMap.setLayoutProperty(id, 'visibility', 'none');
+                    break;
+            }
+        } catch (_) { /* layer не поддерживает свойство */ }
+    });
+}
+
+// Функция для переключения тайлов (day/night). Один и тот же
+// style.json — меняем только палитру через setPaintProperty.
+// Кастомные слои Leaflet'а (markercluster, image overlays) живут отдельно
+// в Leaflet-панелях, MapLibre-стиль их не трогает.
 window.switchTileLayer = function(tileKey) {
-    if (!TILE_PROVIDERS[tileKey] || tileKey === currentTileKey) {
+    if (!STYLE_PALETTES[tileKey] || tileKey === currentTileKey) {
         return;
     }
 
     const map = window.currentMapInstance;
-    if (!map) {
+    if (!map || !currentTileLayer) {
         console.error('[switchTileLayer] Map instance not available');
         return;
     }
 
-    // Удаляем текущий слой
-    if (currentTileLayer) {
-        map.removeLayer(currentTileLayer);
-    }
-
-    // Создаем и добавляем новый слой
-    const provider = TILE_PROVIDERS[tileKey];
-    const newLayer = L.tileLayer(provider.url, {
-        minZoom: 11,
-        maxZoom: 19,
-        ...provider.options
-    });
-
-    newLayer.addTo(map);
-    newLayer.bringToBack(); // Перемещаем тайлы на задний план
-
-    currentTileLayer = newLayer;
     currentTileKey = tileKey;
+    const glMap = currentTileLayer.getMaplibreMap();
+    if (glMap.isStyleLoaded()) {
+        applyPaletteAndHideLabels(glMap, STYLE_PALETTES[tileKey]);
+    } else {
+        glMap.once('load', () => applyPaletteAndHideLabels(glMap, STYLE_PALETTES[tileKey]));
+    }
 
     // Сохраняем выбор в localStorage
     try {
@@ -71,11 +153,14 @@ window.switchTileLayer = function(tileKey) {
 
 // Инициализация карты и UI компонентов
 window.initializeMap = function() {
-    // Инициализация карты (Leaflet)
-    // minZoom/maxZoom совпадают с диапазоном тайлов (см. TILE_PROVIDERS, 11–19).
-    // Это гарантирует, что зум карты никогда не опустится ниже minZoom тайлов:
-    // иначе markerCluster при addLayer уходит за вершину дерева кластеров
-    // (_topClusterLevel.__parent === undefined) и падает с TypeError.
+    // Инициализация карты (Leaflet). Полотно — MapLibre vector tiles
+    // через плагин L.maplibreGL (см. ниже).
+    //
+    // minZoom/maxZoom 11–19 нужны не из-за тайлов (vector-тайлы доступны
+    // на любом зуме), а чтобы markerCluster при addLayer не уходил за
+    // вершину дерева кластеров (_topClusterLevel.__parent === undefined →
+    // TypeError). Эти границы — наследие от raster-провайдеров; оставляем
+    // для стабильности markercluster.
     const map = L.map('map', {
         attributionControl: false,
         zoomControl: true,
@@ -84,11 +169,10 @@ window.initializeMap = function() {
         maxZoom: 19
     }).setView([window.APP_CONFIG.map_center_lat, window.APP_CONFIG.map_center_lng], window.APP_CONFIG.map_default_zoom);
 
-    // Проверяем сохраненный выбор тайла
+    // Проверяем сохраненный выбор палитры
     try {
         const savedTile = localStorage.getItem('preferred_tile_layer');
-        // Проверяем, что сохраненный ключ существует в TILE_PROVIDERS
-        if (savedTile && TILE_PROVIDERS[savedTile]) {
+        if (savedTile && STYLE_PALETTES[savedTile]) {
             currentTileKey = savedTile;
         } else if (savedTile) {
             // Старый ключ больше не существует — очищаем localStorage
@@ -99,14 +183,19 @@ window.initializeMap = function() {
         // Игнорируем ошибки localStorage
     }
 
-    // Добавляем выбранный тайл
-    const provider = TILE_PROVIDERS[currentTileKey];
-    currentTileLayer = L.tileLayer(provider.url, {
-        minZoom: 11,
-        maxZoom: 19,
-        ...provider.options
-    });
-    currentTileLayer.addTo(map);
+    // MapLibre GL JS как basemap-слой Leaflet'а. Плагин maplibre-gl-leaflet
+    // создаёт <div class="leaflet-gl-layer"> внутри tilePane Leaflet'а
+    // (z-index 200) и встраивает в него maplibregl.Map; pointer-events:none
+    // → все клики получает Leaflet (маркеры, попапы поверх).
+    if (typeof L.maplibreGL !== 'function') {
+        console.error('[initializeMap] L.maplibreGL plugin not loaded — basemap will be missing');
+    } else {
+        currentTileLayer = L.maplibreGL({ style: STYLE_URL }).addTo(map);
+        const glMap = currentTileLayer.getMaplibreMap();
+        const applyPalette = () => applyPaletteAndHideLabels(glMap, STYLE_PALETTES[currentTileKey]);
+        if (glMap.isStyleLoaded()) applyPalette();
+        else glMap.once('load', applyPalette);
+    }
 
     // Иконка Day/Night — статичная, не меняется при переключении
 

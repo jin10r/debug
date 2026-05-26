@@ -11,7 +11,7 @@ services:
       context: .
       dockerfile: Dockerfile.postgres
       network: host
-    container_name: survival_postgres
+    container_name: postgres
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
@@ -47,7 +47,7 @@ services:
       context: .
       dockerfile: Dockerfile.parser
       network: host
-    container_name: survival_parser
+    container_name: parser
     environment:
       # PostgreSQL connection
       DB_HOST: postgres
@@ -107,7 +107,7 @@ services:
   # =============================================================================
   redis:
     image: redis:7-alpine
-    container_name: survival_redis
+    container_name: redis
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru --requirepass ${REDIS_PASSWORD:-}
     volumes:
       - redis_data:/data
@@ -136,7 +136,7 @@ services:
       context: .
       dockerfile: Dockerfile
       network: host
-    container_name: survival_app
+    container_name: app
     environment:
       # Database
       DB_HOST: postgres
@@ -207,7 +207,7 @@ services:
       context: .
       dockerfile: Dockerfile.nginx
       network: host
-    container_name: survival_nginx
+    container_name: nginx
     ports:
       - "80:80"
     volumes:

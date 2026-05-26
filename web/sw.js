@@ -28,7 +28,7 @@ const SHELL_ASSETS = [
     '/assets/images/daynight.svg',
     '/assets/images/legend-info.svg',
     '/assets/images/banner.svg',
-    '/assets/images/overlay.svg',
+    '/assets/images/question.svg',
     '/dist/js/common.js',
     '/dist/js/core/store.js',
     '/dist/js/core/local_cache.js',

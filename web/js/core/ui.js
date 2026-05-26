@@ -11,6 +11,42 @@ function hideMaplibreLabels(glMap) {
         .forEach(function(l) { glMap.setLayoutProperty(l.id, 'visibility', 'none'); });
 }
 
+function _applyDarkTheme(glMap) {
+    glMap.getStyle().layers
+        .filter(l => l.type === 'symbol')
+        .forEach(l => glMap.setLayoutProperty(l.id, 'visibility', 'none'));
+
+    glMap.getStyle().layers.forEach(layer => {
+        const id = (layer.id || '').toLowerCase();
+        const sl = (layer['source-layer'] || '').toLowerCase();
+        try {
+            if (layer.type === 'background') {
+                glMap.setPaintProperty(layer.id, 'background-color', '#0d1b2e');
+            } else if (layer.type === 'fill') {
+                if (id.includes('water') || sl === 'water' || sl.includes('water')) {
+                    glMap.setPaintProperty(layer.id, 'fill-color', '#4db8d4');
+                    glMap.setPaintProperty(layer.id, 'fill-opacity', 0.6);
+                } else if (id.includes('building') || sl === 'building') {
+                    glMap.setPaintProperty(layer.id, 'fill-color', '#c8ccd0');
+                    glMap.setPaintProperty(layer.id, 'fill-opacity', 0.25);
+                } else {
+                    glMap.setPaintProperty(layer.id, 'fill-color', '#0d1b2e');
+                }
+            } else if (layer.type === 'line') {
+                if (id.includes('water') || sl === 'water') {
+                    glMap.setPaintProperty(layer.id, 'line-color', '#4db8d4');
+                } else if (id.includes('motorway') || id.includes('trunk') || id.includes('primary')) {
+                    glMap.setPaintProperty(layer.id, 'line-color', '#3a7bd5');
+                } else if (id.includes('secondary') || id.includes('tertiary')) {
+                    glMap.setPaintProperty(layer.id, 'line-color', '#5b9bd5');
+                } else if (sl === 'transportation' || id.includes('road') || id.includes('street')) {
+                    glMap.setPaintProperty(layer.id, 'line-color', '#2d5a8e');
+                }
+            }
+        } catch (_) {}
+    });
+}
+
 // Доступные тайлы карт
 const TILE_PROVIDERS = {
     'vector-light': {
@@ -26,12 +62,9 @@ const TILE_PROVIDERS = {
         }
     },
     'dark': {
-        url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-        options: {
-            subdomains: 'abcd',
-            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-            crossOrigin: true
-        }
+        type: 'maplibre',
+        style: 'https://tiles.openfreemap.org/styles/liberty',
+        theme: 'dark'
     }
 };
 
@@ -63,11 +96,11 @@ window.switchTileLayer = function(tileKey) {
         newLayer = L.maplibreGL({ style: provider.style });
         newLayer.addTo(map);
         const glMap = newLayer.getMaplibreMap();
-        if (glMap.isStyleLoaded()) {
-            hideMaplibreLabels(glMap);
-        } else {
-            glMap.once('load', function() { hideMaplibreLabels(glMap); });
-        }
+        const applyTheme = provider.theme === 'dark'
+            ? () => _applyDarkTheme(glMap)
+            : () => hideMaplibreLabels(glMap);
+        if (glMap.isStyleLoaded()) { applyTheme(); }
+        else { glMap.once('load', applyTheme); }
     } else {
         newLayer = L.tileLayer(provider.url, { minZoom: 11, maxZoom: 19, ...provider.options });
         newLayer.addTo(map);
@@ -123,11 +156,11 @@ window.initializeMap = function() {
         currentTileLayer = L.maplibreGL({ style: provider.style });
         currentTileLayer.addTo(map);
         const glMap = currentTileLayer.getMaplibreMap();
-        if (glMap.isStyleLoaded()) {
-            hideMaplibreLabels(glMap);
-        } else {
-            glMap.once('load', function() { hideMaplibreLabels(glMap); });
-        }
+        const applyTheme = provider.theme === 'dark'
+            ? () => _applyDarkTheme(glMap)
+            : () => hideMaplibreLabels(glMap);
+        if (glMap.isStyleLoaded()) { applyTheme(); }
+        else { glMap.once('load', applyTheme); }
     } else {
         currentTileLayer = L.tileLayer(provider.url, { minZoom: 11, maxZoom: 19, ...provider.options });
         currentTileLayer.addTo(map);
@@ -360,7 +393,7 @@ function addQuestionOverlay(map) {
     );
 
     // Добавляем версионирование для обхода кеша
-    const overlayUrl = `/assets/images/overlay.svg?v=${Date.now()}`;
+    const overlayUrl = `/assets/images/question.svg?v=${Date.now()}`;
 
     const questionOverlay = L.imageOverlay(overlayUrl, questionBounds, {
         interactive: true,

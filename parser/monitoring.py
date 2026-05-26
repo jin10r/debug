@@ -338,6 +338,41 @@ class ParserBot:
                         f"Message {message.id}: giving up after {attempts} attempts: {e}"
                     )
 
+    @staticmethod
+    def _extract_text(message) -> str:
+        """Извлечь текст сообщения, исключив символы, ломающие UTF-16 entity-парсер pyrogram.
+
+        Pyrogram применяет Telegram-entities (bold, mention и т.д.) используя
+        UTF-16-смещения. Если символ вне BMP (emoji, code point > U+FFFF) попадает
+        на границу entity, возникает UnicodeDecodeError 'utf-16-le … unexpected end of data'.
+        При падении обращаемся к неформатированному тексту и вырезаем не-BMP символы —
+        источник проблемы — оставляя остальной контент нетронутым.
+        """
+        try:
+            return message.text or message.caption or ''
+        except UnicodeDecodeError:
+            pass
+        # entity-форматирование упало — читаем сырой текст в обход entity-парсера.
+        # pyrogram 2.x хранит неформатированный текст в _text / _caption.
+        raw = (getattr(message, '_text', None)
+               or getattr(message, '_caption', None)
+               or '')
+        if not raw:
+            raw_obj = getattr(message, '_raw', None)
+            if raw_obj:
+                raw = (getattr(raw_obj, 'message', None)
+                       or getattr(raw_obj, 'caption', None)
+                       or '')
+        # Убираем символы вне BMP — именно они создают суррогатные пары в UTF-16
+        # и вызывают смещение entity-границ.
+        stripped = ''.join(c for c in raw if ord(c) <= 0xFFFF)
+        logger.warning(
+            "Message %s: entity formatting failed (non-BMP char at entity boundary); "
+            "stripped %d char(s), processing continues without formatting",
+            getattr(message, 'id', '?'), len(raw) - len(stripped),
+        )
+        return stripped
+
     async def _process_message(self, message: Message):
         """Обработать одно сообщение канала: предобработка и сохранение события.
 
@@ -354,7 +389,7 @@ class ParserBot:
 
         msg_data = {
             'message_id': message_id,
-            'text': message.text or message.caption or '',
+            'text': self._extract_text(message),
             'event_time': self._to_kiev(message.date),
             'photo': message.photo,
         }

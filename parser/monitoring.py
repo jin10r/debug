@@ -192,7 +192,7 @@ class ParserBot:
             count = 0
             async for message in self.app.get_chat_history(
                 chat_id=self.channel_id,
-                limit=5
+                limit=25
             ):
                 await self._message_queue.put(message)
                 count += 1

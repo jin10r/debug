@@ -216,6 +216,7 @@ class MessageProcessor:
                 VALUES ($1, $2, $3, $4, $5, $6, ST_GeomFromText($7, 4326), $8::jsonb)
                 ON CONFLICT (message_id) DO NOTHING
                 RETURNING id,
+                          ST_AsGeoJSON(geom)::text AS geom_json,
                           ST_X(ST_Centroid(geom)) AS lng,
                           ST_Y(ST_Centroid(geom)) AS lat
                 """,
@@ -235,7 +236,7 @@ class MessageProcessor:
                 "SELECT pg_notify('events_new', $1::text)",
                 json_lib.dumps({
                     'type': 'Feature',
-                    'geometry': {'type': 'Point', 'coordinates': [row['lng'], row['lat']]},
+                    'geometry': json_lib.loads(row['geom_json']),
                     'properties': {
                         'id': row['id'],
                         'layer': layer,

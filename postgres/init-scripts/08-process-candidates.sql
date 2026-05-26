@@ -162,6 +162,7 @@ BEGIN
 
     -- ── Защитный fallback (NULL не должен дойти до INSERT) ───────────────────
     IF v_geom IS NULL THEN
+        RAISE WARNING 'process_candidates: первый проход вернул NULL для ids %, аварийный fallback', p_street_ids;
         SELECT ST_MakeValid(s.geom) INTO v_geom
         FROM streets s
         JOIN unnest(p_street_ids, v_scores) AS u(id, score) ON s.id = u.id

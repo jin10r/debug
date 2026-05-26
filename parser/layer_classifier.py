@@ -2,16 +2,22 @@
 
 Раньше слой определялся жёстким substring-match (`word.startswith(keyword)`),
 что давало ложные срабатывания (`пост` ловил `постель`) и не учитывало
-словоформы. Здесь и ключевые слова, и токены сообщения приводятся к начальной
-форме через mawo_pymorphy3 — поэтому `патрулём`, `патруля`, `патрули` одинаково
-матчатся с ключом `патруль`. Коды и аббревиатуры (`h1`-`h5`, `бп`, `дтп`)
-лемматизация не меняет — они матчатся как есть.
+словоформы. Сейчас и ключевые слова, и токены сообщения приводятся к
+нормальной форме через mawo_pymorphy3 — поэтому `патрулём`, `патруля`,
+`патрули` одинаково матчатся с ключом `патруль`. Коды и аббревиатуры
+(`h1`-`h5`, `бп`, `дтп`) лемматизация не меняет — они матчатся как есть.
+
+В новой архитектуре `classify()` принимает уже лемматизированный List[Lemma]
+от Morphology (общая лемматизация для матчера и классификатора — единый
+проход pymorphy3 на сообщение).
 
 Приоритет при совпадении ключей из разных слоёв: bus → cops → traffic → pig.
 """
 
 import logging
-from typing import Dict, Set
+from typing import Dict, List, Set
+
+from .morphology import Lemma, Morphology
 
 try:
     from .settings import settings
@@ -34,8 +40,8 @@ def _get_layer_keywords(layer: str) -> tuple:
 class LayerClassifier:
     """Морфологический классификатор слоя события."""
 
-    def __init__(self, morph) -> None:
-        """morph — общий экземпляр mawo_pymorphy3.MorphAnalyzer (см. LexicalMatcher)."""
+    def __init__(self, morph: Morphology) -> None:
+        """morph — Morphology обёртка (общий MorphAnalyzer на процесс)."""
         self._morph = morph
         # {layer: множество лемматизированных ключевых слов}
         self._keyword_lemmas: Dict[str, Set[str]] = {}
@@ -49,21 +55,21 @@ class LayerClassifier:
         )
 
     def _lemma(self, word: str) -> str:
-        """Начальная форма слова; для неизвестных слов и кодов — само слово."""
+        """Начальная форма ключевого слова через Morphology."""
         word = word.strip().lower()
         if not word:
             return ''
-        parses = self._morph.parse(word)
-        return parses[0].normal_form if parses else word
+        return self._morph.lemmatize_word(word).normal_form
 
-    def classify(self, cleaned_text: str) -> str:
-        """Вернуть слой по приоритету bus → cops → traffic, иначе 'pig'."""
-        if not cleaned_text:
+    def classify(self, lemmas: List[Lemma]) -> str:
+        """Слой по приоритету bus → cops → traffic, иначе 'pig'.
+
+        Принимает уже лемматизированные токены (от Morphology.lemmatize_tokens).
+        """
+        if not lemmas:
             return 'pig'
 
-        token_lemmas: Set[str] = {
-            self._lemma(token) for token in cleaned_text.split()
-        }
+        token_lemmas: Set[str] = {l.normal_form for l in lemmas if l.normal_form}
 
         for layer in _LAYER_PRIORITY:
             if self._keyword_lemmas[layer] & token_lemmas:

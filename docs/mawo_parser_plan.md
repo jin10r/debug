@@ -1,4 +1,8 @@
-# Rewrite парсера на экосистеме mawo
+# Rewrite парсера на экосистеме mawo + natasha
+
+> **Update 2026-05-26**: после Шага 0 верификации `mawo-natasha` исключён из стека
+> (сломан: Navec URL 404, NER даёт `Москва → PER`). NER — через оригинальный
+> `natasha`. Остальной стек mawo (`pymorphy3`, `razdel`) — работает.
 
 ## Контекст
 
@@ -99,17 +103,35 @@ MessageProcessor.process_message
 
 ---
 
-## Выбор компонентов mawo
+## Выбор компонентов (после верификации Шага 0)
+
+> **Корректировка после Шага 0 (2026-05-26)**: `mawo-natasha` оказался сломан —
+> Navec URL → HTTP 404, NER без правильных embeddings даёт мусорные классификации
+> (`Москва → PER`, `Малой Арнаутской → PER`). **Заменён на оригинальный `natasha`**.
 
 | Компонент | Используем? | Зачем |
 |-----------|-------------|-------|
 | `mawo-pymorphy3` | да (оставляем) | Лемматизация и POS-теги. Уже работает |
-| `mawo-razdel` | да | Корректная токенизация (аббревиатуры, инициалы) |
-| `mawo-natasha` | да | NER: извлечение LOC-сущностей из текста |
-| `mawo-slovnet` | да (как зависимость natasha) | Нейросетевые модели NER (95% F1) |
-| `mawo-core` | **нет** | Унифицированный wrapper, но скрывает контроль. Берём компоненты явно |
-| `mawo-nlp-data` | подтянется автоматически | Navec embeddings (~50 MB) — кэш в Docker layer |
+| `mawo-razdel` | да | Корректная токенизация (аббревиатуры, инициалы), `.start`/`.stop` |
+| `natasha` (**оригинальный**) | да | NER через `NewsNERTagger`: LOC/PER/ORG на capitalized тексте |
+| `navec` (зависимость natasha) | да | Pretrained embeddings (~50 MB, качаются один раз) |
+| ~~`mawo-natasha`~~ | **нет, СЛОМАН** | Navec 404; NER даёт `Москва → PER`. См. таблицу ниже |
+| ~~`mawo-slovnet`~~ | **нет** | Не нужен напрямую — natasha сам тянет slovnet через свои deps |
+| `mawo-core` | **нет** | Wrapper скрывает контроль. Берём компоненты явно |
 | `rapidfuzz` | да (оставляем) | Финальный фуззи-матч против БД улиц. Незаменим |
+
+### Почему `natasha`, а не `mawo-natasha` — данные верификации
+
+| Тест-текст | `mawo-natasha` | оригинальный `natasha` |
+|------------|----------------|------------------------|
+| "Путин посетил Москву" | `Москву → PER` ❌ | `Путин → PER`, `Москву → LOC` ✓ |
+| "На Малой Арнаутской задержали" | `Малой Арнаутской → PER` ❌ | `Малой Арнаутской → LOC` ✓ |
+| "стоит Volkswagen на Дерибасовской" | (no spans) ❌ | `Volkswagen → ORG`, `Дерибасовской → LOC` ✓ |
+| "на ольгиевском спуске" (lowercase) | (no spans) | (no spans) — оба ограничены news-tagger'ом |
+
+`mawo-natasha` при инициализации пишет `❌ Failed to download Navec 'news_v1': HTTP Error 404`
+и далее работает на дефолтных весах → произвольная классификация. Lowercase Telegram-стиль
+не покрывается ни одним NER (обучены на новостях) — это OK, T3-fallback по полному тексту это покрывает.
 
 ---
 
@@ -159,7 +181,7 @@ def to_lowercase_lemma_form(text: str) -> str:
     return _NON_ALNUM_RE.sub(' ', text).lower().strip()
 ```
 
-### `ner_extractor.py` — NER через mawo-natasha
+### `ner_extractor.py` — NER через оригинальный natasha
 
 ```python
 @dataclass
@@ -174,7 +196,7 @@ class NERExtractor:
     def initialize(self) -> bool:
         """Lazy-load модели. Не падает наружу — degraded mode если NER недоступен."""
         try:
-            from mawo_natasha import Segmenter, NewsEmbedding, NewsNERTagger, Doc
+            from natasha import Segmenter, NewsEmbedding, NewsNERTagger, Doc
             emb = NewsEmbedding()              # Navec ~50 MB
             self._segmenter = Segmenter()
             self._ner = NewsNERTagger(emb)
@@ -199,7 +221,7 @@ class NERExtractor:
         ]
 ```
 
-_API mawo-natasha верифицируется на Шаге 0 реализации — может потребовать корректировки имён._
+_API натаsha верифицировано в Шаге 0 (см. начало раздела «Выбор компонентов»)._
 
 ### `razdel_tokenizer.py` — токенизация
 
@@ -333,11 +355,11 @@ class MessageProcessor:                 # API сохранён ради monitori
 
 ## requirements.txt (parser/)
 
-Добавить (закрепить версии после Шага 0):
+Добавить (версии зафиксированы по результатам Шага 0):
 ```
-mawo-natasha>=1.0.3
-mawo-slovnet>=1.0.7
-mawo-razdel>=1.0.6
+natasha>=1.6.0           # ОРИГИНАЛЬНЫЙ (не mawo) — NewsNERTagger работает корректно
+navec>=0.10.0            # Pretrained embeddings ~50 MB, тянется natasha'ой как зависимость
+mawo-razdel>=1.0.6       # Токенизация — работает идеально
 ```
 
 Сохранить:
@@ -352,9 +374,10 @@ tzdata>=2024.1
 ```
 
 Docker:
-- Navec-эмбеддинги (~50 MB) скачиваются при `NewsEmbedding()`. В `Dockerfile.parser` добавить
-  warm-up на этапе build (одна команда `python -c "from mawo_natasha import NewsEmbedding; NewsEmbedding()"`),
-  чтобы итоговый образ содержал кэш и не качал ничего при старте контейнера.
+- Navec-эмбеддинги (~50 MB) тянутся при `NewsEmbedding()` из github (рабочий URL,
+  в отличие от mawo-natasha). В `Dockerfile.parser` добавить warm-up на этапе build:
+  `RUN python -c "from natasha import NewsEmbedding, NewsNERTagger; NewsNERTagger(NewsEmbedding())"`,
+  чтобы итоговый image содержал модели в кэше и не качал при старте контейнера.
 
 ---
 
@@ -362,8 +385,10 @@ Docker:
 
 После согласования плана и переключения на ветку `mawo_parser`:
 
-1. **Шаг 0 (верификация API)**: `pip install mawo-natasha mawo-slovnet mawo-razdel` в venv,
-   проверить точные имена импортов на минимальных примерах. Скорректировать draft-код плана.
+1. **Шаг 0 (верификация API) — ВЫПОЛНЕН 2026-05-26**: установка в venv показала
+   что `mawo-natasha` сломан (Navec HTTP 404 → мусорный NER). Решение: использовать
+   оригинальный `natasha` (NER LOC работает корректно). `mawo-razdel` и
+   `mawo-pymorphy3` валидированы — работают. См. таблицу в «Выбор компонентов».
 
 2. **Шаг 1 (parser/text_preprocessor.py)**: добавить `preprocess_light`, оставить
    `strip_tail`. Старый `clean` оставить (используется только StreetMatcher'ом

@@ -215,8 +215,9 @@ class LexicalMatcher:
     def _generate_ngrams(self, words: List[str]) -> List[str]:
         """Генерирует n-граммы длиной 1-2 из лемматизированного текста.
 
-        Условие включения: хотя бы одно слово не является стоп-словом и len >= 2.
-        Одиночные цифры допустимы только в составе многословных n-грамм.
+        Условие включения: для 1-грамм — слово значимо; для 2-грамм — оба слова
+        значимы (не стоп-слово и len≥2, либо цифра). Исключает шумовые паттерны
+        вида предлог+существительное ("по малый", "с переулок").
         """
         ngrams: List[str] = []
         n = len(words)
@@ -224,14 +225,16 @@ class LexicalMatcher:
         for size in range(1, min(3, n + 1)):
             for i in range(n - size + 1):
                 chunk = words[i:i + size]
-                meaningful = [
-                    w for w in chunk
-                    if w not in self._stopwords and len(w) >= 2
-                ]
-                # Для размера 1: одиночная цифра не является значимым словом
+                # Одиночная цифра не является значимым словом
                 if size == 1 and len(chunk) == 1 and chunk[0].isdigit():
                     continue
-                if meaningful:
+                # Значимые: не стоп-слово и len≥2, ИЛИ цифра (для "1 фонтан")
+                qualified = [
+                    w for w in chunk
+                    if (w not in self._stopwords and len(w) >= 2) or w.isdigit()
+                ]
+                # 2-грамм требует оба слова значимыми; 1-грамм — хотя бы одно
+                if len(qualified) >= size:
                     ngrams.append(' '.join(chunk))
 
         return ngrams

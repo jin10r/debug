@@ -112,7 +112,7 @@ window.createPopupContent = function(properties) {
 
     const time = properties.time ? window.formatDateTime(properties.time) : '';
     const description = properties.description ?
-        `<span style="color: var(--tg-text-color, #000000);">${window.processTelegramHTML(properties.description)}</span>` : '';
+        `<span style="color: var(--tg-text-color, #ffffff);">${window.processTelegramHTML(properties.description)}</span>` : '';
 
     const photoUrl = properties.photo_url;
     const photoHtml = photoUrl ?

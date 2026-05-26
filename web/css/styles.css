@@ -50,10 +50,20 @@ html {
     pointer-events: auto !important;
 }
 
-/* Все image overlays (включая рекламу) должны быть выше тепловой карты */
-.leaflet-image-layer {
+/* Image overlays в overlay pane — скоуп намерен: WebGL-канвас живёт в tilePane
+ * и должен оставаться pointer-events: none, иначе перехватывает тач-события
+ * кластеров в Telegram WebView. */
+.leaflet-overlay-pane .leaflet-image-layer {
     z-index: 600 !important;
     pointer-events: auto !important;
+}
+.leaflet-tile-pane .leaflet-image-layer {
+    pointer-events: none !important;
+}
+/* maplibre-gl-leaflet добавляет .maplibregl-map → position: relative на контейнер;
+ * override для корректного позиционирования в Leaflet tile-pane. */
+.leaflet-gl-layer {
+    position: absolute !important;
 }
 
 
@@ -73,7 +83,7 @@ html {
     min-width: 200px !important;
     max-width: 90vw !important;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
-    color: var(--tg-text-color, #000000); /* Добавляем цвет текста из темы Telegram */
+    color: var(--tg-text-color, #ffffff); /* Добавляем цвет текста из темы Telegram */
 }
 
 /* Стили для изображений в попапах */
@@ -87,13 +97,13 @@ html {
 
 /* Стили для всех попапов, используем темы Telegram */
 .leaflet-popup-content-wrapper {
-    background-color: var(--tg-secondary-bg-color, rgba(248, 248, 248, 0.9)) !important;
+    background-color: var(--tg-secondary-bg-color, #1a1a1a) !important;
     border-radius: 12px !important;
     box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
 }
 
 .leaflet-popup-tip {
-    background-color: var(--tg-secondary-bg-color, rgba(248, 248, 248, 0.9)) !important;
+    background-color: var(--tg-secondary-bg-color, #1a1a1a) !important;
 }
 
 #errorMessage {
@@ -437,8 +447,8 @@ input[type="checkbox"] {
 /* Стили для попапов в стиле Telegram - оставляем для совместимости, но теперь стили применяются ко всем попапам */
 .tg-styled-popup .leaflet-popup-content-wrapper,
 .tg-styled-popup .leaflet-popup-tip {
-    background-color: var(--tg-secondary-bg-color, rgba(248, 248, 248, 0.9));
-    color: var(--tg-text-color, #000000);
+    background-color: var(--tg-secondary-bg-color, #1a1a1a);
+    color: var(--tg-text-color, #ffffff);
 }
 
 .tg-styled-popup .leaflet-popup-content {
@@ -459,25 +469,25 @@ input[type="checkbox"] {
 
 /* Усиленные стили для гарантированного применения темы Telegram ко всем попапам */
 html body .leaflet-container .leaflet-popup .leaflet-popup-content-wrapper {
-    background-color: var(--tg-secondary-bg-color, rgba(248, 248, 248, 0.95)) !important; 
-    color: var(--tg-text-color, #000000) !important;
+    background-color: var(--tg-secondary-bg-color, #1a1a1a) !important;
+    color: var(--tg-text-color, #ffffff) !important;
     border-radius: 12px !important;
     box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2) !important;
 }
 
 html body .leaflet-container .leaflet-popup .leaflet-popup-tip {
-    background-color: var(--tg-secondary-bg-color, rgba(248, 248, 248, 0.95)) !important;
+    background-color: var(--tg-secondary-bg-color, #1a1a1a) !important;
 }
 
 html body .leaflet-container .leaflet-popup .leaflet-popup-content {
-    color: var(--tg-text-color, #000000) !important;
+    color: var(--tg-text-color, #ffffff) !important;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif !important;
     line-height: 1.4 !important;
 }
 
 /* Стилизуем также кнопку закрытия попапа */
 html body .leaflet-container .leaflet-popup .leaflet-popup-close-button {
-    color: var(--tg-text-color, #000000) !important;
+    color: var(--tg-text-color, #ffffff) !important;
     opacity: 0.7;
     transition: opacity 0.2s;
 }

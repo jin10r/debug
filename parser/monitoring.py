@@ -187,10 +187,12 @@ class ParserBot:
         try:
             logger.info(f"Loading history from channel {self.channel_id}...")
 
+            await self._warmup_peer()
+
             count = 0
             async for message in self.app.get_chat_history(
                 chat_id=self.channel_id,
-                limit=25
+                limit=5
             ):
                 await self._message_queue.put(message)
                 count += 1
@@ -199,6 +201,29 @@ class ParserBot:
 
         except Exception as e:
             logger.error(f"Failed to load chat history: {e}")
+
+    async def _warmup_peer(self) -> bool:
+        """Populate session peer cache before history fetch.
+
+        Pyrogram needs access_hash in session.session for numeric peer IDs.
+        Iterating get_dialogs() until we find the target channel writes it
+        without fetching the full dialog list.
+        Returns True if peer was found, False otherwise.
+        """
+        target_id = int(self.channel_id)
+        try:
+            async for dialog in self.app.get_dialogs():
+                if dialog.chat.id == target_id:
+                    logger.info(f"Peer cache warmed for channel {self.channel_id}")
+                    return True
+            logger.warning(
+                f"Channel {self.channel_id} not found in dialogs — "
+                "peer cache not warmed, history load may fail"
+            )
+            return False
+        except Exception as e:
+            logger.warning(f"Peer warmup failed ({e}) — will attempt history load anyway")
+            return False
 
     async def start(self):
         """Запуск бота."""

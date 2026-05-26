@@ -4,8 +4,19 @@
 // Инициализация глобальных переменных
 window.adSquares = {};
 
-// Доступные тайлы карт (OpenStreetMap + CartoDB Dark Matter - без API ключей)
+// Скрывает все текстовые слои (type: symbol) в уже загруженном MapLibre GL стиле.
+function hideMaplibreLabels(glMap) {
+    glMap.getStyle().layers
+        .filter(function(l) { return l.type === 'symbol'; })
+        .forEach(function(l) { glMap.setLayoutProperty(l.id, 'visibility', 'none'); });
+}
+
+// Доступные тайлы карт
 const TILE_PROVIDERS = {
+    'vector-light': {
+        type: 'maplibre',
+        style: 'https://tiles.openfreemap.org/styles/liberty'
+    },
     'osm': {
         url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
         options: {
@@ -26,7 +37,7 @@ const TILE_PROVIDERS = {
 
 // Текущий активный тайл
 let currentTileLayer = null;
-let currentTileKey = 'osm';
+let currentTileKey = 'vector-light';
 
 // Функция для переключения тайлов
 window.switchTileLayer = function(tileKey) {
@@ -47,14 +58,21 @@ window.switchTileLayer = function(tileKey) {
 
     // Создаем и добавляем новый слой
     const provider = TILE_PROVIDERS[tileKey];
-    const newLayer = L.tileLayer(provider.url, {
-        minZoom: 11,
-        maxZoom: 19,
-        ...provider.options
-    });
-
-    newLayer.addTo(map);
-    newLayer.bringToBack(); // Перемещаем тайлы на задний план
+    let newLayer;
+    if (provider.type === 'maplibre') {
+        newLayer = L.maplibreGL({ style: provider.style });
+        newLayer.addTo(map);
+        const glMap = newLayer.getMaplibreMap();
+        if (glMap.isStyleLoaded()) {
+            hideMaplibreLabels(glMap);
+        } else {
+            glMap.once('load', function() { hideMaplibreLabels(glMap); });
+        }
+    } else {
+        newLayer = L.tileLayer(provider.url, { minZoom: 11, maxZoom: 19, ...provider.options });
+        newLayer.addTo(map);
+        newLayer.bringToBack();
+    }
 
     currentTileLayer = newLayer;
     currentTileKey = tileKey;
@@ -101,12 +119,19 @@ window.initializeMap = function() {
 
     // Добавляем выбранный тайл
     const provider = TILE_PROVIDERS[currentTileKey];
-    currentTileLayer = L.tileLayer(provider.url, {
-        minZoom: 11,
-        maxZoom: 19,
-        ...provider.options
-    });
-    currentTileLayer.addTo(map);
+    if (provider.type === 'maplibre') {
+        currentTileLayer = L.maplibreGL({ style: provider.style });
+        currentTileLayer.addTo(map);
+        const glMap = currentTileLayer.getMaplibreMap();
+        if (glMap.isStyleLoaded()) {
+            hideMaplibreLabels(glMap);
+        } else {
+            glMap.once('load', function() { hideMaplibreLabels(glMap); });
+        }
+    } else {
+        currentTileLayer = L.tileLayer(provider.url, { minZoom: 11, maxZoom: 19, ...provider.options });
+        currentTileLayer.addTo(map);
+    }
 
     // Иконка Day/Night — статичная, не меняется при переключении
 
@@ -317,8 +342,8 @@ function toggleDayNightMode() {
     const dayNightIcon = document.getElementById('dayNightIcon');
     const isDarkMode = currentTileKey === 'dark';
 
-    // Переключаем между 'osm' (день) и 'dark' (ночь)
-    const newTileKey = isDarkMode ? 'osm' : 'dark';
+    // Переключаем между 'vector-light' (день) и 'dark' (ночь)
+    const newTileKey = isDarkMode ? 'vector-light' : 'dark';
 
     window.switchTileLayer(newTileKey);
 

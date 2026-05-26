@@ -104,6 +104,13 @@ class MessageProcessor:
             # Без street_id — переиндексируем все улицы.
             asyncio.create_task(_reindex(self.matcher.reindex_all, self.db_pool))
 
+    @staticmethod
+    def _sanitize_text(text: Optional[str]) -> Optional[str]:
+        """Strip lone surrogates that asyncpg cannot encode for PostgreSQL text."""
+        if not text:
+            return text
+        return text.encode('utf-8', errors='replace').decode('utf-8')
+
     async def process_message(self, msg_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Обработать одно сообщение Telegram и сохранить событие.
 
@@ -117,8 +124,8 @@ class MessageProcessor:
 
         raw_text = msg_data.get('text', '') or ''
 
-        # Предобработка: отбрасывание хвоста → очистка.
-        cleaned = clean(strip_tail(raw_text))
+        # Предобработка: отбрасывание хвоста → очистка → удаление одиночных суррогатов.
+        cleaned = self._sanitize_text(clean(strip_tail(raw_text)))
 
         # Определение слоя — над очищенным текстом, до проверки длины.
         layer = self.layer_classifier.classify(cleaned)

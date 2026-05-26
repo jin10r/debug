@@ -107,12 +107,36 @@ window.createPolygon = function(map, coords, properties) {
     return [polygon, marker];
 };
 
+// Оборачивает matched_part в <strong> в уже HTML-экранированном тексте.
+// matched_part — оригинальный n-грамм из cleaned текста события, поэтому прямой
+// поиск совпадает с description. Lookbehind/lookahead по Unicode поддерживается
+// в Chrome 62+ / Telegram WebView.
+function _highlightMatchedParts(escapedText, matches) {
+    if (!matches || !matches.length) return escapedText;
+    const parts = [...new Set(
+        matches.map(m => m.matched_part).filter(p => p && p.trim().length > 1)
+    )];
+    let result = escapedText;
+    for (const part of parts) {
+        const esc = part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const regex = new RegExp(
+            '(?<![а-яёА-ЯЁa-zA-Z0-9])' + esc + '(?![а-яёА-ЯЁa-zA-Z0-9])',
+            'gi'
+        );
+        result = result.replace(regex, m => `<strong>${m}</strong>`);
+    }
+    return result;
+}
+
 window.createPopupContent = function(properties) {
     if (!properties) return '';
 
     const time = properties.time ? window.formatDateTime(properties.time) : '';
-    const description = properties.description ?
-        `<span style="color: var(--tg-text-color, #ffffff);">${window.processTelegramHTML(properties.description)}</span>` : '';
+    const description = properties.description ? (() => {
+        const escaped = window.processTelegramHTML(properties.description);
+        const highlighted = _highlightMatchedParts(escaped, properties.matches);
+        return `<span style="color: var(--tg-text-color, #ffffff);">${highlighted}</span>`;
+    })() : '';
 
     const photoUrl = properties.photo_url;
     const photoHtml = photoUrl ?

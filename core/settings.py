@@ -89,7 +89,7 @@ class RedisConfig:
 class SimilarityConfig:
     stop_words: tuple = field(default_factory=lambda: DEFAULT_STOPWORDS)
     entity_min_word_length: int = 3  # Учитываем все слова от 3 символов
-    entity_similarity_threshold: float = 0.6  # Порог для фильтрации
+    entity_similarity_threshold: float = 0.67  # Порог для фильтрации
 
     # Поля для загрузки из БД
     db_stopwords: Set[str] = field(default_factory=set)

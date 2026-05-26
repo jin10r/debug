@@ -13,7 +13,8 @@
 CREATE OR REPLACE FUNCTION process_candidates(
     p_street_ids           INT[]   DEFAULT NULL,
     p_street_scores        FLOAT[] DEFAULT NULL,
-    p_pseudo_radius_meters FLOAT   DEFAULT 150.0
+    p_pseudo_radius_meters FLOAT   DEFAULT 150.0,
+    p_matched_parts        TEXT[]  DEFAULT NULL
 )
 RETURNS TABLE(
     result_geom     GEOMETRY,
@@ -55,12 +56,16 @@ BEGIN
             'street_id',    s.id,
             'name',         s.names[1],
             'similarity',   u.score,
-            'matched_part', 'full_text'
+            'matched_part', u.part
         ) ORDER BY u.score DESC
     ), '[]'::jsonb)
     INTO v_matches
     FROM streets s
-    JOIN unnest(p_street_ids, v_scores) AS u(id, score) ON s.id = u.id;
+    JOIN unnest(
+        p_street_ids,
+        v_scores,
+        COALESCE(p_matched_parts, ARRAY_FILL(NULL::text, ARRAY[array_length(p_street_ids, 1)]))
+    ) AS u(id, score, part) ON s.id = u.id;
 
     -- ── 1 совпадение: полная геометрия объекта ────────────────────────────────
     IF array_length(p_street_ids, 1) = 1 THEN

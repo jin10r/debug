@@ -155,10 +155,12 @@ class MessageProcessor:
 
         street_ids: list = []
         street_scores: list = []
+        street_texts: list = []
         for ent in entities:
             if ent['street_id'] not in street_ids:
                 street_ids.append(ent['street_id'])
                 street_scores.append(ent['score'])
+                street_texts.append(ent['text'])
 
         # Улиц не нашлось — случайная точка.
         if not street_ids:
@@ -178,9 +180,9 @@ class MessageProcessor:
                 SELECT result_strategy,
                        result_matches,
                        ST_AsText(result_geom) AS geom_wkt
-                FROM process_candidates($1::int[], $2::double precision[], $3::float)
+                FROM process_candidates($1::int[], $2::double precision[], $3::float, $4::text[])
                 """,
-                street_ids, scores_array, 150.0,
+                street_ids, scores_array, 150.0, street_texts,
             )
             if not pc_rows or pc_rows[0]['geom_wkt'] is None:
                 logger.warning(f"Message {message_id}: process_candidates returned no geometry")

@@ -5,8 +5,16 @@ tgcrypto>=1.2.0
 # Database
 asyncpg>=0.29.0          # PostgreSQL client
 
-# Lexical entity search + layer classification
+# Морфология + токенизация (mawo-экосистема)
 mawo-pymorphy3==1.0.4    # Russian morphological analyzer with DAWG (~15-20 MB RAM)
+mawo-razdel>=1.0.6       # Russian tokenizer/sentenizer (аббревиатуры, инициалы)
+
+# NER — оригинальный natasha (mawo-natasha сломан: Navec URL 404,
+# мусорные классификации без правильных embeddings)
+natasha>=1.6.0           # NewsNERTagger: LOC/PER/ORG из текста
+navec>=0.10.0            # Pretrained embeddings ~50 MB (тянется natasha как dep)
+
+# Фуззи-матч против alias-индекса
 rapidfuzz>=3.0.0         # Fast fuzzy string matching (C implementation, SIMD)
 
 # Configuration (через core.settings)

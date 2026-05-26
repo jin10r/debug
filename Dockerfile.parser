@@ -1,8 +1,8 @@
-# Dockerfile.parser — Parser service (pymorphy3 + rapidfuzz, CPU-only)
+# Dockerfile.parser — Parser service (mawo-razdel/pymorphy3 + natasha NER + rapidfuzz, CPU-only)
 # Multi-stage build для минимизации размера образа
 
 # =============================================================================
-# Stage 1: Builder (установка зависимостей)
+# Stage 1: Builder (установка зависимостей + warm-up моделей NER)
 # =============================================================================
 FROM python:3.11-slim AS builder
 
@@ -21,6 +21,12 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     find /root/.local -type f -name "*.pyo" -delete && \
     find /root/.local -type f -name "*.md" -delete
 
+# Warm-up: тянем модели natasha (Navec embeddings ~50 MB + slovnet NER) в /root/.cache
+# чтобы итоговый image не качал их при первом старте контейнера.
+ENV PATH="/root/.local/bin:$PATH"
+RUN python -c "from natasha import NewsEmbedding, NewsNERTagger; NewsNERTagger(NewsEmbedding())" \
+    && echo "✅ natasha NewsNERTagger models cached"
+
 # =============================================================================
 # Stage 2: Runtime (минимальный образ)
 # =============================================================================
@@ -33,6 +39,8 @@ ENV PYTHONDONTWRITEBYTECODE="1"
 ENV PATH="/home/parser/.local/bin:$PATH"
 
 COPY --from=builder /root/.local /home/parser/.local
+# Кэш моделей natasha (Navec) — переносим из builder /root/.cache в HOME пользователя parser
+COPY --from=builder /root/.cache /home/parser/.cache
 
 RUN --mount=type=cache,target=/var/cache/apt,id=parser-runtime \
     apt-get update && apt-get install -y --no-install-recommends procps \
@@ -42,7 +50,7 @@ RUN --mount=type=cache,target=/var/cache/apt,id=parser-runtime \
 RUN useradd -m -u 1000 parser && \
     chmod 1777 /tmp && \
     mkdir -p /media/events && \
-    chown -R parser:parser /app /home/parser/.local /media/events
+    chown -R parser:parser /app /home/parser/.local /home/parser/.cache /media/events
 
 COPY --chown=parser:parser parser/ ./parser/
 COPY --chown=parser:parser core/ ./core/

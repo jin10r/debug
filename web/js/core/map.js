@@ -107,10 +107,10 @@ window.createPolygon = function(map, coords, properties) {
     return [polygon, marker];
 };
 
-// Оборачивает matched_part в <strong> в уже HTML-экранированном тексте.
-// matched_part — оригинальный n-грамм из cleaned текста события, поэтому прямой
-// поиск совпадает с description. Lookbehind/lookahead по Unicode поддерживается
-// в Chrome 62+ / Telegram WebView.
+// Оборачивает слова matched_part в <strong> в уже HTML-экранированном тексте.
+// matched_part — лемматизированный n-грамм ("молодёжный виноградово").
+// Стемный regex: первые max(4, len-2) символов слова леммы + любой суффикс
+// → "молодёжн" совпадает с "молодёжной" в description.
 function _highlightMatchedParts(escapedText, matches) {
     if (!matches || !matches.length) return escapedText;
     const parts = [...new Set(
@@ -118,12 +118,16 @@ function _highlightMatchedParts(escapedText, matches) {
     )];
     let result = escapedText;
     for (const part of parts) {
-        const esc = part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const regex = new RegExp(
-            '(?<![а-яёА-ЯЁa-zA-Z0-9])' + esc + '(?![а-яёА-ЯЁa-zA-Z0-9])',
-            'gi'
-        );
-        result = result.replace(regex, m => `<strong>${m}</strong>`);
+        for (const word of part.split(/\s+/)) {
+            if (word.length < 4) continue;
+            const stem = word.slice(0, Math.max(word.length - 2, 4));
+            const stemEsc = stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const regex = new RegExp(
+                '(?<![а-яёА-ЯЁa-zA-Z0-9])' + stemEsc + '[а-яёА-ЯЁa-zA-Z0-9]*(?![а-яёА-ЯЁa-zA-Z0-9])',
+                'gi'
+            );
+            result = result.replace(regex, m => `<strong>${m}</strong>`);
+        }
     }
     return result;
 }

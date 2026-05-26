@@ -212,17 +212,14 @@ class LexicalMatcher:
 
     # -------------------------------------------------------- ngram generation
 
-    def _generate_ngrams(self, words: List[str], original_words: List[str] = None) -> List[Tuple[str, str]]:
+    def _generate_ngrams(self, words: List[str]) -> List[str]:
         """Генерирует n-граммы длиной 1-2 из лемматизированного текста.
 
-        Возвращает список пар (lemma_ngram, display_ngram), где display_ngram —
-        оригинальный (не лемматизированный) текст для хранения в matched_part.
         Условие включения: хотя бы одно слово не является стоп-словом и len >= 2.
         Одиночные цифры допустимы только в составе многословных n-грамм.
         """
-        ngrams: List[Tuple[str, str]] = []
+        ngrams: List[str] = []
         n = len(words)
-        orig = original_words if original_words is not None else words
 
         for size in range(1, min(3, n + 1)):
             for i in range(n - size + 1):
@@ -235,7 +232,7 @@ class LexicalMatcher:
                 if size == 1 and len(chunk) == 1 and chunk[0].isdigit():
                     continue
                 if meaningful:
-                    ngrams.append((' '.join(chunk), ' '.join(orig[i:i + size])))
+                    ngrams.append(' '.join(chunk))
 
         return ngrams
 
@@ -275,23 +272,22 @@ class LexicalMatcher:
         # Лемматизация текста сообщения
         lemma_phrase = self._lemmatize_phrase(text)
         words = lemma_phrase.split()
-        original_words = text.split()
         if not words:
             return []
 
         logger.debug(f"[Lexical] '{text}' → '{lemma_phrase}'")
 
         # Генерация n-грамм
-        ngrams = self._generate_ngrams(words, original_words)
+        ngrams = self._generate_ngrams(words)
         if not ngrams:
             return []
 
-        logger.debug(f"[Lexical] ngrams ({len(ngrams)}): {[ng[0] for ng in ngrams]}")
+        logger.debug(f"[Lexical] ngrams ({len(ngrams)}): {ngrams}")
 
         # Нечёткий поиск: для каждого n-грамма берём лучший совпадающий alias
         best_by_street: Dict[int, Dict] = {}
 
-        for ngram, display_ngram in ngrams:
+        for ngram in ngrams:
             ngram_len = len(ngram.split())
 
             # Унiграммы: fuzz.ratio — не допускает "дом" → "дом мебели" = 100
@@ -320,7 +316,7 @@ class LexicalMatcher:
                     best_by_street[street_id] = {
                         'street_id': street_id,
                         'matched_name': original_name,
-                        'text': display_ngram,
+                        'text': ngram,
                         'score': adjusted / 100.0,  # нормализуем в 0..1 для compat
                         '_adjusted': adjusted,       # внутренний ключ для сравнения
                         'source': 'lexical',

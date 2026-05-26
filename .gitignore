@@ -61,6 +61,7 @@ tests/test_messages.txt
 !docs/DOCKER_ARCHITECTURE.md
 !docs/PROJECT_OVERVIEW.md
 !docs/SECURITY.md
+!docs/mawo_parser_plan.md
 pg_plan3.txt
 
 # Archived migration scripts and docs

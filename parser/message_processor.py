@@ -1,9 +1,13 @@
 """Message Processor — обработка текста и сохранение событий.
 
-Конвейер на сообщение:
-  strip_tail → clean (text_preprocessor) → определение слоя (layer_classifier)
-  → при пустом/длинном тексте strategy='random', иначе лексический поиск улиц
-  (lexical_matcher) → стратегия геометрии (process_candidates) → INSERT.
+Конвейер на сообщение (NER-first архитектура):
+  strip_tail → preprocess_light (regex-чистка с сохранением регистра/пунктуации)
+  → NERExtractor.extract (LOC-спаны) || RazdelTokenizer.tokenize (токены)
+  → Morphology.lemmatize_tokens (леммы с POS)
+  → LayerClassifier.classify (lemmas) (определение слоя)
+  → если текст пустой/длинный — strategy='random'
+  → StreetMatcher.find_streets (loc_spans + lemmas → улицы T1+T3)
+  → process_candidates SQL → INSERT.
 
 Вставка идемпотентна по message_id (ON CONFLICT DO NOTHING) — повторная
 обработка одного сообщения (бэкфилл истории, ретраи воркера) не создаёт дублей.
@@ -18,8 +22,11 @@ from typing import Any, Dict, Optional
 import asyncpg
 
 from .layer_classifier import LayerClassifier
-from .lexical_matcher import LexicalMatcher, SIMILARITY_THRESHOLD, MAX_ENTITIES
-from .text_preprocessor import MAX_TEXT_LENGTH, clean, strip_tail
+from .morphology import Morphology
+from .ner_extractor import NERExtractor
+from .razdel_tokenizer import RazdelTokenizer
+from .street_matcher import StreetMatcher, SIMILARITY_THRESHOLD, MAX_ENTITIES
+from .text_preprocessor import MAX_TEXT_LENGTH, preprocess_light, strip_tail
 
 try:
     from .settings import settings
@@ -34,30 +41,38 @@ class MessageProcessor:
 
     def __init__(self, db_pool: asyncpg.Pool):
         self.db_pool = db_pool
-        self.matcher = LexicalMatcher()
-        # LayerClassifier переиспользует MorphAnalyzer из LexicalMatcher —
-        # один экземпляр анализатора на процесс (экономия ~15-20 МБ RAM).
-        self.layer_classifier = LayerClassifier(self.matcher.morph)
+        # Один MorphAnalyzer на процесс — переиспользуется матчером и классификатором
+        self.morph = Morphology()
+        self.tokenizer = RazdelTokenizer()
+        self.ner = NERExtractor()
+        self.matcher = StreetMatcher(self.morph)
+        self.layer_classifier = LayerClassifier(self.morph)
         self._listen_conn: Optional[asyncpg.Connection] = None
 
     async def initialize(self) -> bool:
         """Инициализация при старте."""
         try:
-            logger.info(f"✅ Using lexical similarity threshold: {SIMILARITY_THRESHOLD}")
+            logger.info(f"✅ Using street similarity threshold: {SIMILARITY_THRESHOLD}")
 
-            # 1. Инициализация LexicalMatcher
-            logger.info("Initializing LexicalMatcher...")
+            # 1. NER (natasha + Navec) — graceful, не блокирует при ошибке
+            logger.info("Initializing NERExtractor (natasha + Navec)...")
+            ner_ok = self.ner.initialize()
+            if not ner_ok:
+                logger.warning("NER unavailable → fallback to T3 (lexical-only)")
+
+            # 2. StreetMatcher — критично, без него парсер не работает
+            logger.info("Initializing StreetMatcher...")
             success = await self.matcher.initialize(self.db_pool)
             if not success:
-                logger.error("LexicalMatcher initialization failed")
+                logger.error("StreetMatcher initialization failed")
                 return False
 
-            # 2. Индексация улиц (лемматизация aliases)
+            # 3. Индексация улиц (лемматизация aliases)
             logger.info("Indexing street aliases...")
             indexed = await self.matcher.reindex_all(self.db_pool)
             logger.info(f"✅ Indexed {indexed} aliases")
 
-            # 3. Подписка на уведомления от PostgreSQL
+            # 4. Подписка на уведомления от PostgreSQL
             logger.info("Setting up PostgreSQL notifications...")
             await self._setup_pg_notify()
 
@@ -124,22 +139,29 @@ class MessageProcessor:
 
         raw_text = msg_data.get('text', '') or ''
 
-        # Предобработка: отбрасывание хвоста → очистка → удаление одиночных суррогатов.
-        cleaned = self._sanitize_text(clean(strip_tail(raw_text)))
+        # Предобработка: strip_tail → preprocess_light сохраняет регистр/пунктуацию.
+        stripped = strip_tail(raw_text)
+        preserved = self._sanitize_text(preprocess_light(stripped)) or ''
 
-        # Определение слоя — над очищенным текстом, до проверки длины.
-        layer = self.layer_classifier.classify(cleaned)
+        # NER-извлечение LOC-спанов из текста с регистром/пунктуацией.
+        loc_spans = self.ner.extract(preserved)
 
-        # Пустой или слишком длинный текст — не релевантная локация:
-        # поиск улиц пропускается, событию назначается случайная точка.
-        if not cleaned or len(cleaned) > MAX_TEXT_LENGTH:
-            if not cleaned:
+        # Токенизация + лемматизация для матчера/классификатора (один проход).
+        tokens = self.tokenizer.tokenize(preserved)
+        lemmas = self.morph.lemmatize_tokens(tokens)
+
+        # Определение слоя — на готовых леммах.
+        layer = self.layer_classifier.classify(lemmas)
+
+        # Пустой или слишком длинный текст — поиск улиц пропускается.
+        if not preserved or len(preserved) > MAX_TEXT_LENGTH:
+            if not preserved:
                 description = 'без описания'
                 logger.info(f"Message {message_id}: empty text → random point")
             else:
                 description = 'слишком длинное сообщение не является релевантной локацией'
                 logger.warning(
-                    f"Message {message_id}: text too long ({len(cleaned)}) → random point"
+                    f"Message {message_id}: text too long ({len(preserved)}) → random point"
                 )
             return await self._insert_event(
                 message_id=message_id, event_time=event_time, description=description,
@@ -147,10 +169,16 @@ class MessageProcessor:
                 geom_wkt=self._generate_random_point_in_question_overlay(),
             )
 
-        # Лексический поиск улиц.
-        logger.info(f"Message {message_id}: lexical search (mawo_pymorphy3 + rapidfuzz)...")
-        entities = await self.matcher.async_find_entities(
-            cleaned, top_k=MAX_ENTITIES, threshold=SIMILARITY_THRESHOLD, pg_pool=self.db_pool,
+        # NER-first поиск улиц.
+        logger.info(
+            f"Message {message_id}: street search "
+            f"(NER spans={len(loc_spans)}, tokens={len(tokens)})"
+        )
+        entities = self.matcher.find_streets(
+            loc_spans=loc_spans,
+            lemmas=lemmas,
+            threshold=SIMILARITY_THRESHOLD,
+            top_k=MAX_ENTITIES,
         )
 
         street_ids: list = []
@@ -166,7 +194,7 @@ class MessageProcessor:
         if not street_ids:
             logger.info(f"Message {message_id}: no street matches → random point")
             return await self._insert_event(
-                message_id=message_id, event_time=event_time, description=cleaned,
+                message_id=message_id, event_time=event_time, description=preserved,
                 photo_path=photo_path, layer=layer, strategy='random',
                 geom_wkt=self._generate_random_point_in_question_overlay(),
             )
@@ -190,7 +218,7 @@ class MessageProcessor:
 
             pc = pc_rows[0]
             return await self._insert_event(
-                message_id=message_id, event_time=event_time, description=cleaned,
+                message_id=message_id, event_time=event_time, description=preserved,
                 photo_path=photo_path, layer=layer, strategy=pc['result_strategy'],
                 geom_wkt=pc['geom_wkt'], matches=pc['result_matches'], conn=conn,
             )

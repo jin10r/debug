@@ -208,12 +208,16 @@ class StreetMatcher:
             # 1-gram ×0.85, 2-gram ×0.90.
             length_bias = 0.85 + 0.05 * min(ngram_len - 1, 3)
 
+            # limit=2: для одного matched_part оставляем максимум 2 кандидата
+            # (например «Преображенская» + «пр. Преображенский»-синоним), но
+            # не плодим 3+ совпадений с разными street_id для одного слова —
+            # это шум вроде «черноморка»→Ильичевск+Люстдорфская+Черноморец.
             matches = rf_process.extract(
                 ngram,
                 self._alias_texts,
                 scorer=scorer,
                 score_cutoff=score_cutoff,
-                limit=10,
+                limit=2,
             )
             for _matched_text, score, idx in matches:
                 adjusted = score * length_bias

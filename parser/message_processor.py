@@ -199,8 +199,16 @@ class MessageProcessor:
                 geom_wkt=self._generate_random_point_in_question_overlay(),
             )
 
-        # Улицы найдены — геометрия и стратегия через process_candidates (псевдо-радиус 150 м).
-        logger.info(f"Message {message_id}: {len(street_ids)} streets matched: {street_ids}")
+        # Улицы найдены — геометрия и стратегия через process_candidates.
+        # Радиус псевдо-пересечения настраиваемый через PSEUDO_INTERSECTION_RADIUS_METERS.
+        pseudo_radius = (
+            settings.similarity.pseudo_intersection_radius_meters
+            if settings and settings.similarity else 150.0
+        )
+        logger.info(
+            f"Message {message_id}: {len(street_ids)} streets matched: {street_ids} "
+            f"(pseudo_radius={pseudo_radius}m)"
+        )
         async with self.db_pool.acquire() as conn:
             scores_array = [float(s) for s in street_scores]
             pc_rows = await conn.fetch(
@@ -210,7 +218,7 @@ class MessageProcessor:
                        ST_AsText(result_geom) AS geom_wkt
                 FROM process_candidates($1::int[], $2::double precision[], $3::float, $4::text[])
                 """,
-                street_ids, scores_array, 150.0, street_texts,
+                street_ids, scores_array, pseudo_radius, street_texts,
             )
             if not pc_rows or pc_rows[0]['geom_wkt'] is None:
                 logger.warning(f"Message {message_id}: process_candidates returned no geometry")

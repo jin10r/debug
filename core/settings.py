@@ -89,7 +89,11 @@ class RedisConfig:
 class SimilarityConfig:
     stop_words: tuple = field(default_factory=lambda: DEFAULT_STOPWORDS)
     entity_min_word_length: int = 3  # Учитываем все слова от 3 символов
-    entity_similarity_threshold: float = 0.67  # Порог для фильтрации
+    entity_similarity_threshold: float = 0.67  # Порог фуззи-матча (0-1)
+    # Радиус псевдо-пересечений (метры) для process_candidates SQL. Если два
+    # alias-индекса дают разные street_id, но их геометрии не пересекаются
+    # физически, ST_DWithin в этом радиусе считает их «псевдо-пересечением».
+    pseudo_intersection_radius_meters: float = 150.0
 
     # Поля для загрузки из БД
     db_stopwords: Set[str] = field(default_factory=set)
@@ -273,7 +277,10 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
             ),
             similarity=SimilarityConfig(
                 entity_min_word_length=env.int("ENTITY_MIN_WORD_LENGTH", default=3),
-                entity_similarity_threshold=env.float("ENTITY_SIMILARITY_THRESHOLD", default=0.67)
+                entity_similarity_threshold=env.float("ENTITY_SIMILARITY_THRESHOLD", default=0.67),
+                pseudo_intersection_radius_meters=env.float(
+                    "PSEUDO_INTERSECTION_RADIUS_METERS", default=150.0
+                ),
             ),
             question_overlay=QuestionOverlayConfig(
                 center_lon=env.float("QUESTION_OVERLAY_CENTER_LON", default=30.83135),

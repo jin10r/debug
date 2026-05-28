@@ -56,7 +56,7 @@ class AppConfig:
         
         return cls(
             host=env.str("APP_HOST", "0.0.0.0"),
-            port=env.int("APP_PORT", 8080),
+            port=_safe_env_int(env, "APP_PORT", 8080),
             telegram_validation_enabled=validation_enabled
         )
 
@@ -87,28 +87,52 @@ class RedisConfig:
 
 @dataclass
 class SimilarityConfig:
+    """Параметры калибровки лексического матчера улиц.
+
+    Все значения настраиваются через одноимённые env-переменные (UPPER_SNAKE).
+    Используются StreetMatcher (parser/street_matcher.py) и LayerClassifier
+    (parser/layer_classifier.py).
+    """
     stop_words: tuple = field(default_factory=lambda: DEFAULT_STOPWORDS)
-    entity_min_word_length: int = 3  # Учитываем все слова от 3 символов
-    entity_similarity_threshold: float = 0.67  # Порог фуззи-матча (0-1)
+
+    # Минимальная длина «значимого» слова в n-грамм-фильтре. Слова короче
+    # отбрасываются (если только не цифры). Используется в
+    # StreetMatcher._generate_ngrams.
+    entity_min_word_length: int = 2
+
+    # Порог фуззи-матча (0-1). adjusted_score = raw_score × length_bias ≥ X
+    # отсекает шумовые совпадения. На 0.75 шум 0.68-0.74 не проходит.
+    entity_similarity_threshold: float = 0.75
+
     # Радиус псевдо-пересечений (метры) для process_candidates SQL. Если два
     # alias-индекса дают разные street_id, но их геометрии не пересекаются
     # физически, ST_DWithin в этом радиусе считает их «псевдо-пересечением».
     pseudo_intersection_radius_meters: float = 150.0
 
-    # Поля для загрузки из БД
-    db_stopwords: Set[str] = field(default_factory=set)
-    db_layer_keywords: dict = field(default_factory=dict)
+    # Максимум кандидатов на один n-грам в rapidfuzz.extract(limit=N).
+    # Дедупликация по street_id выполняется ПОСЛЕ extract — лимит ограничивает
+    # шум от одинаковых matched_part'ов (e.g. «черноморка» → top-N синонимов).
+    max_candidates_per_ngram: int = 5
+
+    # Финальный top-K результатов find_streets() возвращает в matches[].
+    max_entities: int = 3
+
+    # Length-bias коэффициенты для adjusted_score = raw × bias.
+    # 1-грам ×0.85: одиночное слово менее уверенный сигнал, чем фраза.
+    # 2-грам ×0.90: фраза точнее, бонус.
+    length_bias_1gram: float = 0.85
+    length_bias_2gram: float = 0.90
+
+    # Длиннее этого порога (символов) сообщение НЕ считается релевантной
+    # локацией: поиск улиц пропускается, событию назначается random точка.
+    max_text_length: int = 380
 
     def get_stopwords(self) -> Set[str]:
-        """Вернуть стоп-слова (из БД или fallback)."""
-        return self.db_stopwords if self.db_stopwords else set(DEFAULT_STOPWORDS)
+        """Стоп-слова (используются в _generate_ngrams)."""
+        return set(DEFAULT_STOPWORDS)
 
     def get_layer_keywords(self, layer: str) -> tuple:
-        """Вернуть ключевые слова для слоя (из БД или fallback)."""
-        if layer in self.db_layer_keywords and self.db_layer_keywords[layer]:
-            return tuple(self.db_layer_keywords[layer])
-
-        # Fallback
+        """Ключевые слова слоя для LayerClassifier."""
         if layer == 'cops':
             return DEFAULT_LAYER_KEYWORDS_COPS
         elif layer == 'bus':
@@ -116,6 +140,18 @@ class SimilarityConfig:
         elif layer == 'traffic':
             return DEFAULT_LAYER_KEYWORDS_TRAFFIC
         return ()
+
+
+@dataclass
+class ParserConfig:
+    """Параметры parser-сервиса (monitoring.py)."""
+
+    # Сколько сообщений тянуть из истории канала при старте парсера.
+    # Высокое значение увеличивает startup latency, низкое — пропускает старые.
+    backfill_limit: int = 25
+
+    # Размер asyncio.Queue для входящих сообщений (производитель-потребитель).
+    message_queue_maxsize: int = 1000
 
 
 @dataclass
@@ -147,7 +183,38 @@ class Settings:
     redis: RedisConfig = field(default_factory=RedisConfig)
     similarity: SimilarityConfig = field(default_factory=SimilarityConfig)
     layers: LayerConfig = field(default_factory=LayerConfig)
+    parser: ParserConfig = field(default_factory=ParserConfig)
     question_overlay: QuestionOverlayConfig = field(default_factory=QuestionOverlayConfig)
+
+
+def _safe_env_float(env: Env, key: str, default: float) -> float:
+    """env.float() с дополнительной защитой: пустая строка → default.
+
+    `environs.Env.float(KEY, default=X)` рассматривает `KEY=` (empty) как
+    «переменная задана» и поднимает EnvValidationError. Этот хелпер трактует
+    empty/whitespace как «не задана» → fallback на default. Невалидное
+    числовое значение тоже даёт default + warning.
+    """
+    raw = env.str(key, "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except (ValueError, TypeError):
+        logger.warning(f"Invalid float for {key}={raw!r}, using default {default}")
+        return default
+
+
+def _safe_env_int(env: Env, key: str, default: int) -> int:
+    """То же что `_safe_env_float`, но для int."""
+    raw = env.str(key, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except (ValueError, TypeError):
+        logger.warning(f"Invalid int for {key}={raw!r}, using default {default}")
+        return default
 
 
 def _get_required_secret(env: Env) -> str:
@@ -249,18 +316,18 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
         if require_jwt:
             jwt_config = JWTConfig(
                 secret=_get_required_secret(env),
-                access_token_ttl=env.int("JWT_ACCESS_TTL", default=900),
-                refresh_token_ttl=env.int("JWT_REFRESH_TTL", default=604800)
+                access_token_ttl=_safe_env_int(env, "JWT_ACCESS_TTL", 900),
+                refresh_token_ttl=_safe_env_int(env, "JWT_REFRESH_TTL", 604800),
             )
         
         return Settings(
             app=AppConfig.from_env(env),
             db=DatabaseConfig(
                 host=env.str("DB_HOST", "postgres"),
-                port=env.int("DB_PORT", 5432),
+                port=_safe_env_int(env, "DB_PORT", 5432),
                 database=env.str("DB_NAME", "map"),
                 user=env.str("DB_USER", "postgres"),
-                password=env.str("DB_PASSWORD", "postgres")
+                password=env.str("DB_PASSWORD", "postgres"),
             ),
             bot=BotConfig(
                 token=env.str("BOT_TOKEN", ""),
@@ -271,21 +338,30 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
             jwt=jwt_config,
             redis=RedisConfig(
                 host=env.str("REDIS_HOST", "redis"),
-                port=env.int("REDIS_PORT", 6379),
-                db=env.int("REDIS_DB", 0),
-                password=env.str("REDIS_PASSWORD", None)
+                port=_safe_env_int(env, "REDIS_PORT", 6379),
+                db=_safe_env_int(env, "REDIS_DB", 0),
+                password=env.str("REDIS_PASSWORD", None),
             ),
             similarity=SimilarityConfig(
-                entity_min_word_length=env.int("ENTITY_MIN_WORD_LENGTH", default=3),
-                entity_similarity_threshold=env.float("ENTITY_SIMILARITY_THRESHOLD", default=0.67),
-                pseudo_intersection_radius_meters=env.float(
-                    "PSEUDO_INTERSECTION_RADIUS_METERS", default=150.0
+                entity_min_word_length=_safe_env_int(env, "ENTITY_MIN_WORD_LENGTH", 2),
+                entity_similarity_threshold=_safe_env_float(env, "ENTITY_SIMILARITY_THRESHOLD", 0.75),
+                pseudo_intersection_radius_meters=_safe_env_float(
+                    env, "PSEUDO_INTERSECTION_RADIUS_METERS", 150.0
                 ),
+                max_candidates_per_ngram=_safe_env_int(env, "MAX_CANDIDATES_PER_NGRAM", 5),
+                max_entities=_safe_env_int(env, "MAX_ENTITIES", 3),
+                length_bias_1gram=_safe_env_float(env, "LENGTH_BIAS_1GRAM", 0.85),
+                length_bias_2gram=_safe_env_float(env, "LENGTH_BIAS_2GRAM", 0.90),
+                max_text_length=_safe_env_int(env, "MAX_TEXT_LENGTH", 380),
+            ),
+            parser=ParserConfig(
+                backfill_limit=_safe_env_int(env, "BACKFILL_LIMIT", 25),
+                message_queue_maxsize=_safe_env_int(env, "MESSAGE_QUEUE_MAXSIZE", 1000),
             ),
             question_overlay=QuestionOverlayConfig(
-                center_lon=env.float("QUESTION_OVERLAY_CENTER_LON", default=30.83135),
-                center_lat=env.float("QUESTION_OVERLAY_CENTER_LAT", default=46.49804),
-                radius=env.float("QUESTION_OVERLAY_RADIUS", default=0.045)
+                center_lon=_safe_env_float(env, "QUESTION_OVERLAY_CENTER_LON", 30.83135),
+                center_lat=_safe_env_float(env, "QUESTION_OVERLAY_CENTER_LAT", 46.49804),
+                radius=_safe_env_float(env, "QUESTION_OVERLAY_RADIUS", 0.045),
             )
         )
     except Exception as e:

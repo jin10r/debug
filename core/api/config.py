@@ -22,7 +22,8 @@ async def get_config_handler(request: web.Request):
         'layer_keywords': {
             'pig': list(settings.layers.pig) if settings else [],
             'cops': list(settings.layers.cops) if settings else [],
-            'bus': list(settings.layers.bus) if settings else []
+            'bus': list(settings.layers.bus) if settings else [],
+            'traffic': list(settings.layers.traffic) if settings else [],
         }
     }
 

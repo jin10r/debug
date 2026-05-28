@@ -110,9 +110,10 @@ class SimilarityConfig:
     pseudo_intersection_radius_meters: float = 150.0
 
     # Максимум кандидатов на один n-грам в rapidfuzz.extract(limit=N).
-    # Дедупликация по street_id выполняется ПОСЛЕ extract — лимит ограничивает
-    # шум от одинаковых matched_part'ов (e.g. «черноморка» → top-N синонимов).
-    max_candidates_per_ngram: int = 5
+    # 2 — компромисс между recall и шумом: оставляет место для синонимов
+    # типа «Преображенская» + «пр. Преображенский», но не плодит 3+ кандидатов
+    # на одно слово («черноморка» → 3 разные улицы).
+    max_candidates_per_ngram: int = 2
 
     # Финальный top-K результатов find_streets() возвращает в matches[].
     max_entities: int = 3
@@ -348,7 +349,7 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
                 pseudo_intersection_radius_meters=_safe_env_float(
                     env, "PSEUDO_INTERSECTION_RADIUS_METERS", 150.0
                 ),
-                max_candidates_per_ngram=_safe_env_int(env, "MAX_CANDIDATES_PER_NGRAM", 5),
+                max_candidates_per_ngram=_safe_env_int(env, "MAX_CANDIDATES_PER_NGRAM", 2),
                 max_entities=_safe_env_int(env, "MAX_ENTITIES", 3),
                 length_bias_1gram=_safe_env_float(env, "LENGTH_BIAS_1GRAM", 0.85),
                 length_bias_2gram=_safe_env_float(env, "LENGTH_BIAS_2GRAM", 0.90),

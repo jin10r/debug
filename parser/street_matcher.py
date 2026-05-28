@@ -204,7 +204,7 @@ class StreetMatcher:
             extract_limit = sim.max_candidates_per_ngram
         else:
             bias_1g, bias_2g = 0.85, 0.90
-            extract_limit = 5
+            extract_limit = 2
 
         best_by_street: Dict[int, Dict] = {}
         for ngram in ngrams:
@@ -219,8 +219,9 @@ class StreetMatcher:
 
             # extract_limit ограничивает шум: для одного n-грама rapidfuzz
             # может вернуть много похожих алиасов («черноморка»→Ильичевск+
-            # Люстдорфская+Черноморец). Берём top-N сырых матчей, затем
-            # дедуплицируем по street_id (одна улица — один кандидат).
+            # Люстдорфская+Черноморец). Тюнинг полностью через env
+            # MAX_CANDIDATES_PER_NGRAM (default 2): меньше = чище matches,
+            # больше = выше recall для ambiguous слов.
             matches = rf_process.extract(
                 ngram,
                 self._alias_texts,
@@ -229,20 +230,12 @@ class StreetMatcher:
                 limit=extract_limit,
             )
 
-            # Дедупликация по street_id ВНУТРИ одного n-грама. Если несколько
-            # алиасов одной улицы попали в top-N, оставляем лучший. Это даёт
-            # шанс другим улицам после порога пройти, не теряя valid candidates.
-            seen_streets: Set[int] = set()
             for _matched_text, score, idx in matches:
                 adjusted = score * length_bias
                 if adjusted < score_cutoff:
                     continue
 
                 street_id, original_name = self._alias_meta[idx]
-                if street_id in seen_streets:
-                    continue
-                seen_streets.add(street_id)
-
                 if (
                     street_id not in best_by_street
                     or adjusted > best_by_street[street_id]['_adjusted']

@@ -125,6 +125,20 @@ class MessageProcessor:
             except Exception as e:
                 logger.error(f"❌ Reindexing failed: {e}")
 
+        def _on_reindex_done(task: asyncio.Task) -> None:
+            """Callback на завершение фоновой reindex-задачи.
+
+            asyncio.create_task без await может проглотить exception. Этот
+            callback логирует unobserved exceptions (если _reindex сам не
+            обработал) и предотвращает silent failure.
+            """
+            try:
+                exc = task.exception()
+                if exc is not None:
+                    logger.error(f"❌ Background reindex task crashed: {exc}")
+            except asyncio.CancelledError:
+                pass
+
         try:
             street_id = json_lib.loads(payload).get('street_id')
         except Exception as e:
@@ -132,10 +146,15 @@ class MessageProcessor:
             street_id = None
 
         if street_id:
-            asyncio.create_task(_reindex(self.matcher.reindex_street, self.db_pool, street_id))
+            task = asyncio.create_task(
+                _reindex(self.matcher.reindex_street, self.db_pool, street_id)
+            )
         else:
             # Без street_id — переиндексируем все улицы.
-            asyncio.create_task(_reindex(self.matcher.reindex_all, self.db_pool))
+            task = asyncio.create_task(
+                _reindex(self.matcher.reindex_all, self.db_pool)
+            )
+        task.add_done_callback(_on_reindex_done)
 
     @staticmethod
     def _sanitize_text(text: Optional[str]) -> Optional[str]:

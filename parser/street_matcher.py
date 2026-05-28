@@ -82,6 +82,13 @@ class StreetMatcher:
             return False
 
     def _build_alias_index(self, rows) -> int:
+        """Полная пересборка alias-индекса.
+
+        Atomic swap: оба списка собираются в локальные переменные, затем
+        присваиваются self.* без точек suspension между присваиваниями.
+        Asyncio single-thread + отсутствие await между присваиваниями = atomic
+        для других корутин в том же loop.
+        """
         texts: List[str] = []
         meta: List[Tuple[int, str]] = []
         for row in rows:
@@ -92,6 +99,7 @@ class StreetMatcher:
                 if lemma:
                     texts.append(lemma)
                     meta.append((street_id, name))
+        # Atomic swap — два sync-присваивания, asyncio не прервёт между ними.
         self._alias_texts = texts
         self._alias_meta = meta
         return len(texts)
@@ -111,7 +119,12 @@ class StreetMatcher:
             return 0
 
     async def reindex_street(self, pg_pool, street_id: int) -> None:
-        """Точечная переиндексация одной улицы."""
+        """Точечная переиндексация одной улицы.
+
+        Atomic: собираем новые списки в locals, затем единое присваивание.
+        Между read-операциями self._alias_texts/_alias_meta и записью не
+        должно быть await — иначе concurrent reader увидит inconsistent state.
+        """
         try:
             async with pg_pool.acquire() as conn:
                 row = await conn.fetchrow(
@@ -120,24 +133,25 @@ class StreetMatcher:
                     street_id,
                 )
 
-            pairs = [
-                (t, m) for t, m in zip(self._alias_texts, self._alias_meta)
-                if m[0] != street_id
-            ]
-            if pairs:
-                texts, meta = zip(*pairs)
-                self._alias_texts = list(texts)
-                self._alias_meta = list(meta)
-            else:
-                self._alias_texts = []
-                self._alias_meta = []
+            # Снапшот существующих списков + фильтр обновляемой улицы
+            new_texts: List[str] = []
+            new_meta: List[Tuple[int, str]] = []
+            for t, m in zip(self._alias_texts, self._alias_meta):
+                if m[0] != street_id:
+                    new_texts.append(t)
+                    new_meta.append(m)
 
+            # Добавление новой версии улицы (если она существует)
             if row:
                 for name in (row['names'] or []):
                     lemma = self._morph.lemma_for_phrase(clean(name))
                     if lemma:
-                        self._alias_texts.append(lemma)
-                        self._alias_meta.append((street_id, name))
+                        new_texts.append(lemma)
+                        new_meta.append((street_id, name))
+
+            # Atomic swap — никакого await между двумя присваиваниями
+            self._alias_texts = new_texts
+            self._alias_meta = new_meta
 
             logger.info(f"[Street] Reindexed street {street_id}")
         except Exception as exc:

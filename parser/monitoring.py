@@ -62,7 +62,11 @@ class ParserBot:
         self._cleanup_listener_task: Optional[asyncio.Task] = None  # NOTIFY-слушатель удаления фото
         # Очередь обработки: pyrogram-хендлер только кладёт сообщение в очередь,
         # единственный воркер разбирает её последовательно — без гонок и потерь.
-        self._message_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
+        queue_size = (
+            settings.parser.message_queue_maxsize
+            if settings and getattr(settings, 'parser', None) else 1000
+        )
+        self._message_queue: asyncio.Queue = asyncio.Queue(maxsize=queue_size)
         self._worker_task: Optional[asyncio.Task] = None
 
         # Конфигурация из env через систему настроек
@@ -189,10 +193,14 @@ class ParserBot:
 
             await self._warmup_peer()
 
+            backfill_limit = (
+                settings.parser.backfill_limit
+                if settings and getattr(settings, 'parser', None) else 25
+            )
             count = 0
             async for message in self.app.get_chat_history(
                 chat_id=self.channel_id,
-                limit=25
+                limit=backfill_limit,
             ):
                 await self._message_queue.put(message)
                 count += 1

@@ -53,15 +53,12 @@ secrets/*.txt
 # Test data
 tests/test_messages.txt
 
-# Analysis reports
+# Documentation (whitelist-style: by default all *.md ignored; allow only
+# living docs in docs/ and developer rules CLAUDE.md)
 *.md
-!README.md
-!docs/README.md
-!docs/ARCHITECTURE_REPORT.md
-!docs/DOCKER_ARCHITECTURE.md
-!docs/PROJECT_OVERVIEW.md
-!docs/SECURITY.md
-!docs/mawo_parser_plan.md
+!CLAUDE.md
+!web/CLAUDE.md
+!docs/**/*.md
 pg_plan3.txt
 
 # Archived migration scripts and docs

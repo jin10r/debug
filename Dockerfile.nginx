@@ -40,6 +40,10 @@ RUN npm run build && \
 # =============================================================================
 FROM nginx:alpine
 
+# wget нужен для docker-compose healthcheck (`wget -qO- /health/ready`).
+# В nginx:alpine он не включён по умолчанию.
+RUN apk add --no-cache wget
+
 WORKDIR /usr/share/nginx/html
 
 # Static assets + compiled frontend — node_modules and build configs excluded.

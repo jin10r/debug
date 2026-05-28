@@ -51,3 +51,20 @@ web/dist/
 
 # Session (mounted via volume)
 session.session
+*.session
+*.session-journal
+
+# AI assistant local state
+.claude/
+.cursor/
+
+# Debug exports / data dumps
+*.csv
+!postgres/data/*.csv
+!postgres/data/**/*.csv
+
+# Frontend tests (no need in production image)
+web/tests/
+
+# Build/CI artifacts
+.github/

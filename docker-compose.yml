@@ -1,6 +1,14 @@
 # Docker Compose - Survival Map v2
 # Architecture: Parser with SQLite replica + PostgreSQL with PostGIS
 
+# Shared logging config — json-file с ротацией (max 50MB на сервис: 5×10MB).
+# Без этого docker накапливает логи без ограничений и съедает диск.
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   # =============================================================================
   # PostgreSQL - основной storage с PostGIS
@@ -37,6 +45,7 @@ services:
           cpus: '0.25'
           memory: 256M
     restart: unless-stopped
+    logging: *default-logging
 
   # =============================================================================
   # Parser - Telegram парсер с in-memory кэшем
@@ -104,6 +113,7 @@ services:
     tmpfs:
       - /tmp:noexec,nosuid,size=100m
     restart: unless-stopped
+    logging: *default-logging
 
   # =============================================================================
   # Redis - кэш и очереди (опционально)
@@ -129,6 +139,7 @@ services:
           cpus: '0.25'
           memory: 256M
     restart: unless-stopped
+    logging: *default-logging
 
   # =============================================================================
   # App - API сервер (опционально)
@@ -203,6 +214,7 @@ services:
           cpus: '0.5'
           memory: 256M
     restart: unless-stopped
+    logging: *default-logging
 
   # =============================================================================
   # Nginx - reverse proxy
@@ -236,6 +248,7 @@ services:
           cpus: '0.25'
           memory: 128M
     restart: unless-stopped
+    logging: *default-logging
 
 # =============================================================================
 # Networks

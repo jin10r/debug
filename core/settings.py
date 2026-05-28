@@ -128,6 +128,15 @@ class SimilarityConfig:
     # локацией: поиск улиц пропускается, событию назначается random точка.
     max_text_length: int = 380
 
+    # ─── SymSpell pre-correction опечаток (parser/typo_corrector.py) ──────
+    # Включение pre-correction. False = быстрый rollback без перезапуска.
+    typo_correction_enabled: bool = True
+    # Edit distance Левенштейна: 1 = одна опечатка, 2 = до двух (рекомендуется).
+    typo_correction_max_edit_distance: int = 2
+    # Минимальная длина слова для коррекции. Короткие слова (≤3) дают много
+    # ложных match'ей (например «улу» → «ул»), поэтому фильтруются.
+    typo_correction_min_word_length: int = 4
+
     def get_stopwords(self) -> Set[str]:
         """Стоп-слова (используются в _generate_ngrams)."""
         return set(DEFAULT_STOPWORDS)
@@ -354,6 +363,13 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
                 length_bias_1gram=_safe_env_float(env, "LENGTH_BIAS_1GRAM", 0.85),
                 length_bias_2gram=_safe_env_float(env, "LENGTH_BIAS_2GRAM", 0.90),
                 max_text_length=_safe_env_int(env, "MAX_TEXT_LENGTH", 380),
+                typo_correction_enabled=env.bool("TYPO_CORRECTION_ENABLED", default=True),
+                typo_correction_max_edit_distance=_safe_env_int(
+                    env, "TYPO_CORRECTION_MAX_EDIT_DISTANCE", 2
+                ),
+                typo_correction_min_word_length=_safe_env_int(
+                    env, "TYPO_CORRECTION_MIN_WORD_LENGTH", 4
+                ),
             ),
             parser=ParserConfig(
                 backfill_limit=_safe_env_int(env, "BACKFILL_LIMIT", 25),

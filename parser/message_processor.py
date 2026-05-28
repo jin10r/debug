@@ -27,6 +27,7 @@ from .ner_extractor import NERExtractor
 from .razdel_tokenizer import RazdelTokenizer
 from .street_matcher import StreetMatcher
 from .text_preprocessor import preprocess_light, strip_tail
+from .typo_corrector import TypoCorrector
 
 try:
     from .settings import settings
@@ -47,6 +48,7 @@ class MessageProcessor:
         self.ner = NERExtractor()
         self.matcher = StreetMatcher(self.morph)
         self.layer_classifier = LayerClassifier(self.morph)
+        self.typo_corrector = TypoCorrector()
         self._listen_conn: Optional[asyncpg.Connection] = None
 
     async def initialize(self) -> bool:
@@ -79,7 +81,16 @@ class MessageProcessor:
             indexed = await self.matcher.reindex_all(self.db_pool)
             logger.info(f"✅ Indexed {indexed} aliases")
 
-            # 4. Подписка на уведомления от PostgreSQL
+            # 4. SymSpell pre-correction опечаток — словарь из alias-имён.
+            # Graceful: если symspellpy не установлен / init упал — pre-correction
+            # disabled, парсер продолжает работать через rapidfuzz fallback.
+            logger.info("Initializing TypoCorrector (SymSpell)...")
+            alias_phrases = [name for _sid, name in self.matcher._alias_meta]
+            typo_ok = self.typo_corrector.initialize(alias_phrases)
+            if not typo_ok:
+                logger.warning("TypoCorrector unavailable → опечатки не исправляются")
+
+            # 5. Подписка на уведомления от PostgreSQL
             logger.info("Setting up PostgreSQL notifications...")
             await self._setup_pg_notify()
 
@@ -155,6 +166,9 @@ class MessageProcessor:
 
         # Токенизация + лемматизация для матчера/классификатора (один проход).
         tokens = self.tokenizer.tokenize(preserved)
+        # SymSpell pre-correction: исправляет опечатки ДО pymorphy3 lemmatization.
+        # Если корректор не активен — возвращает токены неизменно.
+        tokens = self.typo_corrector.correct(tokens)
         lemmas = self.morph.lemmatize_tokens(tokens)
 
         # Определение слоя — на готовых леммах.

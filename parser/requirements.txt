@@ -17,6 +17,11 @@ navec>=0.10.0            # Pretrained embeddings ~50 MB (тянется natasha 
 # Фуззи-матч против alias-индекса
 rapidfuzz>=3.0.0         # Fast fuzzy string matching (C implementation, SIMD)
 
+# SymSpell pre-correction опечаток (parser/typo_corrector.py).
+# Исправляет опечатки в собственных именах ДО pymorphy3 lemmatization
+# (pymorphy3 галлюцинирует леммы для unknown words).
+symspellpy>=6.7.6
+
 # Configuration (через core.settings)
 environs>=11.0.0
 

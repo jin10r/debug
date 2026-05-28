@@ -481,43 +481,72 @@ class ParserBot:
         список в поле photo_urls уведомления events_cleaned. Этот метод
         получает уведомление и удаляет файлы — сервис parser монтирует
         /media/events с правами :rw, в отличие от app (:ro).
+
+        Auto-reconnect: при потере PostgreSQL connection (network blip,
+        server restart) listener молча отваливался. Теперь — exponential
+        backoff (1s/5s/30s) с повторным acquire+add_listener.
         """
-        conn = None
-        try:
-            conn = await self.db.pool.acquire()
+        def _on_notify(connection, pid, channel, payload):
+            try:
+                data = json.loads(payload)
+                for url in data.get('photo_urls') or []:
+                    if url and os.path.isfile(url):
+                        try:
+                            os.unlink(url)
+                            logger.info(f"Удалено устаревшее фото: {url}")
+                        except OSError as e:
+                            logger.warning(f"Не удалось удалить фото {url}: {e}")
+            except Exception as e:
+                logger.warning(f"Ошибка обработчика events_cleaned: {e}")
 
-            def _on_notify(connection, pid, channel, payload):
-                try:
-                    data = json.loads(payload)
-                    for url in data.get('photo_urls') or []:
-                        if url and os.path.isfile(url):
-                            try:
-                                os.unlink(url)
-                                logger.info(f"Удалено устаревшее фото: {url}")
-                            except OSError as e:
-                                logger.warning(f"Не удалось удалить фото {url}: {e}")
-                except Exception as e:
-                    logger.warning(f"Ошибка обработчика events_cleaned: {e}")
+        backoff_schedule = [1, 5, 30]  # секунды между retry
+        backoff_idx = 0
 
-            await conn.add_listener('events_cleaned', _on_notify)
-            logger.info("Слушаем events_cleaned для удаления устаревших фото")
+        while self._running:
+            conn = None
+            try:
+                conn = await self.db.pool.acquire()
+                await conn.add_listener('events_cleaned', _on_notify)
+                logger.info("Слушаем events_cleaned для удаления устаревших фото")
+                backoff_idx = 0  # успех — сбросить backoff
 
-            while self._running:
-                await asyncio.sleep(1)
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.error(f"Photo cleanup listener завершился с ошибкой: {e}", exc_info=True)
-        finally:
-            if conn is not None:
-                try:
-                    await conn.remove_listener('events_cleaned', _on_notify)
-                except Exception:
-                    pass
-                try:
-                    await self.db.pool.release(conn)
-                except Exception:
-                    pass
+                # Heartbeat-loop: спим, периодически проверяя что соединение
+                # ещё живо. asyncpg бросит при closed connection — поймаем
+                # в outer except.
+                while self._running:
+                    await asyncio.sleep(5)
+                    # ping connection — если упал, поймает заголовок цикла
+                    if conn.is_closed():
+                        raise ConnectionError("Listener connection closed")
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                delay = backoff_schedule[min(backoff_idx, len(backoff_schedule) - 1)]
+                logger.warning(
+                    f"Photo cleanup listener lost connection ({e}), "
+                    f"retry in {delay}s"
+                )
+                backoff_idx += 1
+            finally:
+                if conn is not None:
+                    try:
+                        await conn.remove_listener('events_cleaned', _on_notify)
+                    except Exception:
+                        pass
+                    try:
+                        await self.db.pool.release(conn)
+                    except Exception:
+                        pass
+
+            if not self._running:
+                break
+            # Backoff sleep ВНЕ try-блока, чтобы не путать с listener error
+            try:
+                await asyncio.sleep(
+                    backoff_schedule[min(backoff_idx - 1, len(backoff_schedule) - 1)]
+                )
+            except asyncio.CancelledError:
+                raise
 
     async def shutdown(self):
         """Корректное завершение работы."""

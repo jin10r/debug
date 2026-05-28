@@ -42,12 +42,15 @@ async def jwt_auth_middleware(app: web.Application, handler):
             # No authentication, no user data
             return await handler(request)
         
-        # Check if endpoint is public (health checks only)
-        path = request.path
+        # Check if endpoint is public (health checks only).
+        # request.path в aiohttp уже без query-string, но нормализуем trailing
+        # slash чтобы и /health, и /health/ покрывались PUBLIC_ENDPOINTS.
+        path = request.path.rstrip('/') or '/'
         if path in PUBLIC_ENDPOINTS:
             return await handler(request)
-        
-        # For WebSocket, skip JWT check here (handled in websocket handler)
+
+        # For WebSocket, skip JWT check here (handled in websocket handler).
+        # Поддерживаем варианты /ws и /ws/ — оба после rstrip дают /ws.
         if path == '/ws':
             return await handler(request)
         

@@ -25,8 +25,8 @@ from .layer_classifier import LayerClassifier
 from .morphology import Morphology
 from .ner_extractor import NERExtractor
 from .razdel_tokenizer import RazdelTokenizer
-from .street_matcher import StreetMatcher, SIMILARITY_THRESHOLD, MAX_ENTITIES
-from .text_preprocessor import MAX_TEXT_LENGTH, preprocess_light, strip_tail
+from .street_matcher import StreetMatcher
+from .text_preprocessor import preprocess_light, strip_tail
 
 try:
     from .settings import settings
@@ -52,7 +52,14 @@ class MessageProcessor:
     async def initialize(self) -> bool:
         """Инициализация при старте."""
         try:
-            logger.info(f"✅ Using street similarity threshold: {SIMILARITY_THRESHOLD}")
+            sim = settings.similarity if settings and settings.similarity else None
+            if sim:
+                logger.info(
+                    f"Using street matcher settings: threshold={sim.entity_similarity_threshold}, "
+                    f"pseudo_radius={sim.pseudo_intersection_radius_meters}m, "
+                    f"max_entities={sim.max_entities}, "
+                    f"max_candidates_per_ngram={sim.max_candidates_per_ngram}"
+                )
 
             # 1. NER (natasha + Navec) — graceful, не блокирует при ошибке
             logger.info("Initializing NERExtractor (natasha + Navec)...")
@@ -154,7 +161,11 @@ class MessageProcessor:
         layer = self.layer_classifier.classify(lemmas)
 
         # Пустой или слишком длинный текст — поиск улиц пропускается.
-        if not preserved or len(preserved) > MAX_TEXT_LENGTH:
+        max_text_length = (
+            settings.similarity.max_text_length
+            if settings and settings.similarity else 380
+        )
+        if not preserved or len(preserved) > max_text_length:
             if not preserved:
                 description = 'без описания'
                 logger.info(f"Message {message_id}: empty text → random point")
@@ -174,11 +185,10 @@ class MessageProcessor:
             f"Message {message_id}: street search "
             f"(NER spans={len(loc_spans)}, tokens={len(tokens)})"
         )
+        # threshold/top_k читаются из settings внутри find_streets per-call.
         entities = self.matcher.find_streets(
             loc_spans=loc_spans,
             lemmas=lemmas,
-            threshold=SIMILARITY_THRESHOLD,
-            top_k=MAX_ENTITIES,
         )
 
         street_ids: list = []

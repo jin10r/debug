@@ -34,21 +34,17 @@ except Exception:
 logger = logging.getLogger(__name__)
 
 
-# Порог в шкале rapidfuzz (0-100). settings хранит 0-1, конвертация при использовании.
-_DEFAULT_THRESHOLD = 72.0
+def _threshold_score_cutoff() -> float:
+    """Прочитать порог из settings и привести к шкале rapidfuzz (0-100).
 
-SIMILARITY_THRESHOLD: float
-_raw = (
-    settings.similarity.entity_similarity_threshold
-    if settings and settings.similarity
-    else None
-)
-if _raw is not None:
-    SIMILARITY_THRESHOLD = _raw * 100 if _raw <= 1.0 else float(_raw)
-else:
-    SIMILARITY_THRESHOLD = _DEFAULT_THRESHOLD
-
-MAX_ENTITIES = 3
+    settings хранит 0-1; rapidfuzz score_cutoff ожидает 0-100.
+    Читается per-call, чтобы env-изменения подхватывались без reload модуля.
+    Fallback на 75.0 (соответствует SimilarityConfig default).
+    """
+    if settings and settings.similarity:
+        raw = settings.similarity.entity_similarity_threshold
+        return raw * 100 if raw <= 1.0 else float(raw)
+    return 75.0
 
 
 class StreetMatcher:
@@ -155,9 +151,14 @@ class StreetMatcher:
     def _generate_ngrams(self, words: List[str]) -> List[str]:
         """1- и 2-граммы из лемматизированной последовательности слов.
 
-        Для 2-граммов оба слова должны быть значимы (не стоп-слово + len≥2,
-        либо цифра). Это исключает шумовые "с переулок", "по малый" и т.п.
+        Для 2-граммов оба слова должны быть значимы (не стоп-слово +
+        len ≥ entity_min_word_length, либо цифра). Это исключает шумовые
+        "с переулок", "по малый" и т.п.
         """
+        min_len = (
+            settings.similarity.entity_min_word_length
+            if settings and settings.similarity else 2
+        )
         ngrams: List[str] = []
         n = len(words)
 
@@ -168,7 +169,7 @@ class StreetMatcher:
                     continue
                 qualified = [
                     w for w in chunk
-                    if (w not in self._stopwords and len(w) >= 2) or w.isdigit()
+                    if (w not in self._stopwords and len(w) >= min_len) or w.isdigit()
                 ]
                 if len(qualified) >= size:
                     ngrams.append(' '.join(chunk))
@@ -196,6 +197,15 @@ class StreetMatcher:
         if not ngrams:
             return {}
 
+        # Калибровочные параметры (тюнятся через env / SimilarityConfig)
+        if settings and settings.similarity:
+            sim = settings.similarity
+            bias_1g, bias_2g = sim.length_bias_1gram, sim.length_bias_2gram
+            extract_limit = sim.max_candidates_per_ngram
+        else:
+            bias_1g, bias_2g = 0.85, 0.90
+            extract_limit = 5
+
         best_by_street: Dict[int, Dict] = {}
         for ngram in ngrams:
             ngram_len = len(ngram.split())
@@ -204,27 +214,35 @@ class StreetMatcher:
             # 2+ — token_set_ratio (допускает перестановку).
             scorer = fuzz.ratio if ngram_len == 1 else fuzz.token_set_ratio
 
-            # Length bias: длинные n-граммы получают приоритет.
-            # 1-gram ×0.85, 2-gram ×0.90.
-            length_bias = 0.85 + 0.05 * min(ngram_len - 1, 3)
+            # Length bias: 1-gram ×bias_1g, 2-gram ×bias_2g.
+            length_bias = bias_1g if ngram_len == 1 else bias_2g
 
-            # limit=2: для одного matched_part оставляем максимум 2 кандидата
-            # (например «Преображенская» + «пр. Преображенский»-синоним), но
-            # не плодим 3+ совпадений с разными street_id для одного слова —
-            # это шум вроде «черноморка»→Ильичевск+Люстдорфская+Черноморец.
+            # extract_limit ограничивает шум: для одного n-грама rapidfuzz
+            # может вернуть много похожих алиасов («черноморка»→Ильичевск+
+            # Люстдорфская+Черноморец). Берём top-N сырых матчей, затем
+            # дедуплицируем по street_id (одна улица — один кандидат).
             matches = rf_process.extract(
                 ngram,
                 self._alias_texts,
                 scorer=scorer,
                 score_cutoff=score_cutoff,
-                limit=2,
+                limit=extract_limit,
             )
+
+            # Дедупликация по street_id ВНУТРИ одного n-грама. Если несколько
+            # алиасов одной улицы попали в top-N, оставляем лучший. Это даёт
+            # шанс другим улицам после порога пройти, не теряя valid candidates.
+            seen_streets: Set[int] = set()
             for _matched_text, score, idx in matches:
                 adjusted = score * length_bias
                 if adjusted < score_cutoff:
                     continue
 
                 street_id, original_name = self._alias_meta[idx]
+                if street_id in seen_streets:
+                    continue
+                seen_streets.add(street_id)
+
                 if (
                     street_id not in best_by_street
                     or adjusted > best_by_street[street_id]['_adjusted']
@@ -246,16 +264,16 @@ class StreetMatcher:
         self,
         loc_spans: List[Span],
         lemmas: List[Lemma],
-        threshold: float = SIMILARITY_THRESHOLD,
-        top_k: int = MAX_ENTITIES,
+        threshold: Optional[float] = None,
+        top_k: Optional[int] = None,
     ) -> List[Dict]:
         """Найти улицы: T1 (NER LOC-спаны) + T3 (полный лемматизированный текст).
 
         Args:
             loc_spans: LOC-сущности от natasha (могут быть пустыми).
             lemmas: лемматизация всего сообщения (для T3 fallback).
-            threshold: порог 0-1 или 0-100; нормализуется к 0-100.
-            top_k: максимум результатов.
+            threshold: порог 0-1 или 0-100; нормализуется к 0-100. None → из settings.
+            top_k: максимум результатов. None → settings.similarity.max_entities.
 
         Returns:
             list of {street_id, matched_name, text, score, source}, отсортирован
@@ -268,7 +286,17 @@ class StreetMatcher:
             logger.warning("[Street] Alias index is empty")
             return []
 
-        score_cutoff = threshold if threshold > 1.0 else threshold * 100
+        # Подхватываем калибровку из settings per-call (env-overrides не требуют
+        # reload модуля).
+        if threshold is None:
+            score_cutoff = _threshold_score_cutoff()
+        else:
+            score_cutoff = threshold if threshold > 1.0 else threshold * 100
+        if top_k is None:
+            top_k = (
+                settings.similarity.max_entities
+                if settings and settings.similarity else 3
+            )
 
         best_by_street: Dict[int, Dict] = {}
 

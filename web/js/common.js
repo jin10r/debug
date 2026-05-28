@@ -15,11 +15,40 @@ window.serverNow = function() {
 };
 
 /**
- * Функция тактильной отдачи (вибрации)
+ * Функция тактильной отдачи (вибрации).
+ *
+ * Telegram WebApp HapticFeedback API доступен с версии 6.1. В v6.0 API
+ * существует, но методы кидают «not supported in version 6.0» — нужно
+ * проверять версию ДО вызова.
+ *
+ * Стратегия:
+ *   1. Если tg.version >= 6.1 → native HapticFeedback
+ *   2. Иначе → navigator.vibrate(N) (HTML5 Vibration API)
+ *   3. Иначе → silent no-op
  */
+const _HAPTIC_VIBRATE_PATTERN = {
+    light: 30,
+    medium: 50,
+    heavy: 100,
+    success: [30, 10, 30],
+    warning: [50, 20, 50],
+    error: [100, 20, 100],
+    selection_changed: 10,
+};
+
+function _parseTgVersion(versionStr) {
+    if (!versionStr) return 6.1;  // assume safe default
+    const parts = String(versionStr).split('.');
+    const major = parseInt(parts[0], 10) || 6;
+    const minor = parseInt(parts[1] || '0', 10) || 0;
+    return major + minor / 10;
+}
+
 window.hapticFeedback = function(type = 'medium') {
     const tg = window.Telegram?.WebApp;
     const hasNativeHaptics = !!tg?.HapticFeedback;
+    const tgVersion = _parseTgVersion(tg?.version);
+    const nativeSupported = hasNativeHaptics && tgVersion >= 6.1;
 
     if (window.location?.hostname === 'localhost') {
         try {
@@ -27,40 +56,48 @@ window.hapticFeedback = function(type = 'medium') {
                 window.__hapticDebugOnce = true;
                 console.log('[hapticFeedback] env:', {
                     webappVersion: tg?.version,
+                    versionNumber: tgVersion,
                     platform: tg?.platform,
-                    hasNativeHaptics
+                    hasNativeHaptics,
+                    nativeSupported,
+                    hasNavigatorVibrate: !!navigator.vibrate,
                 });
             }
         } catch (e) {
         }
     }
 
-    if (hasNativeHaptics) {
+    // 1. Native Telegram HapticFeedback (только для v6.1+)
+    if (nativeSupported) {
         try {
             switch (type) {
                 case 'light':
                     tg.HapticFeedback.impactOccurred('light');
-                    break;
+                    return;
                 case 'heavy':
                     tg.HapticFeedback.impactOccurred('heavy');
-                    break;
+                    return;
                 case 'success':
                 case 'warning':
                 case 'error':
                     tg.HapticFeedback.notificationOccurred(type);
-                    break;
+                    return;
                 case 'selection_changed':
                     tg.HapticFeedback.selectionChanged();
-                    break;
+                    return;
                 default:
                     tg.HapticFeedback.impactOccurred('medium');
+                    return;
             }
-            return;
         } catch (e) {
-            console.log('Telegram haptic feedback failed:', e);
+            // native упал — пробуем фолбэки
+            if (window.location?.hostname === 'localhost') {
+                console.log('[hapticFeedback] Native failed, falling back:', e);
+            }
         }
     }
 
+    // 2. telegramIntegration (отдельный wrapper, тоже проверяет версию)
     if (window.telegramIntegration) {
         try {
             const ok = window.telegramIntegration.hapticFeedback(type);
@@ -70,6 +107,17 @@ window.hapticFeedback = function(type = 'medium') {
         } catch (e) {
         }
     }
+
+    // 3. HTML5 Vibration API — работает в браузерах и старых Telegram WebView
+    if (navigator.vibrate) {
+        try {
+            const pattern = _HAPTIC_VIBRATE_PATTERN[type] || 50;
+            navigator.vibrate(pattern);
+            return;
+        } catch (e) {
+        }
+    }
+    // silent no-op если ничего не поддерживается
 };
 
 window.playNotificationSound = (function() {

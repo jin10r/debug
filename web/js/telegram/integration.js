@@ -257,6 +257,9 @@ class TelegramIntegration {
      */
     hapticFeedback(type = 'medium') {
         if (!this.tg?.HapticFeedback) return false;
+        // API доступен с v6.1; в v6.0 объект существует, но методы кидают.
+        const versionOk = !!(this.tg?.isVersionAtLeast && this.tg.isVersionAtLeast('6.1'));
+        if (!versionOk) return false;
 
         try {
             switch (type) {

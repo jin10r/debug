@@ -166,7 +166,7 @@ function showLegendPopup() {
                     <td style="padding: 10px 12px 10px 0;">
                         <img src="/assets/images/cops.png" style="width: 32px; height: 32px; display: block;" alt="Cops">
                     </td>
-                    <td style="padding: 10px 0; color: var(--tg-text-color, #000); font-size: 15px; line-height: 1.4;">Менты либо блокпост</td>
+                    <td style="padding: 10px 0; color: var(--tg-text-color, #000); font-size: 15px; line-height: 1.4;">Менты либо патруль</td>
                 </tr>
                 <tr>
                     <td style="padding: 10px 12px 10px 0;">
@@ -179,7 +179,7 @@ function showLegendPopup() {
                         ⛔
                     </td>
                     <td style="padding: 10px 0; color: var(--tg-text-color, #000); font-size: 15px; line-height: 1.4;">
-                        <strong>Трафик</strong> — ДТП, пробки, ремонты
+                        <strong>Трафик</strong> — ДТП, пробки, блокпосты
                     </td>
                 </tr>
             </tbody>

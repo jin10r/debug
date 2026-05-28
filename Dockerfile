@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11.10-slim-bookworm
 
 # Create non-root user for security
 RUN groupadd -r appuser && useradd -r -g appuser appuser
@@ -28,7 +28,7 @@ USER appuser
 
 EXPOSE 8080
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health/live').read()" || exit 1
+# Healthcheck определён в docker-compose.yml — single source of truth.
+# Дубликат HEALTHCHECK здесь был source of drift между compose и Dockerfile.
 
 CMD ["python", "main.py"]

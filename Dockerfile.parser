@@ -4,7 +4,7 @@
 # =============================================================================
 # Stage 1: Builder (установка зависимостей + warm-up моделей NER)
 # =============================================================================
-FROM python:3.11-slim AS builder
+FROM python:3.11.10-slim-bookworm AS builder
 
 WORKDIR /build
 
@@ -31,7 +31,7 @@ RUN python -c "from natasha import NewsEmbedding, NewsNERTagger; NewsNERTagger(N
 # =============================================================================
 # Stage 2: Runtime (минимальный образ)
 # =============================================================================
-FROM python:3.11-slim
+FROM python:3.11.10-slim-bookworm
 
 WORKDIR /app
 

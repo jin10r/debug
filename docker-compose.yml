@@ -92,10 +92,12 @@ services:
     healthcheck:
       # Свежесть heartbeat-файла: parser обновляет его каждую секунду в
       # keep-alive цикле. Stale-файл = event loop завис → unhealthy.
+      # start_period 180s: NER (natasha) + Navec embeddings (~50 MB) loading
+      # + SymSpell dictionary build из ~1000 alias-фраз. 120s было мало.
       test: ["CMD-SHELL", "test -f /tmp/parser_heartbeat && [ $$(( $$(date +%s) - $$(cat /tmp/parser_heartbeat) )) -lt 60 ]"]
       interval: 30s
       timeout: 10s
-      start_period: 120s
+      start_period: 180s
       retries: 3
     deploy:
       resources:

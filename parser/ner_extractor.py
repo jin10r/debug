@@ -70,11 +70,23 @@ class NERExtractor:
             doc = self._Doc(text)
             doc.segment(self._segmenter)
             doc.tag_ner(self._ner)
-            return [
-                Span(text=s.text, start=s.start, stop=s.stop)
-                for s in doc.spans
-                if s.type == 'LOC'
-            ]
+            # Bounds-валидация: natasha может вернуть corrupted span
+            # (start<0, stop<=start, либо out-of-range). Отбрасываем.
+            text_len = len(text)
+            result: List[Span] = []
+            for s in doc.spans:
+                if s.type != 'LOC':
+                    continue
+                if not (0 <= s.start < s.stop <= text_len):
+                    logger.debug(
+                        f"[NER] dropping malformed span: start={s.start} "
+                        f"stop={s.stop} text_len={text_len}"
+                    )
+                    continue
+                if not s.text or not s.text.strip():
+                    continue
+                result.append(Span(text=s.text, start=s.start, stop=s.stop))
+            return result
         except Exception as exc:
             logger.debug(f"[NER] extract failed: {exc}")
             return []

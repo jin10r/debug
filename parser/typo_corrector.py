@@ -108,7 +108,13 @@ class TypoCorrector:
         for t in tokens:
             corrected = self._maybe_correct(t.text)
             if corrected and corrected != t.text.lower():
-                result.append(Token(text=corrected, start=t.start, stop=t.stop))
+                # При замене text может быть другой длины. Пересчитать stop,
+                # иначе downstream slice preserved[t.start:t.stop] даст
+                # misaligned substring. Position остальных токенов остаётся
+                # прежней — pipeline не полагается на абсолютные индексы
+                # (matched_part — текст, не slice).
+                new_stop = t.start + len(corrected)
+                result.append(Token(text=corrected, start=t.start, stop=new_stop))
             else:
                 result.append(t)
         return result

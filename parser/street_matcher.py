@@ -271,16 +271,16 @@ class StreetMatcher:
         self,
         loc_spans: List[Span],
         lemmas: List[Lemma],
-        threshold: Optional[float] = None,
-        top_k: Optional[int] = None,
     ) -> List[Dict]:
         """Найти улицы: T1 (NER LOC-спаны) + T3 (полный лемматизированный текст).
 
         Args:
             loc_spans: LOC-сущности от natasha (могут быть пустыми).
             lemmas: лемматизация всего сообщения (для T3 fallback).
-            threshold: порог 0-1 или 0-100; нормализуется к 0-100. None → из settings.
-            top_k: максимум результатов. None → settings.similarity.max_entities.
+
+        Threshold и top_k всегда читаются из settings (env-override через
+        ENTITY_SIMILARITY_THRESHOLD и MAX_ENTITIES). Бывшие параметры были
+        dead-code: callers их не передавали.
 
         Returns:
             list of {street_id, matched_name, text, score, source}, отсортирован
@@ -295,15 +295,11 @@ class StreetMatcher:
 
         # Подхватываем калибровку из settings per-call (env-overrides не требуют
         # reload модуля).
-        if threshold is None:
-            score_cutoff = _threshold_score_cutoff()
-        else:
-            score_cutoff = threshold if threshold > 1.0 else threshold * 100
-        if top_k is None:
-            top_k = (
-                settings.similarity.max_entities
-                if settings and settings.similarity else 3
-            )
+        score_cutoff = _threshold_score_cutoff()
+        top_k = (
+            settings.similarity.max_entities
+            if settings and settings.similarity else 3
+        )
 
         best_by_street: Dict[int, Dict] = {}
 

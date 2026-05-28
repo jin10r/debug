@@ -206,6 +206,26 @@ export const store = createStore<SurvivalState>()((set, get) => ({
             if (isAcceptable(f)) next.set(id, f);
             else removed++;
         }
+
+        // Hard cap: memory safety guard. Если TTL-prune не успевает за
+        // потоком (WebSocket reconnect повторно отдаёт snapshot, тонна
+        // событий за раз), Map может вырасти неконтролируемо. На 5000
+        // событиях принудительно убираем 10% самых старых (по времени).
+        const HARD_MAX = 5000;
+        if (next.size > HARD_MAX) {
+            const overflow = next.size - Math.floor(HARD_MAX * 0.9);
+            const sorted = [...next.entries()].sort((a, b) => {
+                const ta = (a[1].properties as { time?: string })?.time ?? '';
+                const tb = (b[1].properties as { time?: string })?.time ?? '';
+                return ta.localeCompare(tb);
+            });
+            for (let i = 0; i < overflow && i < sorted.length; i++) {
+                next.delete(sorted[i][0]);
+                removed++;
+            }
+            console.warn(`[Store] hard cap kicked in: removed ${overflow} oldest events`);
+        }
+
         if (removed > 0) {
             set({ eventsById: next, revision: state.revision + 1 });
             console.log('[Store] pruneExpired:', removed, 'expired');

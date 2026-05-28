@@ -78,6 +78,9 @@ class Morphology:
     # → ~150 сообщений/sec при ширине стрима → кэш-hit ~80% на повторах
     # топонимов и common-words. ~10K записей × ~100 bytes = ~1MB RAM.
     _LEMMA_CACHE_MAX = 10000
+    # Фраз обычно меньше (~1000 алиасов × несколько вариантов), но lemma_for_phrase
+    # вызывается в _build_alias_index при каждом reindex_all → выигрыш ощутим.
+    _PHRASE_CACHE_MAX = 2000
 
     def __init__(self) -> None:
         self._morph = pymorphy3.MorphAnalyzer()
@@ -85,6 +88,7 @@ class Morphology:
         # O(1) обновление позиции через move_to_end. Кэшируем по нижнему
         # регистру — pymorphy3 не различает Малой/малой/МАЛОЙ.
         self._lemma_cache: "OrderedDict[str, Lemma]" = OrderedDict()
+        self._phrase_cache: "OrderedDict[str, str]" = OrderedDict()
 
     @property
     def analyzer(self):
@@ -155,10 +159,24 @@ class Morphology:
 
         Используется street_matcher для канонизации alias-имени в индексе,
         когда токенизация razdel'ом избыточна (alias уже чистый, без пунктуации).
+
+        Phrase-level LRU cache (2000): reindex_all обрабатывает ~1000 алиасов;
+        при reload без cache каждый раз заново лемматизируется. С кешем —
+        instant hit на повторных вызовах.
         """
         if not text:
             return ''
-        return ' '.join(
+
+        cached = self._phrase_cache.get(text)
+        if cached is not None:
+            self._phrase_cache.move_to_end(text)
+            return cached
+
+        result = ' '.join(
             self.lemmatize_word(w).normal_form
             for w in text.split() if w
         )
+        self._phrase_cache[text] = result
+        while len(self._phrase_cache) > self._PHRASE_CACHE_MAX:
+            self._phrase_cache.popitem(last=False)
+        return result

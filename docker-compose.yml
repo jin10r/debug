@@ -18,7 +18,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.postgres
-      network: host
     container_name: postgres
     environment:
       POSTGRES_USER: postgres
@@ -55,7 +54,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.parser
-      network: host
     container_name: parser
     environment:
       # PostgreSQL connection
@@ -151,7 +149,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      network: host
     container_name: app
     environment:
       # Database
@@ -226,7 +223,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.nginx
-      network: host
     container_name: nginx
     ports:
       - "80:80"

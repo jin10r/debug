@@ -426,20 +426,43 @@ class ParserBot:
             message: Сообщение с фото
 
         Returns:
-            Путь к файлу или None
+            Путь к файлу или None при ошибке / path-traversal / symlink-attack.
         """
         try:
             if not self.events_media_dir:
                 return None
 
-            # Создаём директорию если нет
-            os.makedirs(self.events_media_dir, exist_ok=True)
+            from pathlib import Path
 
-            # Генерируем имя файла
+            # Канонизируем target-директорию: resolve следует за symlink'ами
+            # и нормализует .. компоненты.
+            target_dir = Path(self.events_media_dir).resolve()
+            target_dir.mkdir(parents=True, exist_ok=True)
+
+            # Имя файла строится из timestamp + msg.id. Используем Path().name
+            # для извлечения базового имени — никаких path-components.
             timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
-            filename = f"event_{timestamp}_{message.id}.jpg"
-            filepath = os.path.join(self.events_media_dir, filename)
+            safe_msg_id = abs(int(message.id))  # защита от отрицательных/inf
+            filename = Path(f"event_{timestamp}_{safe_msg_id}.jpg").name
+            final_path = (target_dir / filename).resolve()
 
+            # Path-traversal guard: финальный путь должен быть строго внутри
+            # target_dir (а не выше или сбоку через symlink в target_dir).
+            try:
+                final_path.relative_to(target_dir)
+            except ValueError:
+                logger.error(
+                    f"Path traversal blocked: {final_path} not under {target_dir}"
+                )
+                return None
+
+            # Symlink-attack guard: если файл уже существует как symlink —
+            # удалить, чтобы download_media не записал по адресу target'а.
+            if final_path.is_symlink():
+                logger.warning(f"Removing pre-existing symlink: {final_path}")
+                final_path.unlink()
+
+            filepath = str(final_path)
             # Скачиваем через client.download_media
             await self.app.download_media(message.photo, file_name=filepath)
 

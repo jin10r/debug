@@ -289,17 +289,53 @@ class MessageProcessor:
         matches_json = matches if matches is not None else '[]'
 
         async def _run(c: asyncpg.Connection) -> Optional[Dict[str, Any]]:
+            # Один roundtrip вместо 3: INSERT events + UPDATE events_meta +
+            # pg_notify в одном CTE-statement. PostgreSQL гарантирует
+            # transactional atomicity. Все три побочных эффекта (meta-update,
+            # notify) пропускаются если ON CONFLICT (дубль) — guard через
+            # EXISTS (SELECT 1 FROM inserted).
             row = await c.fetchrow(
                 """
-                INSERT INTO events
-                    (message_id, event_time, description, photo_url,
-                     layer, strategy, geom, matches)
-                VALUES ($1, $2, $3, $4, $5, $6, ST_GeomFromText($7, 4326), $8::jsonb)
-                ON CONFLICT (message_id) DO NOTHING
-                RETURNING id,
-                          ST_AsGeoJSON(geom)::text AS geom_json,
-                          ST_X(ST_Centroid(geom)) AS lng,
-                          ST_Y(ST_Centroid(geom)) AS lat
+                WITH inserted AS (
+                    INSERT INTO events
+                        (message_id, event_time, description, photo_url,
+                         layer, strategy, geom, matches)
+                    VALUES ($1, $2, $3, $4, $5, $6, ST_GeomFromText($7, 4326), $8::jsonb)
+                    ON CONFLICT (message_id) DO NOTHING
+                    RETURNING id, event_time, geom, layer, strategy, description
+                ),
+                meta_upd AS (
+                    UPDATE events_meta
+                    SET version = version + 1,
+                        updated_at = now(),
+                        max_event_id = (SELECT id FROM inserted)
+                    WHERE id = 1 AND EXISTS (SELECT 1 FROM inserted)
+                    RETURNING 1
+                ),
+                notify_call AS (
+                    SELECT pg_notify(
+                        'events_new',
+                        jsonb_build_object(
+                            'type', 'Feature',
+                            'geometry', ST_AsGeoJSON(i.geom)::jsonb,
+                            'properties', jsonb_build_object(
+                                'id', i.id,
+                                'layer', i.layer,
+                                'strategy', i.strategy,
+                                'description', i.description,
+                                'time', to_char(i.event_time AT TIME ZONE 'UTC',
+                                                'YYYY-MM-DD"T"HH24:MI:SS"+00:00"')
+                            )
+                        )::text
+                    )
+                    FROM inserted i
+                )
+                SELECT i.id,
+                       ST_AsGeoJSON(i.geom)::text AS geom_json,
+                       ST_X(ST_Centroid(i.geom)) AS lng,
+                       ST_Y(ST_Centroid(i.geom)) AS lat
+                FROM inserted i,
+                     (SELECT count(*) FROM notify_call) _force_notify
                 """,
                 message_id, event_time, description, photo_path,
                 layer, strategy, geom_wkt, matches_json,
@@ -308,25 +344,6 @@ class MessageProcessor:
                 logger.info(f"Message {message_id}: duplicate, skipped")
                 return None
 
-            await c.execute(
-                "UPDATE events_meta SET version = version + 1, "
-                "updated_at = now(), max_event_id = $1 WHERE id = 1",
-                row['id'],
-            )
-            await c.execute(
-                "SELECT pg_notify('events_new', $1::text)",
-                json_lib.dumps({
-                    'type': 'Feature',
-                    'geometry': json_lib.loads(row['geom_json']),
-                    'properties': {
-                        'id': row['id'],
-                        'layer': layer,
-                        'strategy': strategy,
-                        'description': description,
-                        'time': event_time.isoformat(),
-                    },
-                }),
-            )
             logger.info(
                 f"Message {message_id}: event {row['id']} saved "
                 f"(layer={layer}, strategy={strategy})"

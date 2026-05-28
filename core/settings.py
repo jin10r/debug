@@ -34,6 +34,12 @@ class DatabaseConfig:
     database: str
     user: str
     password: str
+    # asyncpg pool tuning — env-overrides DB_POOL_MIN_SIZE / DB_POOL_MAX_SIZE
+    pool_min_size: int = 5
+    pool_max_size: int = 20
+    # Command timeout — для одиночного SQL-запроса (process_candidates ~5-50ms,
+    # default 60s достаточно при transient lag, не убивает быстрые запросы).
+    command_timeout: int = 60
 
 
 @dataclass
@@ -338,6 +344,9 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
                 database=env.str("DB_NAME", "map"),
                 user=env.str("DB_USER", "postgres"),
                 password=env.str("DB_PASSWORD", "postgres"),
+                pool_min_size=_safe_env_int(env, "DB_POOL_MIN_SIZE", 5),
+                pool_max_size=_safe_env_int(env, "DB_POOL_MAX_SIZE", 20),
+                command_timeout=_safe_env_int(env, "DB_COMMAND_TIMEOUT", 60),
             ),
             bot=BotConfig(
                 token=env.str("BOT_TOKEN", ""),

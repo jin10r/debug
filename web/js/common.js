@@ -234,7 +234,7 @@ window.showNotification = function(message, duration = 3000, type = 'info') {
         font-size: 14px;
         line-height: 1.4;
         pointer-events: auto;
-        animation: slideDown 0.3s ease-out;
+        animation: slideDown 0.3s ease-out, hapticPulse 0.4s ease-out 0.05s;
         backdrop-filter: blur(10px);
         border: 1px solid ${borderColor};
     `;
@@ -243,6 +243,11 @@ window.showNotification = function(message, duration = 3000, type = 'info') {
     if (!document.getElementById('notificationStyles')) {
         const style = document.createElement('style');
         style.id = 'notificationStyles';
+        // hapticPulse — визуальный аналог тактильной отдачи. Срабатывает на
+        // каждое уведомление, давая визуальную «вибрацию» независимо от
+        // platform/Telegram-version. На устройствах с native HapticFeedback
+        // дублирует tactile импульс; на desktop/web без vibration —
+        // единственная обратная связь.
         style.textContent = `
             @keyframes slideDown {
                 from { opacity: 0; transform: translateY(-20px); }
@@ -251,6 +256,17 @@ window.showNotification = function(message, duration = 3000, type = 'info') {
             @keyframes slideUp {
                 from { opacity: 1; transform: translateY(0); }
                 to { opacity: 0; transform: translateY(-20px); }
+            }
+            @keyframes hapticPulse {
+                0%   { transform: scale(1) translateX(0); }
+                15%  { transform: scale(1.02) translateX(-2px); }
+                30%  { transform: scale(1.02) translateX(2px); }
+                45%  { transform: scale(1.02) translateX(-1px); }
+                60%  { transform: scale(1.01) translateX(1px); }
+                100% { transform: scale(1) translateX(0); }
+            }
+            @media (prefers-reduced-motion: reduce) {
+                @keyframes hapticPulse { 0%,100% { transform: none; } }
             }
         `;
         document.head.appendChild(style);

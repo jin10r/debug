@@ -20,8 +20,11 @@ services:
       dockerfile: Dockerfile.postgres
     container_name: postgres
     environment:
+      # Захардкожено: postgres-контейнер изолирован от внешнего мира (нет
+      # ports: блока, только expose внутри db-сети). Креды синхронизированы
+      # с core/settings.py DatabaseConfig дефолтами.
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_PASSWORD: postgres
       POSTGRES_DB: postgres
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -56,28 +59,9 @@ services:
       dockerfile: Dockerfile.parser
     container_name: parser
     environment:
-      # PostgreSQL connection
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_NAME: postgres
-      DB_USER: postgres
-      DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      # Telegram
+      # Только credentials/per-deployment URL — всё остальное в core/settings.py.
       CHANNEL_ID: ${CHANNEL_ID}
-      # JWT Secret (required for settings validation)
       JWT_SECRET: ${JWT_SECRET}
-      # Media
-      EVENTS_MEDIA_DIR: /media/events
-      # StreetMatcher tuning (см. core/settings.py.SimilarityConfig)
-      ENTITY_SIMILARITY_THRESHOLD: ${ENTITY_SIMILARITY_THRESHOLD:-0.75}
-      PSEUDO_INTERSECTION_RADIUS_METERS: ${PSEUDO_INTERSECTION_RADIUS_METERS:-150}
-      # Logging — json для агрегации, text для локального чтения логов
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      LOG_FORMAT: ${LOG_FORMAT:-json}
-      # Telegram proxy (optional, for blocked networks)
-      SOCKS5_HOST: ${SOCKS5_HOST:-}
-      PROXY_PORT: ${PROXY_PORT:-1080}
-      PROXY_SCHEME: ${PROXY_SCHEME:-socks5}
     volumes:
       - ./parser/session.session:/app/parser/session.session:rw
       - events_media:/media/events:rw
@@ -121,7 +105,9 @@ services:
   redis:
     image: redis:7-alpine
     container_name: redis
-    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env (no empty allowed for internal-network auth)}
+    # Захардкоженный пароль: redis-контейнер изолирован (нет ports: блока,
+    # только internal-network). Синхронизирован с core/settings.py RedisConfig.
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru --requirepass redis
     volumes:
       - redis_data:/data
     networks:
@@ -129,7 +115,7 @@ services:
     expose:
       - "6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env (no empty allowed for internal-network auth)}", "ping"]
+      test: ["CMD", "redis-cli", "-a", "redis", "ping"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -151,43 +137,14 @@ services:
       dockerfile: Dockerfile
     container_name: app
     environment:
-      # Database
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_NAME: postgres
-      DB_USER: postgres
-      DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      # Redis
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env (no empty allowed for internal-network auth)}
-      # JWT
-      JWT_SECRET: ${JWT_SECRET}
-      JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-900}
-      JWT_REFRESH_TTL: ${JWT_REFRESH_TTL:-604800}
-      # Bot
+      # Только credentials/per-deployment URL — всё остальное в core/settings.py.
       BOT_TOKEN: ${BOT_TOKEN}
       CHANNEL_ID: ${CHANNEL_ID}
-      # App
-      APP_HOST: 0.0.0.0
-      APP_PORT: 8080
-      # Безопасный дефолт: валидация Telegram включена, если явно не отключена
-      # в .env. Dev-режим (валидация off) включается осознанно.
-      APP_TELEGRAM_VALIDATION: ${TELEGRAM_VALIDATION_ENABLED:-True}
-      # Optional
+      JWT_SECRET: ${JWT_SECRET}
       WEBAPP_URL: ${WEBAPP_URL:-}
       REDIRECT_URL: ${REDIRECT_URL:-}
-      # CORS — пустое значение или '*' = CORS выключен (same-origin only).
-      # Только перечисленные через запятую origins включают CORS.
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
-      # StreetMatcher tuning (загружается в settings.similarity, доступен app тоже)
-      ENTITY_SIMILARITY_THRESHOLD: ${ENTITY_SIMILARITY_THRESHOLD:-0.75}
-      PSEUDO_INTERSECTION_RADIUS_METERS: ${PSEUDO_INTERSECTION_RADIUS_METERS:-150}
-      # Logging — json для агрегации, text для локального чтения
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      LOG_FORMAT: ${LOG_FORMAT:-json}
-      # Media
-      EVENTS_MEDIA_DIR: /media/events
+      # Optional override: dev-режим без валидации Telegram InitData (default True).
+      TELEGRAM_VALIDATION_ENABLED: ${TELEGRAM_VALIDATION_ENABLED:-True}
     volumes:
       - events_media:/media/events:ro
     depends_on:

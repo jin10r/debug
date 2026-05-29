@@ -30,7 +30,27 @@ _TAG_RE = re.compile(r'<[^>]+>')
 _NON_ALNUM_RE = re.compile(r'[^a-zA-Zа-яА-ЯёЁ0-9]')
 _SPACES_RE = re.compile(r'\s+')
 # Украинские буквы → русские: і,ї → и; є → е.
-_UA_TABLE = str.maketrans('іїє', 'иие')
+_UA_TABLE = str.maketrans('іїєІЇЄ', 'иииИИЕ')
+
+# Украинские окончания → русские эквиваленты (G6). Применяется ПОСЛЕ _UA_TABLE,
+# чтобы дополнительно нормализовать прилагательные/существительные:
+#   «Балкивська» → «Балковская», «Дерибасівський» → «Дерибасовский»,
+#   «Пушкінської» → «Пушкинской».
+# Регекспы case-insensitive чтобы покрыть Title Case.
+_UA_SUFFIX_FIXES = [
+    (re.compile(r'івська\b', re.IGNORECASE), 'овская'),
+    (re.compile(r'івський\b', re.IGNORECASE), 'овский'),
+    (re.compile(r'івської\b', re.IGNORECASE), 'овской'),
+    (re.compile(r'івською\b', re.IGNORECASE), 'овской'),
+    (re.compile(r'івському\b', re.IGNORECASE), 'овскому'),
+    (re.compile(r'ська\b', re.IGNORECASE), 'ская'),
+    (re.compile(r'ський\b', re.IGNORECASE), 'ский'),
+    (re.compile(r'ської\b', re.IGNORECASE), 'ской'),
+    (re.compile(r'ською\b', re.IGNORECASE), 'ской'),
+    (re.compile(r'ському\b', re.IGNORECASE), 'скому'),
+    (re.compile(r'цька\b', re.IGNORECASE), 'цкая'),
+    (re.compile(r'цький\b', re.IGNORECASE), 'цкий'),
+]
 
 
 def strip_tail(text: str) -> str:
@@ -62,6 +82,8 @@ def preprocess_light(text: str) -> str:
     text = _TAG_RE.sub(' ', text)
     text = _TIME_RE.sub(' ', text)
     text = text.translate(_UA_TABLE)
+    for pattern, repl in _UA_SUFFIX_FIXES:
+        text = pattern.sub(repl, text)
     text = _SPACES_RE.sub(' ', text)
     return text.strip()
 
@@ -80,5 +102,7 @@ def clean(text: str) -> str:
     text = _TIME_RE.sub(' ', text)
     text = _NON_ALNUM_RE.sub(' ', text)
     text = text.translate(_UA_TABLE)
+    for pattern, repl in _UA_SUFFIX_FIXES:
+        text = pattern.sub(repl, text)
     text = _SPACES_RE.sub(' ', text)
     return text.strip().lower()

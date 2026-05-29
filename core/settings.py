@@ -7,7 +7,35 @@ logger = logging.getLogger(__name__)
 
 # Constants for fallback (used if database is not available)
 DEFAULT_STOPWORDS = (
-    "ул", "улица", "пр", "проспект", "пер", "переулок", "зеленый", "оливки", "маслины", "тцк", "планшету", "планшетом", "черном", "парковке", "парковку", "парковка", "военная", "аллея", "дорога", "таврия", "выезде", "выезд", "сильпо", "атб", "долго", "доброе", "катаются", "дастер", "Рено", "бульвар", "маршрутка", "маршрутки", "светлая", "светлый", "светлая", "светлый", "повернули", "спринтер", "сообщить", "опасности", "заявка", "подписку", "ссылке", "помочь", "каналу", "видео", "щепкино"
+    # Уличные постфиксы / типы объектов (как часть n-gram, но не самостоятельно)
+    "ул", "улица", "пр", "проспект", "пер", "переулок", "бульвар", "аллея",
+    "дорога", "выезде", "выезд", "парк",
+    # Локативные предлоги/наречия (R3, основной источник substring-FP)
+    "сторона", "сторону", "стороны",
+    "возле", "около", "рядом", "перед", "после", "между", "напротив",
+    "район", "середине", "посередине",
+    # Количественные/числительные именованные (R3)
+    "много", "мало", "пара", "двое", "трое", "четверо", "несколько", "оба",
+    # Единицы измерения (R3 — «Метров» ≠ «Метро» по требованию пользователя)
+    "метр", "метров", "метра", "метре",
+    # Бытовые/общеупотребительные существительные (R3)
+    "дом", "дома", "дому", "доме", "роддом",
+    "двор", "дворе", "дворы", "дворов", "дворах",
+    "город", "города", "городе", "посёлок",
+    "арка", "аркой", "арки", "арке",
+    "стоп", "стопа",
+    "отделения", "отделение",
+    "почты", "почта",
+    # Цвета (для машин/одежды — не топонимы)
+    "черный", "чёрный", "черном", "чёрном", "белый", "белом", "серый", "серым",
+    "зеленый", "зелёный", "красный", "красном", "синий", "светлая", "светлый",
+    # Часто употребляемые контекстные слова из одесского корпуса
+    "оливки", "оливок", "маслины", "тцк", "планшету", "планшетом",
+    "парковке", "парковку", "парковка", "военная", "таврия", "сильпо", "атб",
+    "долго", "доброе", "катаются", "дастер", "Рено", "маршрутка", "маршрутки",
+    "повернули", "спринтер", "сообщить", "опасности", "заявка", "подписку",
+    "ссылке", "помочь", "каналу", "видео", "щепкино",
+    "менты", "мент", "мента", "мусора", "люди", "ребята", "ребят",
 )
 
 # Ключевые слова слоёв — канонические словоформы (не стемы).
@@ -29,48 +57,38 @@ DEFAULT_LAYER_KEYWORDS_TRAFFIC = (
 
 @dataclass
 class DatabaseConfig:
-    host: str
-    port: int
-    database: str
-    user: str
-    password: str
-    # asyncpg pool tuning — env-overrides DB_POOL_MIN_SIZE / DB_POOL_MAX_SIZE
+    """PostgreSQL — креды захардкожены: контейнер изолирован от внешнего мира
+    (нет port mapping в docker-compose), безопасно держать default `postgres`."""
+    host: str = "postgres"
+    port: int = 5432
+    database: str = "postgres"
+    user: str = "postgres"
+    password: str = "postgres"
+    # asyncpg pool tuning
     pool_min_size: int = 5
     pool_max_size: int = 20
-    # Command timeout — для одиночного SQL-запроса (process_candidates ~5-50ms,
+    # Command timeout для одиночного SQL-запроса (process_candidates ~5-50ms,
     # default 60s достаточно при transient lag, не убивает быстрые запросы).
     command_timeout: int = 60
 
 
 @dataclass
 class AppConfig:
-    host: str
-    port: int
+    host: str = "0.0.0.0"
+    port: int = 8080
     telegram_validation_enabled: bool = True
-    
-    @classmethod
-    def from_env(cls, env: Env) -> 'AppConfig':
-        """Создать AppConfig из переменных окружения"""
-        # Читаем переменную APP_TELEGRAM_VALIDATION (из docker-compose)
-        # или TELEGRAM_VALIDATION_ENABLED (напрямую из .env)
-        validation_raw = env.str("APP_TELEGRAM_VALIDATION", None)
-        if validation_raw is None:
-            validation_raw = env.str("TELEGRAM_VALIDATION_ENABLED", "True")
-        
-        # Конвертируем строку в bool (поддерживаем: True/False, true/false, 1/0)
-        validation_enabled = validation_raw.lower() in ("true", "1", "yes", "on")
-        
-        return cls(
-            host=env.str("APP_HOST", "0.0.0.0"),
-            port=_safe_env_int(env, "APP_PORT", 8080),
-            telegram_validation_enabled=validation_enabled
-        )
+    # Логирование (main.py, parser/monitoring.py читают эти поля)
+    log_level: str = "INFO"
+    log_format: str = "json"  # json | text
+    # CORS: пустой кортеж = same-origin only (nginx проксирует фронтенд →
+    # CORS не нужен). При явном списке доменов app_factory включает CORS.
+    allowed_origins: tuple = ()
 
 
 @dataclass
 class BotConfig:
     token: str
-    channel_id: str  # NEW: Add CHANNEL_ID as required field
+    channel_id: str
     webapp_url: Optional[str] = None
     redirect_url: Optional[str] = None
 
@@ -85,10 +103,12 @@ class JWTConfig:
 
 @dataclass
 class RedisConfig:
+    """Redis — внутренний кэш в изолированной docker-сети (нет ports: блока).
+    Креды захардкожены: внешнего доступа нет, env-переопределение не нужно."""
     host: str = "redis"
     port: int = 6379
     db: int = 0
-    password: Optional[str] = None
+    password: str = "redis"
 
 
 @dataclass
@@ -107,8 +127,12 @@ class SimilarityConfig:
     entity_min_word_length: int = 2
 
     # Порог фуззи-матча (0-1). adjusted_score = raw_score × length_bias ≥ X
-    # отсекает шумовые совпадения. На 0.75 шум 0.68-0.74 не проходит.
+    # отсекает шумовые совпадения. Для 2+ gram держим базовый 0.75.
     entity_similarity_threshold: float = 0.75
+    # R4: отдельный (более жёсткий) порог для 1-gram T3 tier-B fuzzy matches.
+    # Borderline 0.75 от «сторону → Героев Обороны» отсекается 0.80, при этом
+    # 2+ gram (где есть контекст) остаётся 0.75.
+    entity_similarity_threshold_1gram: float = 0.80
 
     # Радиус псевдо-пересечений (метры) для process_candidates SQL. Если два
     # alias-индекса дают разные street_id, но их геометрии не пересекаются
@@ -139,6 +163,9 @@ class SimilarityConfig:
     phonetic_enabled: bool = True
     # Порог rapidfuzz token_sort_ratio для верификации Metaphone-кандидатов (0-1).
     phonetic_match_threshold: float = 0.85
+    # Строгий порог для 1-gram phonetic-матчей (G3). Жёстче основного, чтобы
+    # отсечь близкие корни вроде «зелёный → Зелёная Балка».
+    phonetic_match_threshold_1gram: float = 0.95
     # Включение лемматического fallback (T3).
     lemma_fallback_enabled: bool = True
     # Максимальный размер n-граммы (количество токенов) для T2.
@@ -148,6 +175,56 @@ class SimilarityConfig:
     # Жёсткий cap количества вариантов на одну улицу. При превышении —
     # fallback на «инфлектировать только первое content-слово».
     phonetic_variants_per_street_cap: int = 500
+
+    # ─── Generic-suffix фильтр для 1-gram (G1) ─────────────────────────
+    # Слова, которые сами по себе не должны порождать матч улицы. Только в
+    # составе 2+ gram. Закрывает FP «возле кладбища → 2 кладбища-улицы».
+    generic_suffixes: tuple = (
+        'кладбище', 'рынок', 'сквер', 'площадь', 'переулок', 'проспект',
+        'шоссе', 'мост', 'парк', 'бульвар', 'набережная', 'дорога',
+        'спуск', 'сад', 'треугольник', 'центр', 'район', 'посёлок',
+        'улица', 'станция', 'остановка',
+    )
+
+    # ─── Razdel-шум: токены, не считаемые «словами» (G2) ──────────────
+    # Префильтр перед построением n-grams: эти токены выбрасываются, чтобы
+    # не раздувать size и не засорять matched_part.
+    punctuation_tokens: tuple = (
+        '#', '/', ',', '.', '(', ')', '!', '?', '-', '«', '»', '"', ':', ';',
+    )
+
+    # ─── Gap-grams (User#3) ────────────────────────────────────────────
+    # Максимальный разрыв между токенами при построении gap-n-gram. 0 = только
+    # подряд идущие; 3 = «Ольгиевский этот самый спуск» сматчится как 2-gram.
+    max_token_gap: int = 3
+
+    # ─── Multi-word confirmation (User#1) ──────────────────────────────
+    # Окно поиска недостающего ref-слова многословной улицы вокруг matched n-gram.
+    multiword_confirm_window: int = 8
+    # Порог rapidfuzz для подтверждения второго ref-слова (мягче основного —
+    # фонетика+морфология уже доказали близость, ищем «второе слово где-то рядом»).
+    multiword_confirm_threshold: float = 0.70
+    # Бонус к raw score (0-100) при подтверждении ref-слова в окне.
+    multiword_confirm_bonus: float = 10.0
+    # Штраф к raw score (0-100), если ref-слова многословной улицы не найдены.
+    # 15.0 калибрировано: perfect 1-gram (raw=100) − 15 = 85, × bias_1g=0.85
+    # = 72.25, ниже threshold 75 → партиальные одиночные мнения многословных
+    # улиц без контекста отсекаются. Это закрывает FP «зелёный бус → Зелёная
+    # Балка/Горка», но и теряет легитимное «на арнаутской» без определителя.
+    # Соответствующее партиальное мнение появится только при наличии хотя бы
+    # одного ref-слова в окне (тогда bonus компенсирует штраф).
+    multiword_unconfirmed_penalty: float = 15.0
+
+    # ─── Per-word scoring + dynamic threshold (User#2) ─────────────────
+    # Шаг снижения порога на каждое дополнительное слово в n-grams.
+    # threshold = base - (size - 1) * step.
+    dynamic_threshold_step: float = 0.03
+    # Минимальный per-word порог при покомпонентной оценке (rapidfuzz.ratio
+    # каждой пары слов).
+    per_word_threshold: float = 0.75
+    # Softening rapidfuzz-порога когда Metaphone-код уже совпал (фонетическая
+    # идентичность доказана, rapidfuzz отсеивает ложные коллизии).
+    metaphone_softening: float = 0.10
 
     def get_stopwords(self) -> Set[str]:
         """Стоп-слова (используются в _generate_ngrams)."""
@@ -170,10 +247,22 @@ class ParserConfig:
 
     # Сколько сообщений тянуть из истории канала при старте парсера.
     # Высокое значение увеличивает startup latency, низкое — пропускает старые.
-    backfill_limit: int = 25
+    history_limit: int = 25
 
     # Размер asyncio.Queue для входящих сообщений (производитель-потребитель).
     message_queue_maxsize: int = 1000
+
+    # Каталог хранения медиафайлов (фотографии событий). Монтируется через
+    # volume в docker-compose, путь синхронизирован с разделом volumes.
+    events_media_dir: str = "/app/media/events"
+
+    # SOCKS5/HTTP proxy для pyrogram (если телеграм блокируется в сети
+    # развёртывания). None = без proxy. Меняется правкой settings.py для
+    # конкретной инсталляции — не env.
+    socks5_host: Optional[str] = None
+    proxy_host: Optional[str] = None
+    proxy_scheme: str = "socks5"
+    proxy_port: int = 1080
 
 
 @dataclass
@@ -207,36 +296,6 @@ class Settings:
     layers: LayerConfig = field(default_factory=LayerConfig)
     parser: ParserConfig = field(default_factory=ParserConfig)
     question_overlay: QuestionOverlayConfig = field(default_factory=QuestionOverlayConfig)
-
-
-def _safe_env_float(env: Env, key: str, default: float) -> float:
-    """env.float() с дополнительной защитой: пустая строка → default.
-
-    `environs.Env.float(KEY, default=X)` рассматривает `KEY=` (empty) как
-    «переменная задана» и поднимает EnvValidationError. Этот хелпер трактует
-    empty/whitespace как «не задана» → fallback на default. Невалидное
-    числовое значение тоже даёт default + warning.
-    """
-    raw = env.str(key, "").strip()
-    if not raw:
-        return default
-    try:
-        return float(raw)
-    except (ValueError, TypeError):
-        logger.warning(f"Invalid float for {key}={raw!r}, using default {default}")
-        return default
-
-
-def _safe_env_int(env: Env, key: str, default: int) -> int:
-    """То же что `_safe_env_float`, но для int."""
-    raw = env.str(key, "").strip()
-    if not raw:
-        return default
-    try:
-        return int(raw)
-    except (ValueError, TypeError):
-        logger.warning(f"Invalid int for {key}={raw!r}, using default {default}")
-        return default
 
 
 def _get_required_secret(env: Env) -> str:
@@ -329,73 +388,42 @@ def _get_required_channel_id(env: Env) -> str:
 
 
 def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> Settings:
-    """Loads settings from environment variables."""
+    """Load settings — env читается ТОЛЬКО для credentials/per-deployment URL.
+
+    Всё остальное — хардкодные дефолты в соответствующих `@dataclass`. Чтобы
+    изменить калибровку матчера / параметры БД / прокси и т.п., правится
+    `core/settings.py` напрямую (не env).
+
+    Keep-list env: BOT_TOKEN, CHANNEL_ID, WEBAPP_URL, REDIRECT_URL, JWT_SECRET.
+    """
     env = Env()
     env.read_env(env_path)
 
     try:
-        jwt_config = None
-        if require_jwt:
-            jwt_config = JWTConfig(
-                secret=_get_required_secret(env),
-                access_token_ttl=_safe_env_int(env, "JWT_ACCESS_TTL", 900),
-                refresh_token_ttl=_safe_env_int(env, "JWT_REFRESH_TTL", 604800),
-            )
-        
+        jwt_config = (
+            JWTConfig(secret=_get_required_secret(env))
+            if require_jwt else None
+        )
+
         return Settings(
-            app=AppConfig.from_env(env),
-            db=DatabaseConfig(
-                host=env.str("DB_HOST", "postgres"),
-                port=_safe_env_int(env, "DB_PORT", 5432),
-                database=env.str("DB_NAME", "map"),
-                user=env.str("DB_USER", "postgres"),
-                password=env.str("DB_PASSWORD", "postgres"),
-                pool_min_size=_safe_env_int(env, "DB_POOL_MIN_SIZE", 5),
-                pool_max_size=_safe_env_int(env, "DB_POOL_MAX_SIZE", 20),
-                command_timeout=_safe_env_int(env, "DB_COMMAND_TIMEOUT", 60),
+            app=AppConfig(
+                telegram_validation_enabled=env.bool(
+                    "TELEGRAM_VALIDATION_ENABLED", default=True
+                ),
             ),
+            db=DatabaseConfig(),
             bot=BotConfig(
                 token=env.str("BOT_TOKEN", ""),
-                channel_id=_get_required_channel_id(env),  # NEW: Add validated channel_id
+                channel_id=_get_required_channel_id(env),
                 webapp_url=env.str("WEBAPP_URL", None),
-                redirect_url=env.str("REDIRECT_URL", None)
+                redirect_url=env.str("REDIRECT_URL", None),
             ),
             jwt=jwt_config,
-            redis=RedisConfig(
-                host=env.str("REDIS_HOST", "redis"),
-                port=_safe_env_int(env, "REDIS_PORT", 6379),
-                db=_safe_env_int(env, "REDIS_DB", 0),
-                password=env.str("REDIS_PASSWORD", None),
-            ),
-            similarity=SimilarityConfig(
-                entity_min_word_length=_safe_env_int(env, "ENTITY_MIN_WORD_LENGTH", 2),
-                entity_similarity_threshold=_safe_env_float(env, "ENTITY_SIMILARITY_THRESHOLD", 0.75),
-                pseudo_intersection_radius_meters=_safe_env_float(
-                    env, "PSEUDO_INTERSECTION_RADIUS_METERS", 150.0
-                ),
-                max_candidates_per_ngram=_safe_env_int(env, "MAX_CANDIDATES_PER_NGRAM", 2),
-                max_entities=_safe_env_int(env, "MAX_ENTITIES", 3),
-                length_bias_1gram=_safe_env_float(env, "LENGTH_BIAS_1GRAM", 0.85),
-                length_bias_2gram=_safe_env_float(env, "LENGTH_BIAS_2GRAM", 0.90),
-                max_text_length=_safe_env_int(env, "MAX_TEXT_LENGTH", 380),
-                phonetic_enabled=env.bool("PHONETIC_ENABLED", default=True),
-                phonetic_match_threshold=_safe_env_float(env, "PHONETIC_MATCH_THRESHOLD", 0.85),
-                lemma_fallback_enabled=env.bool("LEMMA_FALLBACK_ENABLED", default=True),
-                max_phonetic_ngram_length=_safe_env_int(env, "MAX_PHONETIC_NGRAM_LENGTH", 4),
-                phonetic_forms_cap=_safe_env_int(env, "PHONETIC_FORMS_CAP", 12),
-                phonetic_variants_per_street_cap=_safe_env_int(
-                    env, "PHONETIC_VARIANTS_PER_STREET_CAP", 500
-                ),
-            ),
-            parser=ParserConfig(
-                backfill_limit=_safe_env_int(env, "BACKFILL_LIMIT", 25),
-                message_queue_maxsize=_safe_env_int(env, "MESSAGE_QUEUE_MAXSIZE", 1000),
-            ),
-            question_overlay=QuestionOverlayConfig(
-                center_lon=_safe_env_float(env, "QUESTION_OVERLAY_CENTER_LON", 30.83135),
-                center_lat=_safe_env_float(env, "QUESTION_OVERLAY_CENTER_LAT", 46.49804),
-                radius=_safe_env_float(env, "QUESTION_OVERLAY_RADIUS", 0.045),
-            )
+            redis=RedisConfig(),
+            similarity=SimilarityConfig(),
+            layers=LayerConfig(),
+            parser=ParserConfig(),
+            question_overlay=QuestionOverlayConfig(),
         )
     except Exception as e:
         raise ValueError(f"Configuration error: {e}")

@@ -16,13 +16,17 @@ from zoneinfo import ZoneInfo
 from pyrogram import Client, filters
 from pyrogram.types import Message
 
-# Настраиваем логирование на уровне модуля — до любых импортов,
-# чтобы ошибки при загрузке зависимостей были видны в docker logs.
-# LOG_FORMAT=json (по умолчанию, симметрично main.py app-сервиса) → JSON-логи
-# через core.utils.logging_config.JSONFormatter; LOG_FORMAT=text — человеко-
-# читаемые логи для локальной разработки.
-_LOG_LEVEL = getattr(logging, os.getenv('LOG_LEVEL', 'INFO').upper(), logging.INFO)
-_LOG_FORMAT = os.getenv('LOG_FORMAT', 'json').lower()
+# Импорт settings первым делом — log-параметры берутся из централизованного
+# AppConfig (log_level/log_format), не из env. settings.py использует
+# logging.getLogger без basicConfig — это безопасно до настройки ниже.
+from core.settings import settings
+
+# Настраиваем логирование сразу после импорта settings, до загрузки тяжёлых
+# зависимостей (pymorphy3, fonetika), чтобы их init-логи попадали в нужный
+# формат. log_format=json (default) → JSON через JSONFormatter; =text —
+# человеко-читаемые логи для локальной разработки.
+_LOG_LEVEL = getattr(logging, settings.app.log_level.upper(), logging.INFO)
+_LOG_FORMAT = settings.app.log_format.lower()
 
 if _LOG_FORMAT == 'json':
     from core.utils.logging_config import JSONFormatter
@@ -37,7 +41,6 @@ _handler.setFormatter(_formatter)
 logging.root.handlers = [_handler]
 logging.root.setLevel(_LOG_LEVEL)
 
-from core.settings import settings
 from .db_adapter import DBAdapter
 from .message_processor import MessageProcessor
 
@@ -76,7 +79,7 @@ class ParserBot:
                 "Check that CHANNEL_ID is set in .env and passed to the parser container."
             )
         self.channel_id = settings.bot.channel_id
-        self.events_media_dir = os.getenv('EVENTS_MEDIA_DIR', '/app/media/events')
+        self.events_media_dir = settings.parser.events_media_dir
 
     async def initialize(self) -> bool:
         """
@@ -132,13 +135,13 @@ class ParserBot:
                 return False
 
             try:
-                proxy_host = os.getenv('SOCKS5_HOST') or os.getenv('PROXY_HOST')
+                proxy_host = settings.parser.socks5_host or settings.parser.proxy_host
                 proxy_config = None
                 if proxy_host:
                     proxy_config = {
-                        "scheme": os.getenv('PROXY_SCHEME', 'socks5'),
+                        "scheme": settings.parser.proxy_scheme,
                         "hostname": proxy_host,
-                        "port": int(os.getenv('PROXY_PORT', '1080')),
+                        "port": settings.parser.proxy_port,
                     }
                     logger.info(f"Using proxy: {proxy_config['scheme']}://{proxy_config['hostname']}:{proxy_config['port']}")
 
@@ -193,14 +196,14 @@ class ParserBot:
 
             await self._warmup_peer()
 
-            backfill_limit = (
-                settings.parser.backfill_limit
+            history_limit = (
+                settings.parser.history_limit
                 if settings and getattr(settings, 'parser', None) else 25
             )
             count = 0
             async for message in self.app.get_chat_history(
                 chat_id=self.channel_id,
-                limit=backfill_limit,
+                limit=history_limit,
             ):
                 await self._message_queue.put(message)
                 count += 1

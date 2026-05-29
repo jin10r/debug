@@ -108,7 +108,7 @@ flowchart TD
 | `TYPO_CORRECTION_ENABLED` | True | Включение SymSpell pre-correction |
 | `TYPO_CORRECTION_MAX_EDIT_DISTANCE` | 2 | edit_distance для SymSpell |
 | `TYPO_CORRECTION_MIN_WORD_LENGTH` | 4 | Мин. длина слова для коррекции |
-| `BACKFILL_LIMIT` | 25 | Сколько сообщений из истории при старте |
+| `HISTORY_LIMIT` | 25 | Сколько сообщений из истории при старте |
 | `MESSAGE_QUEUE_MAXSIZE` | 1000 | Размер async-очереди |
 
 ## Метрики качества (последние срезы)

@@ -1,6 +1,5 @@
 """Main entry point for the Temperature Optimization application"""
 import asyncio
-import os
 import logging
 import signal
 import sys
@@ -11,10 +10,10 @@ from core.settings import settings
 from core.app_factory import create_app
 from core.utils.logging_config import setup_logging
 
-# Configure structured logging (JSON format)
+# Configure structured logging — параметры из централизованного settings.
 setup_logging(
-    level=getattr(logging, os.getenv('LOG_LEVEL', 'INFO').upper(), logging.INFO),
-    json_format=os.getenv('LOG_FORMAT', 'json') == 'json'
+    level=getattr(logging, settings.app.log_level.upper(), logging.INFO),
+    json_format=settings.app.log_format == 'json',
 )
 logger = logging.getLogger(__name__)
 

@@ -1,11 +1,12 @@
 """DB Adapter - подключение к PostgreSQL."""
 
 import logging
-import os
 import asyncio
 from typing import Optional
 
 import asyncpg
+
+from core.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -14,12 +15,12 @@ class DBAdapter:
     """Адаптер для работы с PostgreSQL."""
 
     def __init__(self):
-        """Инициализация адаптера."""
-        self._host = os.getenv('DB_HOST', 'postgres')
-        self._port = int(os.getenv('DB_PORT', '5432'))
-        self._database = os.getenv('DB_NAME', 'postgres')
-        self._user = os.getenv('DB_USER', 'postgres')
-        self._password = os.getenv('DB_PASSWORD', 'postgres')
+        """Инициализация адаптера — DB-параметры из централизованного settings."""
+        self._host = settings.db.host
+        self._port = settings.db.port
+        self._database = settings.db.database
+        self._user = settings.db.user
+        self._password = settings.db.password
         self.__pool: Optional[asyncpg.Pool] = None
 
     async def connect(self, max_retries: int = 10, retry_delay: float = 2.0) -> bool:

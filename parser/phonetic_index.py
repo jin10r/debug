@@ -67,6 +67,10 @@ class PhoneticIndex:
         self._lemma_tuple: Dict[Tuple[str, ...], List[PhoneticEntry]] = {}
         self._lemma_phrases: List[str] = []
         self._lemma_phrase_meta: List[PhoneticEntry] = []
+        # Обратный индекс street_id → lemma_tuple первого алиаса. Используется
+        # confirmation logic в StreetMatcher: когда n-gram матчит часть
+        # многословной улицы, ищем оставшиеся ref-лемм в окрестности сообщения.
+        self._street_to_lemmas: Dict[int, Tuple[str, ...]] = {}
 
     # --------------------------------------------------------------- lazy deps
 
@@ -170,18 +174,21 @@ class PhoneticIndex:
         return pos in _CONTENT_POS
 
     def _generate_variants(self, name: str) -> List[str]:
-        """Варианты для имени улицы: полнофразовые + одиночные content-формы.
+        """Варианты для имени улицы.
 
-        Индексируется:
-          • cartesian product словоформ по всем токенам (полнофразовые варианты:
-            «малая арнаутская», «малой арнаутской», …);
-          • дополнительно каждая словоформа каждого content-токена как
-            single-word вариант («арнаутская», «арнаутской», …) — это позволяет
-            T2 ловить 1-gram сообщения вроде «арнаудска».
+        Для **одно-токенной** улицы (Канатная, Пастера, Гагарина) — индексируются
+        все словоформы (single-word варианты).
 
-        При превышении `phonetic_variants_per_street_cap` пересобираем
-        cartesian product, инфлектируя только первый content-токен; single-word
-        варианты остаются (они дешёвые и формируют основной recall).
+        Для **многословной** улицы (Малая Арнаутская, Преображенская улица) —
+        индексируется только cartesian product словоформ всех токенов
+        (полнофразовые варианты). Single-word индексация для многословных
+        улиц **сознательно отключена**: она порождала FP «арнаутская → обе
+        Арнаутские», «кладбище → 3 кладбища-улицы». Partial recall на
+        одиночное слово восстанавливается через T3 lemma_fuzzy + User#1
+        confirmation (см. parser/street_matcher.py).
+
+        При превышении `phonetic_variants_per_street_cap` cartesian product
+        пересобирается, инфлектируя только первый content-токен.
         """
         cleaned = clean(name)
         if not cleaned:
@@ -199,24 +206,19 @@ class PhoneticIndex:
         if not forms_per_token:
             return []
 
-        variants: List[str] = []
-        seen: set = set()
-
-        # Single-word варианты — только для content-токенов.
-        # Стоп-слова («улица», «проспект» и т.п.) отсеиваются: их формы — это
-        # шумовые матчи для любого текста, где они встречаются.
-        for i, t in enumerate(tokens):
-            if not self._is_content_token(t.text):
-                continue
-            for form in forms_per_token[i]:
-                if form in seen:
-                    continue
-                seen.add(form)
-                variants.append(form)
+        # P1: для одно-токенной улицы — single-word варианты,
+        #     для многословной — ТОЛЬКО полнофразовый cartesian product.
+        if len(forms_per_token) == 1:
+            seen: set = set()
+            variants: List[str] = []
+            for form in forms_per_token[0]:
+                if form not in seen:
+                    seen.add(form)
+                    variants.append(form)
+            return variants
 
         cap = self._variants_cap()
 
-        # Cartesian product словоформ через все токены (полнофразовые).
         total = 1
         for f in forms_per_token:
             total *= len(f)
@@ -236,14 +238,15 @@ class PhoneticIndex:
         else:
             phrase_forms = forms_per_token
 
+        variants = []
+        seen = set()
         for combo in itertools.product(*phrase_forms):
             variant = ' '.join(combo)
-            if variant in seen:
-                continue
-            seen.add(variant)
-            variants.append(variant)
-            if len(variants) >= cap:
-                break
+            if variant not in seen:
+                seen.add(variant)
+                variants.append(variant)
+                if len(variants) >= cap:
+                    break
         return variants
 
     def _lemma_tuple_for_name(self, name: str) -> Tuple[str, ...]:
@@ -322,6 +325,7 @@ class PhoneticIndex:
         new_lemma_tuple: Dict[Tuple[str, ...], List[PhoneticEntry]] = {}
         new_phrases: List[str] = []
         new_phrase_meta: List[PhoneticEntry] = []
+        new_street_to_lemmas: Dict[int, Tuple[str, ...]] = {}
 
         street_count = 0
         for row in rows:
@@ -336,14 +340,20 @@ class PhoneticIndex:
             for phrase, entry in lp_pairs:
                 new_phrases.append(phrase)
                 new_phrase_meta.append(entry)
+            # Обратный индекс — первый алиас (canonical) как ref-tuple для confirmation
+            if names:
+                first_lemmas = self._lemma_tuple_for_name(names[0])
+                if first_lemmas:
+                    new_street_to_lemmas[street_id] = first_lemmas
 
         variant_count = sum(len(v) for v in new_phonetic.values())
 
-        # Atomic swap: четыре синхронных присваивания без await между ними.
+        # Atomic swap: пять синхронных присваиваний без await между ними.
         self._phonetic = new_phonetic
         self._lemma_tuple = new_lemma_tuple
         self._lemma_phrases = new_phrases
         self._lemma_phrase_meta = new_phrase_meta
+        self._street_to_lemmas = new_street_to_lemmas
 
         logger.info(
             f"[PhoneticIndex] built: {variant_count} variants, "
@@ -358,7 +368,7 @@ class PhoneticIndex:
         Если row=None — улица удалена/скрыта (нет geom), все её записи
         вычищаются. Снапшот делается локально, swap — атомарно.
         """
-        # Удалить существующие записи улицы из всех трёх структур.
+        # Удалить существующие записи улицы из всех четырёх структур.
         new_phonetic = {
             code: [e for e in entries if e.street_id != street_id]
             for code, entries in self._phonetic.items()
@@ -378,6 +388,9 @@ class PhoneticIndex:
                 new_phrases.append(phrase)
                 new_phrase_meta.append(entry)
 
+        new_street_to_lemmas = dict(self._street_to_lemmas)
+        new_street_to_lemmas.pop(street_id, None)
+
         # Добавить новые записи если улица существует.
         if row:
             names = row['names'] or []
@@ -389,11 +402,16 @@ class PhoneticIndex:
             for phrase, entry in lp_pairs:
                 new_phrases.append(phrase)
                 new_phrase_meta.append(entry)
+            if names:
+                first_lemmas = self._lemma_tuple_for_name(names[0])
+                if first_lemmas:
+                    new_street_to_lemmas[street_id] = first_lemmas
 
         self._phonetic = new_phonetic
         self._lemma_tuple = new_lemma_tuple
         self._lemma_phrases = new_phrases
         self._lemma_phrase_meta = new_phrase_meta
+        self._street_to_lemmas = new_street_to_lemmas
         logger.info(f"[PhoneticIndex] reindexed street {street_id}")
 
     # ---------------------------------------------------------------- queries
@@ -416,6 +434,14 @@ class PhoneticIndex:
         if not lemmas:
             return []
         return list(self._lemma_tuple.get(lemmas, ()))
+
+    def get_lemma_tuple_for_street(self, street_id: int) -> Tuple[str, ...]:
+        """Кортеж лемм canonical-имени улицы (для User#1 multiword confirmation).
+
+        Возвращает пустой tuple если street_id неизвестен. Используется
+        StreetMatcher для поиска недостающих ref-лемм в окне сообщения.
+        """
+        return self._street_to_lemmas.get(street_id, ())
 
     def lemma_phrases(self) -> Tuple[List[str], List[PhoneticEntry]]:
         """Параллельные списки для rapidfuzz tier-B fallback.

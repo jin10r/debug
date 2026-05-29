@@ -134,14 +134,20 @@ class SimilarityConfig:
     # локацией: поиск улиц пропускается, событию назначается random точка.
     max_text_length: int = 380
 
-    # ─── SymSpell pre-correction опечаток (parser/typo_corrector.py) ──────
-    # Включение pre-correction. False = быстрый rollback без перезапуска.
-    typo_correction_enabled: bool = True
-    # Edit distance Левенштейна: 1 = одна опечатка, 2 = до двух (рекомендуется).
-    typo_correction_max_edit_distance: int = 2
-    # Минимальная длина слова для коррекции. Короткие слова (≤3) дают много
-    # ложных match'ей (например «улу» → «ул»), поэтому фильтруются.
-    typo_correction_min_word_length: int = 4
+    # ─── Phonetic matching (parser/phonetic_index.py) ────────────────────
+    # Включение фонетической стратегии (T2). False — только лемматический fallback.
+    phonetic_enabled: bool = True
+    # Порог rapidfuzz token_sort_ratio для верификации Metaphone-кандидатов (0-1).
+    phonetic_match_threshold: float = 0.85
+    # Включение лемматического fallback (T3).
+    lemma_fallback_enabled: bool = True
+    # Максимальный размер n-граммы (количество токенов) для T2.
+    max_phonetic_ngram_length: int = 4
+    # Сколько словоформ на одно content-слово брать из parse[0].lexeme при сборке индекса.
+    phonetic_forms_cap: int = 12
+    # Жёсткий cap количества вариантов на одну улицу. При превышении —
+    # fallback на «инфлектировать только первое content-слово».
+    phonetic_variants_per_street_cap: int = 500
 
     def get_stopwords(self) -> Set[str]:
         """Стоп-слова (используются в _generate_ngrams)."""
@@ -372,12 +378,13 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
                 length_bias_1gram=_safe_env_float(env, "LENGTH_BIAS_1GRAM", 0.85),
                 length_bias_2gram=_safe_env_float(env, "LENGTH_BIAS_2GRAM", 0.90),
                 max_text_length=_safe_env_int(env, "MAX_TEXT_LENGTH", 380),
-                typo_correction_enabled=env.bool("TYPO_CORRECTION_ENABLED", default=True),
-                typo_correction_max_edit_distance=_safe_env_int(
-                    env, "TYPO_CORRECTION_MAX_EDIT_DISTANCE", 2
-                ),
-                typo_correction_min_word_length=_safe_env_int(
-                    env, "TYPO_CORRECTION_MIN_WORD_LENGTH", 4
+                phonetic_enabled=env.bool("PHONETIC_ENABLED", default=True),
+                phonetic_match_threshold=_safe_env_float(env, "PHONETIC_MATCH_THRESHOLD", 0.85),
+                lemma_fallback_enabled=env.bool("LEMMA_FALLBACK_ENABLED", default=True),
+                max_phonetic_ngram_length=_safe_env_int(env, "MAX_PHONETIC_NGRAM_LENGTH", 4),
+                phonetic_forms_cap=_safe_env_int(env, "PHONETIC_FORMS_CAP", 12),
+                phonetic_variants_per_street_cap=_safe_env_int(
+                    env, "PHONETIC_VARIANTS_PER_STREET_CAP", 500
                 ),
             ),
             parser=ParserConfig(

@@ -1,30 +1,30 @@
-"""StreetMatcher — поиск улиц через NER + лексический фуззи-матч.
+"""StreetMatcher — phonetic-first matcher + lemma fallback.
 
-Замена lexical_matcher.py. Архитектура двухуровневая:
+Двухуровневая стратегия (NER и SymSpell удалены):
 
-  T1 [NER] — `loc_spans` от natasha NewsNERTagger лемматизируются и матчатся
-             против alias-индекса. Высокая precision: NER исключает контекстные
-             прилагательные ("малый автобус" не помечается как LOC).
-  T3 [Lex] — fallback по всему лемматизированному тексту через rapidfuzz +
-             n-граммы (текущая логика lexical_matcher). Recall-страховка для
-             lowercase Telegram-стиля, где NER не работает.
+  T2 [Phonetic] — для каждой n-граммы сообщения (длиной 1..MAX_PHONETIC_NGRAM_LENGTH)
+                  склеиваем исходные surface формы токенов, считаем русский
+                  Metaphone (через PhoneticIndex), O(1) lookup → rapidfuzz
+                  верификация по token_sort_ratio с порогом PHONETIC_MATCH_THRESHOLD.
+  T3 [Lemma]    — для n-грамм без T2-хита: tier-A через exact lemma-tuple,
+                  tier-B через rapidfuzz по лемматизированным фразам с порогом
+                  ENTITY_SIMILARITY_THRESHOLD.
 
-Результаты T1/T3 объединяются: для каждой улицы берётся max(score). Это
-сохраняет recall старого матчера при добавленной precision от NER.
+Слияние T2 ∪ T3 — max score по street_id, при равенстве побеждает T2
+(phonetic > lemma_exact > lemma_fuzzy). Финальный top-K = MAX_ENTITIES.
 
-Лемматизация делегирована Morphology (один MorphAnalyzer на процесс).
-Alias-индекс — два параллельных списка (`_alias_texts`, `_alias_meta`),
-синхронизация по индексу.
+Состояние индекса вынесено в PhoneticIndex; матчер хранит только stop-words.
 """
 
+import asyncio
 import logging
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Sequence, Set, Tuple
 
 from rapidfuzz import fuzz, process as rf_process
 
 from .morphology import Lemma, Morphology
-from .ner_extractor import Span
-from .text_preprocessor import clean
+from .phonetic_index import PhoneticEntry, PhoneticIndex
+from .razdel_tokenizer import Token
 
 try:
     from .settings import settings
@@ -33,34 +33,57 @@ except Exception:
 
 logger = logging.getLogger(__name__)
 
+_SOURCE_PRIORITY = {'phonetic': 3, 'lemma_exact': 2, 'lemma_fuzzy': 1}
 
-def _threshold_score_cutoff() -> float:
-    """Прочитать порог из settings и привести к шкале rapidfuzz (0-100).
 
-    settings хранит 0-1; rapidfuzz score_cutoff ожидает 0-100.
-    Читается per-call, чтобы env-изменения подхватывались без reload модуля.
-    Fallback на 75.0 (соответствует SimilarityConfig default).
-    """
+def _phonetic_cutoff() -> float:
+    """Порог rapidfuzz для T2 (Metaphone-кандидаты). 0-100."""
+    if settings and settings.similarity:
+        raw = getattr(settings.similarity, 'phonetic_match_threshold', 0.85)
+        return raw * 100 if raw <= 1.0 else float(raw)
+    return 85.0
+
+
+def _lemma_cutoff() -> float:
+    """Порог rapidfuzz для T3 tier-B (леммо-fuzzy). 0-100."""
     if settings and settings.similarity:
         raw = settings.similarity.entity_similarity_threshold
         return raw * 100 if raw <= 1.0 else float(raw)
     return 75.0
 
 
-class StreetMatcher:
-    """NER-first matcher: фильтрует через LOC-спаны, фолбэк на полный лекс. поиск."""
+def _length_bias(size: int) -> float:
+    """Length-bias для n-граммы из `size` слов. 0-1.
 
-    def __init__(self, morph: Morphology) -> None:
+    1-g/2-g берутся из settings (исторические калибровки), 3+ — 0.95 (фразы
+    длиннее обычно надёжнее, малая скидка чтобы не задавить более короткие).
+    """
+    if settings and settings.similarity:
+        sim = settings.similarity
+        if size == 1:
+            return sim.length_bias_1gram
+        if size == 2:
+            return sim.length_bias_2gram
+    if size == 1:
+        return 0.85
+    if size == 2:
+        return 0.90
+    return 0.95
+
+
+class StreetMatcher:
+    """Phonetic-first matcher: T2 (Metaphone) + T3 (lemma fallback)."""
+
+    def __init__(self, morph: Morphology, index: PhoneticIndex) -> None:
         self._morph = morph
+        self._index = index
         self._stopwords: Set[str] = set()
-        self._alias_texts: List[str] = []          # лемматизированные алиасы
-        self._alias_meta: List[Tuple[int, str]] = []  # (street_id, original_name)
         self._initialized = False
 
     # ---------------------------------------------------------------- initialize
 
     async def initialize(self, pg_pool) -> bool:
-        """Загрузить стоп-слова и построить alias-индекс из streets."""
+        """Загрузить стоп-слова и построить phonetic-индекс из streets."""
         try:
             async with pg_pool.acquire() as conn:
                 sw_rows = await conn.fetch("SELECT word FROM stopwords")
@@ -71,60 +94,32 @@ class StreetMatcher:
                     "SELECT id, names FROM streets WHERE geom IS NOT NULL"
                 )
 
-            count = self._build_alias_index(street_rows)
-            logger.info(
-                f"[Street] Indexed {count} aliases from {len(street_rows)} streets"
-            )
+            # Тяжёлая работа (pymorphy3 lexeme × Metaphone × cartesian product)
+            # на ~1000 улицах — это секунды CPU. off-load в thread чтобы не
+            # блокировать event-loop.
+            await asyncio.to_thread(self._index.build, street_rows)
             self._initialized = True
             return True
         except Exception as exc:
             logger.error(f"[Street] Init failed: {exc}")
             return False
 
-    def _build_alias_index(self, rows) -> int:
-        """Полная пересборка alias-индекса.
-
-        Atomic swap: оба списка собираются в локальные переменные, затем
-        присваиваются self.* без точек suspension между присваиваниями.
-        Asyncio single-thread + отсутствие await между присваиваниями = atomic
-        для других корутин в том же loop.
-        """
-        texts: List[str] = []
-        meta: List[Tuple[int, str]] = []
-        for row in rows:
-            street_id: int = row['id']
-            names: List[str] = row['names'] or []
-            for name in names:
-                lemma = self._morph.lemma_for_phrase(clean(name))
-                if lemma:
-                    texts.append(lemma)
-                    meta.append((street_id, name))
-        # Atomic swap — два sync-присваивания, asyncio не прервёт между ними.
-        self._alias_texts = texts
-        self._alias_meta = meta
-        return len(texts)
-
     async def reindex_all(self, pg_pool) -> int:
-        """Перезагрузка alias-индекса (pg_notify streets_updated)."""
+        """Полная перезагрузка индекса (pg_notify streets_updated без street_id)."""
         try:
             async with pg_pool.acquire() as conn:
                 rows = await conn.fetch(
                     "SELECT id, names FROM streets WHERE geom IS NOT NULL"
                 )
-            count = self._build_alias_index(rows)
-            logger.info(f"[Street] Reindexed {count} aliases")
+            count = await asyncio.to_thread(self._index.build, rows)
+            logger.info(f"[Street] Reindexed {count} variants")
             return count
         except Exception as exc:
             logger.error(f"[Street] reindex_all failed: {exc}")
             return 0
 
     async def reindex_street(self, pg_pool, street_id: int) -> None:
-        """Точечная переиндексация одной улицы.
-
-        Atomic: собираем новые списки в locals, затем единое присваивание.
-        Между read-операциями self._alias_texts/_alias_meta и записью не
-        должно быть await — иначе concurrent reader увидит inconsistent state.
-        """
+        """Точечная переиндексация одной улицы (pg_notify streets_updated с street_id)."""
         try:
             async with pg_pool.acquire() as conn:
                 row = await conn.fetchrow(
@@ -132,213 +127,245 @@ class StreetMatcher:
                     "WHERE id = $1 AND geom IS NOT NULL",
                     street_id,
                 )
-
-            # Снапшот существующих списков + фильтр обновляемой улицы
-            new_texts: List[str] = []
-            new_meta: List[Tuple[int, str]] = []
-            for t, m in zip(self._alias_texts, self._alias_meta):
-                if m[0] != street_id:
-                    new_texts.append(t)
-                    new_meta.append(m)
-
-            # Добавление новой версии улицы (если она существует)
-            if row:
-                for name in (row['names'] or []):
-                    lemma = self._morph.lemma_for_phrase(clean(name))
-                    if lemma:
-                        new_texts.append(lemma)
-                        new_meta.append((street_id, name))
-
-            # Atomic swap — никакого await между двумя присваиваниями
-            self._alias_texts = new_texts
-            self._alias_meta = new_meta
-
-            logger.info(f"[Street] Reindexed street {street_id}")
+            await asyncio.to_thread(self._index.replace_street, street_id, dict(row) if row else None)
         except Exception as exc:
             logger.error(f"[Street] reindex_street({street_id}) failed: {exc}")
 
     async def close(self) -> None:
         """No-op — нет внешних ресурсов."""
 
-    # ----------------------------------------------------------- n-gram search
+    # ----------------------------------------------------------- n-gram setup
 
-    def _generate_ngrams(self, words: List[str]) -> List[str]:
-        """1- и 2-граммы из лемматизированной последовательности слов.
-
-        Для 2-граммов оба слова должны быть значимы (не стоп-слово +
-        len ≥ entity_min_word_length, либо цифра). Это исключает шумовые
-        "с переулок", "по малый" и т.п.
-        """
+    def _is_qualified_token(self, surface: str) -> bool:
+        """Слово годится для n-граммы: не стоп-слово, длина ≥ min, либо цифра."""
+        if not surface:
+            return False
         min_len = (
             settings.similarity.entity_min_word_length
             if settings and settings.similarity else 2
         )
-        ngrams: List[str] = []
-        n = len(words)
+        low = surface.lower()
+        if low.isdigit():
+            return True
+        return low not in self._stopwords and len(low) >= min_len
 
-        for size in range(1, min(3, n + 1)):
-            for i in range(n - size + 1):
-                chunk = words[i:i + size]
-                if size == 1 and len(chunk) == 1 and chunk[0].isdigit():
-                    continue
-                qualified = [
-                    w for w in chunk
-                    if (w not in self._stopwords and len(w) >= min_len) or w.isdigit()
-                ]
-                if len(qualified) >= size:
-                    ngrams.append(' '.join(chunk))
-
-        return ngrams
-
-    def _search_in_lemma_text(
+    def _generate_ngrams(
         self,
-        lemma_text: str,
-        score_cutoff: float,
-        source_tag: str,
-    ) -> Dict[int, Dict]:
-        """Лексический фуззи-поиск в уже лемматизированной строке.
+        tokens: List[Token],
+        lemmas: List[Lemma],
+    ) -> List[Tuple[str, Tuple[str, ...], int, int]]:
+        """Все n-граммы (size 1..max_phonetic_ngram_length) над токенами.
 
-        Возвращает {street_id: hit_dict} с внутренним `_adjusted` для сравнения.
-        Внешний код объединяет результаты T1/T3 по этому полю.
+        Возвращает список кортежей (surface_text, lemma_tuple, start_i, size).
+        Фильтр: хотя бы одно слово в окне должно быть «значимым»
+        (см. `_is_qualified_token`), иначе окно отбрасывается.
         """
-        if not self._alias_texts:
-            return {}
-        words = lemma_text.split()
-        if not words:
-            return {}
+        if not tokens:
+            return []
+        max_n = (
+            settings.similarity.max_phonetic_ngram_length
+            if settings and settings.similarity else 4
+        )
+        max_n = max(1, min(max_n, len(tokens)))
 
-        ngrams = self._generate_ngrams(words)
-        if not ngrams:
-            return {}
+        # Lemma-выравнивание: lemmatize_tokens возвращает Lemma per token в том
+        # же порядке (см. Morphology.lemmatize_tokens), поэтому индексы совпадают.
+        n_tokens = len(tokens)
+        # При несовпадении длин (на случай если caller передал что-то странное)
+        # ограничиваем по минимальной длине и логируем.
+        if len(lemmas) != n_tokens:
+            logger.warning(
+                f"[Street] tokens/lemmas length mismatch: {n_tokens}/{len(lemmas)}"
+            )
+            n_tokens = min(n_tokens, len(lemmas))
 
-        # Калибровочные параметры (тюнятся через env / SimilarityConfig)
-        if settings and settings.similarity:
-            sim = settings.similarity
-            bias_1g, bias_2g = sim.length_bias_1gram, sim.length_bias_2gram
-            extract_limit = sim.max_candidates_per_ngram
-        else:
-            bias_1g, bias_2g = 0.85, 0.90
-            extract_limit = 2
+        out: List[Tuple[str, Tuple[str, ...], int, int]] = []
+        for size in range(1, max_n + 1):
+            for i in range(n_tokens - size + 1):
+                token_slice = tokens[i:i + size]
+                lemma_slice = lemmas[i:i + size]
+                surfaces = [t.text.lower() for t in token_slice]
+                # хотя бы одно «значимое» слово в окне (иначе шум вроде «на и»)
+                if not any(self._is_qualified_token(s) for s in surfaces):
+                    continue
+                surface_text = ' '.join(surfaces)
+                lemma_tuple = tuple(
+                    l.normal_form for l in lemma_slice if l.normal_form
+                )
+                out.append((surface_text, lemma_tuple, i, size))
+        return out
 
-        best_by_street: Dict[int, Dict] = {}
-        for ngram in ngrams:
-            ngram_len = len(ngram.split())
+    # ---------------------------------------------------------------- T2 / T3
 
-            # 1-грамм — fuzz.ratio (strict);
-            # 2+ — token_set_ratio (допускает перестановку).
-            scorer = fuzz.ratio if ngram_len == 1 else fuzz.token_set_ratio
+    def _merge_candidate(
+        self,
+        best: Dict[int, Dict],
+        street_id: int,
+        adjusted: float,
+        source: str,
+        text: str,
+        matched_name: str,
+    ) -> None:
+        """Слить нового кандидата с лучшим текущим по street_id.
 
-            # Length bias: 1-gram ×bias_1g, 2-gram ×bias_2g.
-            length_bias = bias_1g if ngram_len == 1 else bias_2g
+        Победитель — больший adjusted; при равенстве — выше source priority.
+        """
+        existing = best.get(street_id)
+        new_priority = _SOURCE_PRIORITY[source]
+        if existing is None:
+            best[street_id] = {
+                'street_id': street_id,
+                'matched_name': matched_name,
+                'text': text,
+                'score': adjusted / 100.0,
+                '_adjusted': adjusted,
+                '_priority': new_priority,
+                'source': source,
+            }
+            return
+        if adjusted > existing['_adjusted'] or (
+            adjusted == existing['_adjusted'] and new_priority > existing['_priority']
+        ):
+            existing.update({
+                'matched_name': matched_name,
+                'text': text,
+                'score': adjusted / 100.0,
+                '_adjusted': adjusted,
+                '_priority': new_priority,
+                'source': source,
+            })
 
-            # extract_limit ограничивает шум: для одного n-грама rapidfuzz
-            # может вернуть много похожих алиасов («черноморка»→Ильичевск+
-            # Люстдорфская+Черноморец). Тюнинг полностью через env
-            # MAX_CANDIDATES_PER_NGRAM (default 2): меньше = чище matches,
-            # больше = выше recall для ambiguous слов.
+    def _phonetic_pass(
+        self,
+        ngrams: Sequence[Tuple[str, Tuple[str, ...], int, int]],
+        best: Dict[int, Dict],
+    ) -> Set[Tuple[int, int]]:
+        """T2: для каждой n-граммы поиск фонетических кандидатов + rapidfuzz.
+
+        Возвращает множество (start_i, size) n-грамм, в которых был хит — это
+        исключает соответствующие позиции из T3-фоллбэка.
+        """
+        if not (settings and settings.similarity and settings.similarity.phonetic_enabled):
+            return set()
+        cutoff = _phonetic_cutoff()
+        covered: Set[Tuple[int, int]] = set()
+        for surface_text, _lemma_tuple, start_i, size in ngrams:
+            entries = self._index.query_phonetic(surface_text)
+            if not entries:
+                continue
+            for entry in entries:
+                score = fuzz.token_sort_ratio(surface_text, entry.variant_text)
+                if score < cutoff:
+                    continue
+                adjusted = score * _length_bias(size)
+                if adjusted < cutoff:
+                    continue
+                self._merge_candidate(
+                    best, entry.street_id, adjusted,
+                    'phonetic', surface_text, entry.canonical_name,
+                )
+                covered.add((start_i, size))
+        return covered
+
+    def _lemma_pass(
+        self,
+        ngrams: Sequence[Tuple[str, Tuple[str, ...], int, int]],
+        covered: Set[Tuple[int, int]],
+        best: Dict[int, Dict],
+    ) -> None:
+        """T3: для n-грамм без T2-хита — exact-tuple + rapidfuzz fallback."""
+        if not (settings and settings.similarity and settings.similarity.lemma_fallback_enabled):
+            return
+        lemma_cutoff = _lemma_cutoff()
+        phrases, phrase_meta = self._index.lemma_phrases()
+        extract_limit = (
+            settings.similarity.max_candidates_per_ngram
+            if settings and settings.similarity else 2
+        )
+
+        for surface_text, lemma_tuple, start_i, size in ngrams:
+            if (start_i, size) in covered:
+                continue
+            if not lemma_tuple:
+                continue
+
+            # Tier-A: точный match по кортежу лемм.
+            tier_a = self._index.query_lemma_tuple(lemma_tuple)
+            if tier_a:
+                adjusted = 100.0 * _length_bias(size)
+                for entry in tier_a:
+                    self._merge_candidate(
+                        best, entry.street_id, adjusted,
+                        'lemma_exact', surface_text, entry.canonical_name,
+                    )
+                continue
+
+            # Tier-B: rapidfuzz по списку лемматизированных фраз.
+            if not phrases:
+                continue
+            lemma_text = ' '.join(lemma_tuple)
+            scorer = fuzz.ratio if size == 1 else fuzz.token_set_ratio
             matches = rf_process.extract(
-                ngram,
-                self._alias_texts,
+                lemma_text,
+                phrases,
                 scorer=scorer,
-                score_cutoff=score_cutoff,
+                score_cutoff=lemma_cutoff,
                 limit=extract_limit,
             )
-
             for _matched_text, score, idx in matches:
-                adjusted = score * length_bias
-                if adjusted < score_cutoff:
+                adjusted = score * _length_bias(size)
+                if adjusted < lemma_cutoff:
                     continue
-
-                street_id, original_name = self._alias_meta[idx]
-                if (
-                    street_id not in best_by_street
-                    or adjusted > best_by_street[street_id]['_adjusted']
-                ):
-                    best_by_street[street_id] = {
-                        'street_id': street_id,
-                        'matched_name': original_name,
-                        'text': ngram,
-                        'score': adjusted / 100.0,
-                        '_adjusted': adjusted,
-                        'source': source_tag,
-                    }
-
-        return best_by_street
+                entry: PhoneticEntry = phrase_meta[idx]
+                self._merge_candidate(
+                    best, entry.street_id, adjusted,
+                    'lemma_fuzzy', surface_text, entry.canonical_name,
+                )
 
     # ----------------------------------------------------------- public API
 
     def find_streets(
         self,
-        loc_spans: List[Span],
+        tokens: List[Token],
         lemmas: List[Lemma],
     ) -> List[Dict]:
-        """Найти улицы: T1 (NER LOC-спаны) + T3 (полный лемматизированный текст).
+        """Найти улицы: T2 (phonetic) + T3 (lemma fallback) на n-граммах.
 
         Args:
-            loc_spans: LOC-сущности от natasha (могут быть пустыми).
-            lemmas: лемматизация всего сообщения (для T3 fallback).
-
-        Threshold и top_k всегда читаются из settings (env-override через
-        ENTITY_SIMILARITY_THRESHOLD и MAX_ENTITIES). Бывшие параметры были
-        dead-code: callers их не передавали.
+            tokens: токены из RazdelTokenizer (нужны исходные surface формы для
+                    фонетики).
+            lemmas: соответствующие лемматизированные слова от Morphology
+                    (нужны для T3 fallback по кортежу лемм).
 
         Returns:
-            list of {street_id, matched_name, text, score, source}, отсортирован
-            по score. `source` = 'ner' для T1, 'lexical' для T3.
+            list of {street_id, matched_name, text, score, source} — score 0-1,
+            source ∈ {phonetic, lemma_exact, lemma_fuzzy}, отсортированы по
+            score ↓, ограничены top-K = MAX_ENTITIES.
         """
         if not self._initialized:
             logger.warning("[Street] Not initialized")
             return []
-        if not self._alias_texts:
-            logger.warning("[Street] Alias index is empty")
+        if self._index.is_empty:
+            logger.warning("[Street] Index is empty")
+            return []
+        if not tokens or not lemmas:
             return []
 
-        # Подхватываем калибровку из settings per-call (env-overrides не требуют
-        # reload модуля).
-        score_cutoff = _threshold_score_cutoff()
+        ngrams = self._generate_ngrams(tokens, lemmas)
+        if not ngrams:
+            return []
+
+        best_by_street: Dict[int, Dict] = {}
+        covered = self._phonetic_pass(ngrams, best_by_street)
+        self._lemma_pass(ngrams, covered, best_by_street)
+
         top_k = (
             settings.similarity.max_entities
             if settings and settings.similarity else 3
         )
-
-        best_by_street: Dict[int, Dict] = {}
-
-        # T1: NER LOC-спаны (если есть)
-        for span in loc_spans:
-            cleaned = clean(span.text)
-            if not cleaned:
-                continue
-            lemma_text = self._morph.lemma_for_phrase(cleaned)
-            if not lemma_text:
-                continue
-            partial = self._search_in_lemma_text(lemma_text, score_cutoff, 'ner')
-            for sid, hit in partial.items():
-                if (
-                    sid not in best_by_street
-                    or hit['_adjusted'] > best_by_street[sid]['_adjusted']
-                ):
-                    best_by_street[sid] = hit
-
-        # T3: полный лемматизированный текст (всегда — recall-страховка).
-        # Если T1 уже нашёл уверенный матч, T3 либо подтвердит, либо добавит
-        # вторую улицу из сообщения.
-        full_lemma_text = ' '.join(
-            l.normal_form for l in lemmas if l.normal_form
-        )
-        if full_lemma_text:
-            partial = self._search_in_lemma_text(
-                full_lemma_text, score_cutoff, 'lexical'
-            )
-            for sid, hit in partial.items():
-                if (
-                    sid not in best_by_street
-                    or hit['_adjusted'] > best_by_street[sid]['_adjusted']
-                ):
-                    best_by_street[sid] = hit
-
-        # Финализация
         for v in best_by_street.values():
             v.pop('_adjusted', None)
+            v.pop('_priority', None)
 
         entities = sorted(
             best_by_street.values(),
@@ -347,8 +374,7 @@ class StreetMatcher:
         )[:top_k]
 
         logger.info(
-            f"[Street] Found {len(entities)} "
-            f"(T1 spans={len(loc_spans)}): "
+            f"[Street] Found {len(entities)} (ngrams={len(ngrams)}, T2-covered={len(covered)}): "
             f"{[(e['matched_name'], round(e['score'], 2), e['source']) for e in entities]}"
         )
         return entities

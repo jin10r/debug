@@ -1,12 +1,12 @@
 """Message Processor — обработка текста и сохранение событий.
 
-Конвейер на сообщение (NER-first архитектура):
+Конвейер на сообщение (phonetic-first архитектура):
   strip_tail → preprocess_light (regex-чистка с сохранением регистра/пунктуации)
-  → NERExtractor.extract (LOC-спаны) || RazdelTokenizer.tokenize (токены)
+  → RazdelTokenizer.tokenize (токены)
   → Morphology.lemmatize_tokens (леммы с POS)
   → LayerClassifier.classify (lemmas) (определение слоя)
   → если текст пустой/длинный — strategy='random'
-  → StreetMatcher.find_streets (loc_spans + lemmas → улицы T1+T3)
+  → StreetMatcher.find_streets (tokens + lemmas → T2 phonetic + T3 lemma fallback)
   → process_candidates SQL → INSERT.
 
 Вставка идемпотентна по message_id (ON CONFLICT DO NOTHING) — повторная
@@ -23,11 +23,10 @@ import asyncpg
 
 from .layer_classifier import LayerClassifier
 from .morphology import Morphology
-from .ner_extractor import NERExtractor
+from .phonetic_index import PhoneticIndex
 from .razdel_tokenizer import RazdelTokenizer
 from .street_matcher import StreetMatcher
 from .text_preprocessor import preprocess_light, strip_tail
-from .typo_corrector import TypoCorrector
 
 try:
     from .settings import settings
@@ -42,13 +41,12 @@ class MessageProcessor:
 
     def __init__(self, db_pool: asyncpg.Pool):
         self.db_pool = db_pool
-        # Один MorphAnalyzer на процесс — переиспользуется матчером и классификатором
+        # Один MorphAnalyzer на процесс — переиспользуется индексом, матчером и классификатором
         self.morph = Morphology()
         self.tokenizer = RazdelTokenizer()
-        self.ner = NERExtractor()
-        self.matcher = StreetMatcher(self.morph)
+        self.index = PhoneticIndex(self.morph)
+        self.matcher = StreetMatcher(self.morph, self.index)
         self.layer_classifier = LayerClassifier(self.morph)
-        self.typo_corrector = TypoCorrector()
         self._listen_conn: Optional[asyncpg.Connection] = None
 
     async def initialize(self) -> bool:
@@ -57,40 +55,24 @@ class MessageProcessor:
             sim = settings.similarity if settings and settings.similarity else None
             if sim:
                 logger.info(
-                    f"Using street matcher settings: threshold={sim.entity_similarity_threshold}, "
+                    f"Using street matcher settings: "
+                    f"phonetic_threshold={sim.phonetic_match_threshold}, "
+                    f"lemma_threshold={sim.entity_similarity_threshold}, "
+                    f"max_ngram={sim.max_phonetic_ngram_length}, "
                     f"pseudo_radius={sim.pseudo_intersection_radius_meters}m, "
-                    f"max_entities={sim.max_entities}, "
-                    f"max_candidates_per_ngram={sim.max_candidates_per_ngram}"
+                    f"max_entities={sim.max_entities}"
                 )
 
-            # 1. NER (natasha + Navec) — graceful, не блокирует при ошибке
-            logger.info("Initializing NERExtractor (natasha + Navec)...")
-            ner_ok = self.ner.initialize()
-            if not ner_ok:
-                logger.warning("NER unavailable → fallback to T3 (lexical-only)")
-
-            # 2. StreetMatcher — критично, без него парсер не работает
-            logger.info("Initializing StreetMatcher...")
+            # 1. StreetMatcher + PhoneticIndex — критично, без них парсер не работает.
+            # matcher.initialize() сам грузит streets из БД и строит phonetic-индекс
+            # (off-loaded в thread, т.к. lexeme×Metaphone — это секунды CPU).
+            logger.info("Initializing StreetMatcher + PhoneticIndex...")
             success = await self.matcher.initialize(self.db_pool)
             if not success:
                 logger.error("StreetMatcher initialization failed")
                 return False
 
-            # 3. Индексация улиц (лемматизация aliases)
-            logger.info("Indexing street aliases...")
-            indexed = await self.matcher.reindex_all(self.db_pool)
-            logger.info(f"✅ Indexed {indexed} aliases")
-
-            # 4. SymSpell pre-correction опечаток — словарь из alias-имён.
-            # Graceful: если symspellpy не установлен / init упал — pre-correction
-            # disabled, парсер продолжает работать через rapidfuzz fallback.
-            logger.info("Initializing TypoCorrector (SymSpell)...")
-            alias_phrases = [name for _sid, name in self.matcher._alias_meta]
-            typo_ok = self.typo_corrector.initialize(alias_phrases)
-            if not typo_ok:
-                logger.warning("TypoCorrector unavailable → опечатки не исправляются")
-
-            # 5. Подписка на уведомления от PostgreSQL
+            # 2. Подписка на уведомления от PostgreSQL
             logger.info("Setting up PostgreSQL notifications...")
             await self._setup_pg_notify()
 
@@ -180,14 +162,8 @@ class MessageProcessor:
         stripped = strip_tail(raw_text)
         preserved = self._sanitize_text(preprocess_light(stripped)) or ''
 
-        # NER-извлечение LOC-спанов из текста с регистром/пунктуацией.
-        loc_spans = self.ner.extract(preserved)
-
         # Токенизация + лемматизация для матчера/классификатора (один проход).
         tokens = self.tokenizer.tokenize(preserved)
-        # SymSpell pre-correction: исправляет опечатки ДО pymorphy3 lemmatization.
-        # Если корректор не активен — возвращает токены неизменно.
-        tokens = self.typo_corrector.correct(tokens)
         lemmas = self.morph.lemmatize_tokens(tokens)
 
         # Определение слоя — на готовых леммах.
@@ -213,14 +189,13 @@ class MessageProcessor:
                 geom_wkt=self._generate_random_point_in_question_overlay(),
             )
 
-        # NER-first поиск улиц.
+        # Phonetic-first поиск улиц.
         logger.info(
-            f"Message {message_id}: street search "
-            f"(NER spans={len(loc_spans)}, tokens={len(tokens)})"
+            f"Message {message_id}: street search (tokens={len(tokens)})"
         )
         # threshold/top_k читаются из settings внутри find_streets per-call.
         entities = self.matcher.find_streets(
-            loc_spans=loc_spans,
+            tokens=tokens,
             lemmas=lemmas,
         )
 

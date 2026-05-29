@@ -1,8 +1,8 @@
-# Dockerfile.parser — Parser service (mawo-razdel/pymorphy3 + natasha NER + rapidfuzz, CPU-only)
+# Dockerfile.parser — Parser service (mawo-razdel/pymorphy3 + fonetika Metaphone + rapidfuzz, CPU-only)
 # Multi-stage build для минимизации размера образа
 
 # =============================================================================
-# Stage 1: Builder (установка зависимостей + warm-up моделей NER)
+# Stage 1: Builder (установка зависимостей + smoke-test fonetika)
 # =============================================================================
 FROM python:3.11.10-slim-bookworm AS builder
 
@@ -21,12 +21,11 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     find /root/.local -type f -name "*.pyo" -delete && \
     find /root/.local -type f -name "*.md" -delete
 
-# Warm-up: smoke-test что NewsNERTagger импортируется и инициализируется.
-# Все модели (Navec ~26 MB + 3× slovnet) поставляются внутри pip-пакета natasha
-# (site-packages/natasha/data/emb|model/), скачивание не требуется.
+# Smoke-test: убедиться что fonetika.RussianMetaphone импортируется и работает.
+# Импортируем только .metaphone — peer pymorphy2 (через .soundex) не грузится.
 ENV PATH="/root/.local/bin:$PATH"
-RUN python -c "from natasha import NewsEmbedding, NewsNERTagger; NewsNERTagger(NewsEmbedding())" \
-    && echo "✅ natasha NewsNERTagger init OK"
+RUN python -c "from fonetika.metaphone import RussianMetaphone; assert RussianMetaphone().transform('Москва')" \
+    && echo "✅ fonetika RussianMetaphone init OK"
 
 # =============================================================================
 # Stage 2: Runtime (минимальный образ)

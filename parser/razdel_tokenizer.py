@@ -18,6 +18,10 @@ class Token:
     text: str
     start: int
     stop: int
+    # True, если токену непосредственно предшествует '#' (тег вида #Name/##Name).
+    # Авторы канала так помечают улицы — это high-confidence сигнал для матчера
+    # (см. StreetMatcher: bonus к score + обход multiword-penalty).
+    is_anchored: bool = False
 
 
 class RazdelTokenizer:
@@ -30,13 +34,20 @@ class RazdelTokenizer:
         self._sentenize = _sentenize
 
     def tokenize(self, text: str) -> List[Token]:
-        """Список Token'ов с правильными границами для русского текста."""
+        """Список Token'ов с правильными границами для русского текста.
+
+        Помечает `is_anchored` у токенов, перед которыми (без пробела) стоит '#'
+        — хэштег-тег улицы. Сам символ '#' остаётся отдельным токеном и
+        отсеивается позже префильтром пунктуации (G2).
+        """
         if not text:
             return []
-        return [
-            Token(text=t.text, start=t.start, stop=t.stop)
-            for t in self._tokenize(text)
-        ]
+        out: List[Token] = []
+        for t in self._tokenize(text):
+            anchored = t.start > 0 and text[t.start - 1] == '#'
+            out.append(Token(text=t.text, start=t.start, stop=t.stop,
+                             is_anchored=anchored))
+        return out
 
     def sentenize(self, text: str) -> List[str]:
         """Список текстов предложений."""

@@ -35,6 +35,7 @@ ROWS = [
     {'id': 10, 'names': ['Балковская']},           # для UA-теста
     {'id': 11, 'names': ['Еврейское кладбище']},   # для generic-suffix теста
     {'id': 12, 'names': ['Шестая']},               # для ORDINAL+digit теста
+    {'id': 13, 'names': ['Атамана Головатого']},   # для hashtag-anchor теста
 ]
 
 
@@ -109,6 +110,19 @@ def test_multiword_confirm_bonus_promotes_correct_anchor(matcher_ready):
         assert malaya['score'] >= bolshaya['score']
 
 
+# --------------------------------------------- span-subsumption (anti-FP)
+
+def test_span_subsumption_drops_partial(matcher_ready):
+    """«малой арнаутской» (2-gram → Малая Арнаутская) подавляет партиал
+    «арнаутской» (1-gram → Большая Арнаутская): span 1-gram вложен в span
+    2-gram, а 2-gram не слабее. Большая (id=8) не попадает в результат.
+    """
+    entities = _process(matcher_ready, 'патруль на малой арнаутской')
+    ids = {e['street_id'] for e in entities}
+    assert 1 in ids          # Малая Арнаутская найдена
+    assert 8 not in ids      # Большая Арнаутская подавлена (партиал)
+
+
 # ----------------------------------------------------- P2: digits
 
 def test_pure_digit_1gram_skipped(matcher_ready):
@@ -149,13 +163,36 @@ def test_hashtag_noise_does_not_inflate_size(matcher_ready):
     assert any(e['street_id'] == 6 for e in entities)
 
 
+# ----------------------------------------------------- hashtag anchor (##Name)
+
+def test_hashtag_anchor_recovers_multiword_partial(matcher_ready):
+    """##-тег обходит multiword-penalty: «##Головатого» (одно слово от
+    «Атамана Головатого») находит улицу, хотя «атамана» в окне нет.
+    """
+    entities = _process(matcher_ready, '##Головатого тесла ловят на полосу')
+    assert any(e['street_id'] == 13 for e in entities)
+
+
+def test_plain_partial_multiword_still_penalized(matcher_ready):
+    """Без тега то же одиночное «головатого» либо не находит улицу, либо
+    с уверенностью ниже тегнутого (penalty за отсутствие ref-слова сохраняется).
+    """
+    tagged = _process(matcher_ready, '##Головатого тесла')
+    plain = _process(matcher_ready, 'головатого тесла')
+    t_hit = next((e for e in tagged if e['street_id'] == 13), None)
+    p_hit = next((e for e in plain if e['street_id'] == 13), None)
+    assert t_hit is not None
+    if p_hit is not None:
+        assert t_hit['score'] >= p_hit['score']
+
+
 # ----------------------------------------------------- User#3: gap-grams
 
 def test_gap_gram_finds_split_words(matcher_ready):
     """User#3: «Ольгиевский этот самый спуск» — gap-2-gram «Ольгиевский спуск»
-    с разрывом 2 токена должно найти улицу.
+    с разрывом 2 токена должно найти улицу (phonetic по полной фразе).
     """
-    entities = _process(matcher_ready, 'на Ольгиевском этом самом спуске')
+    entities = _process(matcher_ready, 'Ольгиевский этот самый спуск')
     assert any(e['street_id'] == 9 for e in entities)
 
 

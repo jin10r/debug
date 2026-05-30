@@ -67,6 +67,13 @@ class PhoneticIndex:
         self._lemma_tuple: Dict[Tuple[str, ...], List[PhoneticEntry]] = {}
         self._lemma_phrases: List[str] = []
         self._lemma_phrase_meta: List[PhoneticEntry] = []
+        # Предрасщепление фраз на single-word / multi-word (+ их meta) —
+        # вычисляется один раз при build/replace. Раньше StreetMatcher._lemma_pass
+        # пересчитывал этот split на КАЖДЫЙ 1-gram кандидат (O(phrases) на каждый).
+        self._lemma_phrases_single: List[str] = []
+        self._lemma_phrase_meta_single: List[PhoneticEntry] = []
+        self._lemma_phrases_multi: List[str] = []
+        self._lemma_phrase_meta_multi: List[PhoneticEntry] = []
         # Обратный индекс street_id → lemma_tuple первого алиаса. Используется
         # confirmation logic в StreetMatcher: когда n-gram матчит часть
         # многословной улицы, ищем оставшиеся ref-лемм в окрестности сообщения.
@@ -354,6 +361,7 @@ class PhoneticIndex:
         self._lemma_phrases = new_phrases
         self._lemma_phrase_meta = new_phrase_meta
         self._street_to_lemmas = new_street_to_lemmas
+        self._rebuild_phrase_split()
 
         logger.info(
             f"[PhoneticIndex] built: {variant_count} variants, "
@@ -412,7 +420,23 @@ class PhoneticIndex:
         self._lemma_phrases = new_phrases
         self._lemma_phrase_meta = new_phrase_meta
         self._street_to_lemmas = new_street_to_lemmas
+        self._rebuild_phrase_split()
         logger.info(f"[PhoneticIndex] reindexed street {street_id}")
+
+    def _rebuild_phrase_split(self) -> None:
+        """Пересобрать single/multi-word split лемма-фраз (после swap)."""
+        single_p, single_m, multi_p, multi_m = [], [], [], []
+        for ph, mt in zip(self._lemma_phrases, self._lemma_phrase_meta):
+            if ' ' in ph:
+                multi_p.append(ph)
+                multi_m.append(mt)
+            else:
+                single_p.append(ph)
+                single_m.append(mt)
+        self._lemma_phrases_single = single_p
+        self._lemma_phrase_meta_single = single_m
+        self._lemma_phrases_multi = multi_p
+        self._lemma_phrase_meta_multi = multi_m
 
     # ---------------------------------------------------------------- queries
 
@@ -450,6 +474,20 @@ class PhoneticIndex:
         даётся гарантированно в `build`/`replace_street` (одно присваивание).
         """
         return self._lemma_phrases, self._lemma_phrase_meta
+
+    def lemma_phrases_split(self) -> Tuple[
+        List[str], List[PhoneticEntry], List[str], List[PhoneticEntry]
+    ]:
+        """Предрасщеплённые (single_phrases, single_meta, multi_phrases, multi_meta).
+
+        Для T3 tier-B: 1-gram запрос сравнивается отдельно с single-word фразами
+        (fuzz.ratio) и multi-word фразами (_max_token_ratio). Split вычислен один
+        раз в build/replace — caller не пересчитывает его на каждый кандидат.
+        """
+        return (
+            self._lemma_phrases_single, self._lemma_phrase_meta_single,
+            self._lemma_phrases_multi, self._lemma_phrase_meta_multi,
+        )
 
     @property
     def is_empty(self) -> bool:

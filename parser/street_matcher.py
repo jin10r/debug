@@ -55,27 +55,11 @@ def _max_token_ratio(query: str, choice: str, **_kwargs) -> int:
     return best
 
 
-# Кандидат: (surface_text, lemma_tuple, start_i, end_i, size, is_gap)
+# Кандидат: (surface_text, lemma_tuple, start_i, end_i, size, is_gap, is_anchored)
 # end_i — позиция последнего токена (включительно), нужна для confirmation window.
 # is_gap — True для gap-n-gram (несмежные токены); используется в логировании.
-Candidate = Tuple[str, Tuple[str, ...], int, int, int, bool]
-
-
-def _phonetic_cutoff(size: int = 0) -> float:
-    """Порог rapidfuzz для T2.
-
-    Для 1-gram используется `phonetic_match_threshold_1gram` (по умолчанию 0.95) —
-    жёстче основного, чтобы отсекать матчи по близким корням (зелёный vs Зелёная).
-    Для 2+ gram — `phonetic_match_threshold` (по умолчанию 0.85).
-    """
-    if not (settings and settings.similarity):
-        return 95.0 if size == 1 else 85.0
-    sim = settings.similarity
-    if size == 1:
-        raw = getattr(sim, 'phonetic_match_threshold_1gram', 0.95)
-    else:
-        raw = sim.phonetic_match_threshold
-    return raw * 100 if raw <= 1.0 else float(raw)
+# is_anchored — True, если хотя бы один токен кандидата помечен '#' (хэштег-тег).
+Candidate = Tuple[str, Tuple[str, ...], int, int, int, bool, bool]
 
 
 def _lemma_cutoff(size: int = 0) -> float:
@@ -274,6 +258,7 @@ class StreetMatcher:
                 surfaces = [t.text.lower() for t in slice_t]
                 lemma_list = [l.normal_form for l in slice_l]
 
+                anchored = any(t.is_anchored for t in slice_t)
                 if size == 1 and _is_blocked_singleton(surfaces[0], lemma_list[0]):
                     continue
                 if not any(self._is_qualified_token(s) for s in surfaces):
@@ -281,7 +266,8 @@ class StreetMatcher:
 
                 surface_text = ' '.join(surfaces)
                 lemma_tuple = tuple(l for l in lemma_list if l)
-                out.append((surface_text, lemma_tuple, i, i + size - 1, size, False))
+                out.append((surface_text, lemma_tuple, i, i + size - 1, size,
+                            False, anchored))
 
         # (2) Gap-n-grams (User#3): пары токенов с разрывом 1..max_gap.
         # Логически gap-gram = 2-gram, поэтому НЕ применяем 1-gram-блокировку
@@ -309,7 +295,8 @@ class StreetMatcher:
                         continue
                     surface_text = f'{surf_i} {surf_j}'
                     lemma_tuple = tuple(l for l in (lem_i, lem_j) if l)
-                    out.append((surface_text, lemma_tuple, i, j, 2, True))
+                    anchored = tokens[i].is_anchored or tokens[j].is_anchored
+                    out.append((surface_text, lemma_tuple, i, j, 2, True, anchored))
 
         return out
 
@@ -374,6 +361,7 @@ class StreetMatcher:
         ngram_start: int,
         ngram_end: int,
         all_lemmas: List[Lemma],
+        anchored: bool = False,
     ) -> float:
         """User#1: поиск недостающих ref-лемм улицы в окне сообщения.
 
@@ -383,6 +371,10 @@ class StreetMatcher:
             n-gram уже покрывает все ref-леммы);
           • penalty < 0 — ни одна из отсутствующих ref-лемм не найдена
             (вероятный FP).
+
+        Если `anchored` (кандидат из хэштег-тега) — penalty НЕ применяется:
+        человек явно тегнул улицу, ждать второе ref-слово не требуется. Bonus
+        за найденные ref-леммы при этом сохраняется.
         """
         if not (settings and settings.similarity):
             return 0.0
@@ -398,15 +390,25 @@ class StreetMatcher:
         if not missing:
             return 0.0  # n-gram уже покрывает все ref-леммы
 
-        # Окно поиска вокруг matched n-gram (с обеих сторон).
+        def _no_confirm() -> float:
+            """Нет подтверждения: для тегнутого кандидата — без штрафа."""
+            return 0.0 if anchored else -sim.multiword_unconfirmed_penalty
+
+        # Окно поиска вокруг matched n-gram (с обеих сторон), ИСКЛЮЧАЯ сами
+        # токены n-gram [ngram_start..ngram_end]. Иначе недостающая ref-лемма
+        # ложно «подтверждается» fuzzy-совпадением с собственным словом
+        # кандидата (напр. ref «александра» ≈ ngram «александровка» → false
+        # confirm вместо штрафа → FP «александровка → Александра Невского»).
         window = sim.multiword_confirm_window
         lo = max(0, ngram_start - window)
         hi = min(len(all_lemmas), ngram_end + 1 + window)
         window_lemmas = [
-            l.normal_form for l in all_lemmas[lo:hi] if l.normal_form
+            l.normal_form
+            for idx, l in enumerate(all_lemmas[lo:hi], start=lo)
+            if l.normal_form and not (ngram_start <= idx <= ngram_end)
         ]
         if not window_lemmas:
-            return -sim.multiword_unconfirmed_penalty
+            return _no_confirm()
 
         confirm_threshold = sim.multiword_confirm_threshold * 100
         confirmed = 0
@@ -420,7 +422,7 @@ class StreetMatcher:
                     break
 
         if confirmed == 0:
-            return -sim.multiword_unconfirmed_penalty
+            return _no_confirm()
         # Пропорционально доле подтверждённых ref-лемм.
         return sim.multiword_confirm_bonus * (confirmed / len(missing))
 
@@ -434,6 +436,7 @@ class StreetMatcher:
         source: str,
         text: str,
         matched_name: str,
+        span: Tuple[int, int] = (-1, -1),
     ) -> None:
         existing = best.get(street_id)
         new_priority = _SOURCE_PRIORITY[source]
@@ -445,6 +448,7 @@ class StreetMatcher:
                 'score': adjusted / 100.0,
                 '_adjusted': adjusted,
                 '_priority': new_priority,
+                '_span': span,
                 'source': source,
             }
             return
@@ -457,6 +461,7 @@ class StreetMatcher:
                 'score': adjusted / 100.0,
                 '_adjusted': adjusted,
                 '_priority': new_priority,
+                '_span': span,
                 'source': source,
             })
 
@@ -474,8 +479,14 @@ class StreetMatcher:
         if not (settings and settings.similarity and settings.similarity.phonetic_enabled):
             return set()
 
+        anchor_bonus = (
+            settings.similarity.hashtag_anchor_bonus
+            if getattr(settings.similarity, 'hashtag_anchor_enabled', False)
+            else 0.0
+        )
+
         covered: Set[Tuple[int, int]] = set()
-        for surface_text, lemma_tuple, start_i, end_i, size, is_gap in candidates:
+        for surface_text, lemma_tuple, start_i, end_i, size, is_gap, anchored in candidates:
             entries = self._index.query_phonetic(surface_text)
             if not entries:
                 continue
@@ -486,10 +497,13 @@ class StreetMatcher:
                 )
                 if raw < threshold:
                     continue
-                # User#1: confirmation для многословных улиц
+                # User#1: confirmation для многословных улиц (тег обходит penalty)
                 delta = self._confirm_multiword(
                     entry.street_id, lemma_tuple, start_i, end_i, all_lemmas,
+                    anchored=anchored,
                 )
+                if anchored:
+                    delta += anchor_bonus
                 # Cap raw at 100 после бонуса — confirmation усиливает слабые
                 # матчи до порога, но не должен поднимать «идеальный» 1-gram
                 # выше точного 2-gram match. Penalty (<0) cap-у не подлежит.
@@ -502,6 +516,7 @@ class StreetMatcher:
                 self._merge_candidate(
                     best, entry.street_id, adjusted,
                     'phonetic', surface_text, entry.canonical_name,
+                    span=(start_i, end_i),
                 )
                 covered.add((start_i, end_i))
         return covered
@@ -521,8 +536,13 @@ class StreetMatcher:
             settings.similarity.max_candidates_per_ngram
             if settings and settings.similarity else 2
         )
+        anchor_bonus = (
+            settings.similarity.hashtag_anchor_bonus
+            if getattr(settings.similarity, 'hashtag_anchor_enabled', False)
+            else 0.0
+        )
 
-        for surface_text, lemma_tuple, start_i, end_i, size, is_gap in candidates:
+        for surface_text, lemma_tuple, start_i, end_i, size, is_gap, anchored in candidates:
             if (start_i, end_i) in covered:
                 continue
             if not lemma_tuple:
@@ -542,7 +562,10 @@ class StreetMatcher:
                 for entry in tier_a:
                     delta = self._confirm_multiword(
                         entry.street_id, lemma_tuple, start_i, end_i, all_lemmas,
+                        anchored=anchored,
                     )
+                    if anchored:
+                        delta += anchor_bonus
                     final_raw = 100.0 + delta
                     if delta > 0:
                         final_raw = min(100.0, final_raw)
@@ -552,6 +575,7 @@ class StreetMatcher:
                     self._merge_candidate(
                         best, entry.street_id, adjusted,
                         'lemma_exact', surface_text, entry.canonical_name,
+                        span=(start_i, end_i),
                     )
                 continue
 
@@ -567,15 +591,10 @@ class StreetMatcher:
             #     который давал substring-FP типа «мент» ⊂ «элемент».
             #   • 2+ gram: token_sort_ratio (строже token_set_ratio).
             if size == 1:
-                single_phrases, single_meta = [], []
-                multi_phrases, multi_meta = [], []
-                for ph, mt in zip(phrases, phrase_meta):
-                    if ' ' in ph:
-                        multi_phrases.append(ph)
-                        multi_meta.append(mt)
-                    else:
-                        single_phrases.append(ph)
-                        single_meta.append(mt)
+                # Split предвычислен в PhoneticIndex (build/replace) — не
+                # пересобираем на каждый 1-gram кандидат.
+                (single_phrases, single_meta,
+                 multi_phrases, multi_meta) = self._index.lemma_phrases_split()
                 groups = [
                     (single_phrases, single_meta, fuzz.ratio),
                     (multi_phrases, multi_meta, _max_token_ratio),
@@ -597,7 +616,10 @@ class StreetMatcher:
                     entry: PhoneticEntry = grp_meta[m_idx]
                     delta = self._confirm_multiword(
                         entry.street_id, lemma_tuple, start_i, end_i, all_lemmas,
+                        anchored=anchored,
                     )
+                    if anchored:
+                        delta += anchor_bonus
                     final_raw = score + delta
                     if delta > 0:
                         final_raw = min(100.0, final_raw)
@@ -607,6 +629,7 @@ class StreetMatcher:
                     self._merge_candidate(
                         best, entry.street_id, adjusted,
                         'lemma_fuzzy', surface_text, entry.canonical_name,
+                        span=(start_i, end_i),
                     )
 
     # ----------------------------------------------------------- public API
@@ -643,12 +666,47 @@ class StreetMatcher:
             settings.similarity.max_entities
             if settings and settings.similarity else 3
         )
-        for v in best_by_street.values():
+
+        # Span-subsumption: подавляем результат, чей token-span ВЛОЖЕН в span
+        # другого результата с не меньшим score, либо совпадает с ним и слабее.
+        # Снимает FP-партиалы, конкурирующие с более длинным/точным матчем за те
+        # же токены: «приморский»(Приморская) ⊂ «приморский…суд»(Приморский суд),
+        # «ольгиевский»(Ольгиевская) ⊂ «ольгиевский спуск», а также same-span
+        # проигравших («Польский спуск» при «Ольгиевский спуск»).
+        results = list(best_by_street.values())
+        suppressed: Set[int] = set()
+        for i, a in enumerate(results):
+            a0, a1 = a['_span']
+            if a0 < 0:
+                continue
+            for j, b in enumerate(results):
+                if i == j or j in suppressed:
+                    continue
+                b0, b1 = b['_span']
+                if b0 < 0:
+                    continue
+                same = (a0, a1) == (b0, b1)
+                a_in_b = b0 <= a0 and a1 <= b1
+                if not a_in_b:
+                    continue
+                if same:
+                    # одинаковый span — слабейший (по score, затем priority) уходит
+                    if (b['_adjusted'], b['_priority']) > (a['_adjusted'], a['_priority']):
+                        suppressed.add(i)
+                        break
+                elif b['_adjusted'] >= a['_adjusted']:
+                    # a строго внутри b и b не слабее — a это партиал, подавляем
+                    suppressed.add(i)
+                    break
+        results = [r for k, r in enumerate(results) if k not in suppressed]
+
+        for v in results:
             v.pop('_adjusted', None)
             v.pop('_priority', None)
+            v.pop('_span', None)
 
         entities = sorted(
-            best_by_street.values(),
+            results,
             key=lambda x: x['score'],
             reverse=True,
         )[:top_k]

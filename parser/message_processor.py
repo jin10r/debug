@@ -277,7 +277,8 @@ class MessageProcessor:
                          layer, strategy, geom, matches)
                     VALUES ($1, $2, $3, $4, $5, $6, ST_GeomFromText($7, 4326), $8::jsonb)
                     ON CONFLICT (message_id) DO NOTHING
-                    RETURNING id, event_time, geom, layer, strategy, description
+                    RETURNING id, event_time, geom, layer, strategy, description,
+                              photo_url, matches
                 ),
                 meta_upd AS (
                     UPDATE events_meta
@@ -298,6 +299,8 @@ class MessageProcessor:
                                 'layer', i.layer,
                                 'strategy', i.strategy,
                                 'description', i.description,
+                                'photo_url', i.photo_url,
+                                'matches', i.matches,
                                 'time', to_char(i.event_time AT TIME ZONE 'UTC',
                                                 'YYYY-MM-DD"T"HH24:MI:SS"+00:00"')
                             )

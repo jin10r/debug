@@ -94,7 +94,7 @@
 
     <div id="controlsContainer">
         <div id="controlsSlider">
-            <!-- Первый слайд: Время и Слои (объединенные) -->
+            <!-- Первый слайд: фильтр времени -->
             <div id="realtimeControls" class="controlPanel">
                 <div class="centered-content">
                     <p>Отображать события за:</p>
@@ -105,6 +105,31 @@
                     </div>
                 </div>
             </div>
+            <!-- Второй слайд: чекбоксы слоёв -->
+            <div id="layerControls" class="controlPanel">
+                <div class="layers">
+                    <label>
+                        <img src="/assets/images/bus.png" alt="Бус">
+                        <input type="checkbox" data-layer="bus" checked>
+                    </label>
+                    <label>
+                        <img src="/assets/images/cops.png" alt="Менты">
+                        <input type="checkbox" data-layer="cops" checked>
+                    </label>
+                    <label>
+                        <span class="emoji-icon" aria-label="Трафик">⛔</span>
+                        <input type="checkbox" data-layer="traffic" checked>
+                    </label>
+                    <label>
+                        <img src="/assets/images/pig.png" alt="Остальное">
+                        <input type="checkbox" data-layer="pig" checked>
+                    </label>
+                </div>
+            </div>
+        </div>
+        <div id="controlsIndicators">
+            <div class="dot active"></div>
+            <div class="dot"></div>
         </div>
     </div>
 

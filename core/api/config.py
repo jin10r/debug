@@ -14,16 +14,16 @@ async def get_config_handler(request: web.Request):
         except Exception:
             pass  # Игнорируем ошибки при чтении тела POST-запроса
 
+    layer_keywords = {
+        layer: list(keywords)
+        for layer, keywords in (settings.layers.as_dict().items() if settings else ())
+    }
+
     config = {
         'redirect_url': (settings.bot.redirect_url if settings and settings.bot else '') or '',
         'telegram_validation_enabled': settings.app.telegram_validation_enabled if settings and settings.app else False,
         'stopwords': list(settings.similarity.stop_words) if settings else [],
-        'layer_keywords': {
-            'pig': list(settings.layers.pig) if settings else [],
-            'cops': list(settings.layers.cops) if settings else [],
-            'bus': list(settings.layers.bus) if settings else [],
-            'traffic': list(settings.layers.traffic) if settings else [],
-        }
+        'layer_keywords': layer_keywords,
     }
 
     return web.json_response(config)

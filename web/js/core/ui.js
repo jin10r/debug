@@ -311,6 +311,23 @@ function initializeControls(map) {
         }
     }
 
+    // Фильтр слоёв
+    const layerControls = document.querySelector('#layerControls .layers');
+    if (layerControls) {
+        const activeLayers = window.store?.getState().activeLayers;
+        if (activeLayers) {
+            layerControls.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+                cb.checked = activeLayers.has(cb.dataset.layer);
+            });
+        }
+
+        layerControls.addEventListener('change', e => {
+            if (e.target.tagName !== 'INPUT' || e.target.type !== 'checkbox') return;
+            window.hapticFeedback('selection_changed');
+            window.toggleLayerInStore(e.target.dataset.layer);
+        });
+    }
+
     // Переключение тайлов карты
     const tileControls = document.querySelector('#mapTileControls .tile-buttons');
     if (tileControls) {

@@ -23,7 +23,7 @@ const TICK_INTERVAL_MS = 30 * 1000;
 
 export type TimeFilter = 15 | 30 | 60;
 
-const DEFAULT_LAYERS: EventLayer[] = ['pig', 'cops', 'bus'];
+const DEFAULT_LAYERS: EventLayer[] = ['pig', 'cops', 'bus', 'traffic'];
 
 /** Store state and actions. */
 export interface SurvivalState {

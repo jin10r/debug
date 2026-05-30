@@ -41,18 +41,25 @@ DEFAULT_STOPWORDS = (
 # Ключевые слова слоёв — канонические словоформы (не стемы).
 # LayerClassifier лемматизирует и ключи, и токены сообщения через mawo_pymorphy3,
 # поэтому все падежи/числа словоформ совпадают автоматически.
-DEFAULT_LAYER_KEYWORDS_COPS = (
-    'коп', 'полиция', 'мусор', 'люстра', 'мигалка', 'патруль'
-)
+#
+# Порядок ключей задаёт приоритет классификации: первый совпавший слой
+# выигрывает (см. parser/layer_classifier.py). 'pig' — fallback без ключей.
+DEFAULT_LAYER_KEYWORDS: dict[str, tuple] = {
+    'bus': (
+        'автобус', 'бус', 'хайс', 'спринтер', 'рено', 'фольксваген', 'хёндай',
+        'вито', 'сталкер', 'транспортёр', 'h1', 'h2', 'h3', 'h4', 'h5',
+    ),
+    'cops': (
+        'коп', 'полиция', 'мусор', 'люстра', 'мигалка', 'патруль',
+    ),
+    'traffic': (
+        'дтп', 'авария', 'пробка', 'затор', 'светофор', 'блокпост', 'пост', 'бп',
+    ),
+    'pig': (),
+}
 
-DEFAULT_LAYER_KEYWORDS_BUS = (
-    'автобус', 'бус', 'хайс', 'спринтер', 'рено', 'фольксваген', 'хёндай',
-    'вито', 'сталкер', 'транспортёр', 'h1', 'h2', 'h3', 'h4', 'h5'
-)
-
-DEFAULT_LAYER_KEYWORDS_TRAFFIC = (
-    'дтп', 'авария', 'пробка', 'затор', 'светофор', 'блокпост', 'пост', 'бп'
-)
+# Порядок приоритета (исключая fallback 'pig').
+LAYER_PRIORITY: tuple = tuple(k for k in DEFAULT_LAYER_KEYWORDS if k != 'pig')
 
 
 @dataclass
@@ -97,7 +104,7 @@ class BotConfig:
 class JWTConfig:
     secret: str
     access_token_ttl: int = 900  # 15 minutes
-    refresh_token_ttl: int = 604800  # 7 days
+    refresh_token_ttl: int = 86400  # 24 hours
     algorithm: str = "HS256"
 
 
@@ -232,13 +239,7 @@ class SimilarityConfig:
 
     def get_layer_keywords(self, layer: str) -> tuple:
         """Ключевые слова слоя для LayerClassifier."""
-        if layer == 'cops':
-            return DEFAULT_LAYER_KEYWORDS_COPS
-        elif layer == 'bus':
-            return DEFAULT_LAYER_KEYWORDS_BUS
-        elif layer == 'traffic':
-            return DEFAULT_LAYER_KEYWORDS_TRAFFIC
-        return ()
+        return DEFAULT_LAYER_KEYWORDS.get(layer, ())
 
 
 @dataclass
@@ -279,10 +280,14 @@ class QuestionOverlayConfig:
 
 @dataclass
 class LayerConfig:
-    cops: tuple = field(default_factory=lambda: DEFAULT_LAYER_KEYWORDS_COPS)
-    bus: tuple = field(default_factory=lambda: DEFAULT_LAYER_KEYWORDS_BUS)
-    traffic: tuple = field(default_factory=lambda: DEFAULT_LAYER_KEYWORDS_TRAFFIC)
-    pig: tuple = field(default=())
+    cops: tuple = field(default_factory=lambda: DEFAULT_LAYER_KEYWORDS['cops'])
+    bus: tuple = field(default_factory=lambda: DEFAULT_LAYER_KEYWORDS['bus'])
+    traffic: tuple = field(default_factory=lambda: DEFAULT_LAYER_KEYWORDS['traffic'])
+    pig: tuple = field(default_factory=lambda: DEFAULT_LAYER_KEYWORDS['pig'])
+
+    def as_dict(self) -> dict:
+        """Слой → tuple ключевых слов. Порядок соответствует LAYER_PRIORITY + 'pig'."""
+        return {layer: getattr(self, layer) for layer in DEFAULT_LAYER_KEYWORDS}
 
 
 @dataclass

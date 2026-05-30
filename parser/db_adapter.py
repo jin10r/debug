@@ -81,6 +81,10 @@ class DBAdapter:
         только при создании тома данных; на уже существующем томе колонку
         message_id (дедупликация по Telegram message id) нужно добавить здесь —
         при каждом старте, безопасно для повторов.
+
+        Также подтягиваются in-place миграции данных, которые должны идти
+        вместе со схемой (напр., перевод photo_url с фс-путей на публичные
+        URL — старые строки иначе отдают браузеру битый src).
         """
         try:
             async with self.__pool.acquire() as conn:
@@ -91,6 +95,17 @@ class DBAdapter:
                     "CREATE UNIQUE INDEX IF NOT EXISTS idx_events_message_id "
                     "ON events(message_id)"
                 )
+                # photo_url: фс-путь /app/media/events/<file> → публичный
+                # /media/events/<file>. Старый формат браузером не открывается.
+                migrated = await conn.fetchval(
+                    "UPDATE events "
+                    "SET photo_url = '/media/events/' "
+                    "    || regexp_replace(photo_url, '^.*/', '') "
+                    "WHERE photo_url LIKE '/app/media/events/%' "
+                    "RETURNING count(*) OVER ()"
+                )
+                if migrated:
+                    logger.info(f"✅ photo_url migrated: {migrated} rows")
             logger.info("✅ Schema ensured: events.message_id + unique index")
             return True
         except Exception as e:

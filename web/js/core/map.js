@@ -10,7 +10,18 @@ const ICON_CONFIG = {
     pig: { url: '/assets/images/pig.png', size: [25, 25] }
 };
 
+// Слой traffic не имеет PNG-иконки — рендерим эмодзи ⛔ через L.divIcon,
+// согласовано с легендой и чекбоксом в #layerControls.
 window.createIcon = function(layer) {
+    if (layer === 'traffic') {
+        return L.divIcon({
+            html: '<span style="font-size:22px;line-height:25px;">⛔</span>',
+            className: 'traffic-emoji-icon',
+            iconSize: [25, 25],
+            iconAnchor: [12.5, 12.5],
+            popupAnchor: [0, -20]
+        });
+    }
     const config = ICON_CONFIG[layer] || ICON_CONFIG.pig;
     return L.icon({
         iconUrl: config.url,

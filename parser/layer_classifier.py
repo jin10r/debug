@@ -21,13 +21,12 @@ from .morphology import Lemma, Morphology
 
 try:
     from .settings import settings
+    from .settings import LAYER_PRIORITY as _LAYER_PRIORITY
 except Exception:
     settings = None
+    _LAYER_PRIORITY = ('bus', 'cops', 'traffic')
 
 logger = logging.getLogger(__name__)
-
-# Порядок задаёт приоритет: первый совпавший слой выигрывает.
-_LAYER_PRIORITY = ('bus', 'cops', 'traffic')
 
 
 def _get_layer_keywords(layer: str) -> tuple:

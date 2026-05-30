@@ -97,13 +97,14 @@ class DBAdapter:
                 )
                 # photo_url: фс-путь /app/media/events/<file> → публичный
                 # /media/events/<file>. Старый формат браузером не открывается.
-                migrated = await conn.fetchval(
+                status = await conn.execute(
                     "UPDATE events "
                     "SET photo_url = '/media/events/' "
                     "    || regexp_replace(photo_url, '^.*/', '') "
-                    "WHERE photo_url LIKE '/app/media/events/%' "
-                    "RETURNING count(*) OVER ()"
+                    "WHERE photo_url LIKE '/app/media/events/%'"
                 )
+                # asyncpg возвращает command tag, напр. "UPDATE 5"
+                migrated = int(status.split()[-1]) if status.startswith("UPDATE") else 0
                 if migrated:
                     logger.info(f"✅ photo_url migrated: {migrated} rows")
             logger.info("✅ Schema ensured: events.message_id + unique index")

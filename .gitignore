@@ -84,3 +84,7 @@ media/
 logs
 # Build / profiling artifacts
 optimization_results.json
+
+# Training data artifacts (large, generated locally — not versioned)
+train_data/
+nnew_events_export.csv

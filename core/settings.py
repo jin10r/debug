@@ -264,7 +264,7 @@ class ParserConfig:
 
     # Сколько сообщений тянуть из истории канала при старте парсера.
     # Высокое значение увеличивает startup latency, низкое — пропускает старые.
-    history_limit: int = 25
+    history_limit: int = 50
 
     # Размер asyncio.Queue для входящих сообщений (производитель-потребитель).
     message_queue_maxsize: int = 1000

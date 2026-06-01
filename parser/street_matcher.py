@@ -662,6 +662,17 @@ class StreetMatcher:
         covered = self._phonetic_pass(candidates, clean_lemmas, best_by_street)
         self._lemma_pass(candidates, covered, clean_lemmas, best_by_street)
 
+        return self._finalize(best_by_street, len(candidates), covered)
+
+    def _finalize(
+        self,
+        best_by_street: Dict[int, Dict],
+        n_candidates: int,
+        covered: Set,
+        source_label: str = "Street",
+    ) -> List[Dict]:
+        """Span-subsumption + top-K + очистка служебных полей. Общий хвост для
+        n-gram-пути (find_streets) и NER-пути (find_streets_from_ner)."""
         top_k = (
             settings.similarity.max_entities
             if settings and settings.similarity else 3
@@ -716,8 +727,95 @@ class StreetMatcher:
         for e in entities:
             source_stats[e['source']] = source_stats.get(e['source'], 0) + 1
         logger.info(
-            f"[Street] Found {len(entities)} (candidates={len(candidates)}, "
+            f"[{source_label}] Found {len(entities)} (candidates={n_candidates}, "
             f"T2-covered={len(covered)}, sources={source_stats}): "
             f"{[(e['matched_name'], round(e['score'], 2), e['source']) for e in entities]}"
         )
         return entities
+
+    # ------------------------------------------------------- NER-driven path
+
+    def _candidates_from_spans(
+        self,
+        clean_tokens: List[Token],
+        clean_lemmas: List[Lemma],
+        ner_spans: Sequence[Tuple[int, int]],
+    ) -> List[Candidate]:
+        """NER char-спаны → Candidate-кортежи (как подряд-n-gram, без перебора).
+
+        Каждый спан отображается на непрерывный диапазон clean-токенов по
+        пересечению char-офсетов: токен входит, если token.start < ce и
+        token.stop > cs. Заменяет _generate_candidates: матчер линкует только
+        то, что нашла модель, а не все n-gram.
+        """
+        out: List[Candidate] = []
+        seen: Set[Tuple[int, int]] = set()
+        n = len(clean_tokens)
+
+        def emit(start_i: int, end_i: int) -> None:
+            if start_i < 0 or end_i >= n or end_i < start_i:
+                return
+            if (start_i, end_i) in seen:
+                return
+            seen.add((start_i, end_i))
+            slice_t = clean_tokens[start_i:end_i + 1]
+            slice_l = clean_lemmas[start_i:end_i + 1]
+            surface_text = ' '.join(t.text.lower() for t in slice_t)
+            lemma_tuple = tuple(l.normal_form for l in slice_l if l.normal_form)
+            anchored = any(t.is_anchored for t in slice_t)
+            out.append((surface_text, lemma_tuple, start_i, end_i,
+                        end_i - start_i + 1, False, anchored))
+
+        for cs, ce in ner_spans:
+            if ce <= cs:
+                continue
+            idxs = [k for k in range(n)
+                    if clean_tokens[k].start < ce and clean_tokens[k].stop > cs]
+            if not idxs:
+                continue
+            start_i, end_i = idxs[0], idxs[-1]
+            # Базовый спан + ±1-токен расширения: NER даёт ОДИН спан, и если он на
+            # токен короче газеттира («Люстдорфской»→«1 Люстдорфской») или разорван
+            # («малой … Арнаутской»), точная линковка рассыпается. Расширения
+            # конкурируют в _finalize: более длинный/точный матч вытесняет партиал,
+            # а лишние кандидаты без матча отсекаются порогом confirm.
+            emit(start_i, end_i)
+            emit(start_i - 1, end_i)      # приклеить предыдущий токен (номер/«малой»)
+            emit(start_i, end_i + 1)      # приклеить следующий токен (тип/хвост)
+        return out
+
+    def find_streets_from_ner(
+        self,
+        tokens: List[Token],
+        lemmas: List[Lemma],
+        ner_spans: Sequence[Tuple[int, int]],
+    ) -> List[Dict]:
+        """NER-путь: спаны от модели → линковка теми же T2/T3-проходами.
+
+        Контракт идентичен find_streets (List[Dict] с street_id/score/text/...),
+        но кандидаты берутся из NER, а не из n-gram-перебора. Пустые спаны →
+        пустой результат (вызывающий уйдёт в strategy='random').
+        """
+        if not self._initialized:
+            logger.warning("[NER-Street] Not initialized")
+            return []
+        if self._index.is_empty:
+            logger.warning("[NER-Street] Index is empty")
+            return []
+        if not tokens or not lemmas or not ner_spans:
+            return []
+
+        clean_tokens, clean_lemmas = self._strip_noise(tokens, lemmas)
+        if not clean_tokens:
+            return []
+
+        candidates = self._candidates_from_spans(clean_tokens, clean_lemmas, ner_spans)
+        if not candidates:
+            return []
+
+        best_by_street: Dict[int, Dict] = {}
+        covered = self._phonetic_pass(candidates, clean_lemmas, best_by_street)
+        self._lemma_pass(candidates, covered, clean_lemmas, best_by_street)
+
+        return self._finalize(best_by_street, len(candidates), covered,
+                              source_label="NER-Street")

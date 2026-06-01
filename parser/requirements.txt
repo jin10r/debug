@@ -17,6 +17,13 @@ fonetika>=1.5.1
 # Фуззи-матч против alias-индекса
 rapidfuzz>=3.0.0         # Fast fuzzy string matching (C implementation, SIMD)
 
+# Кастомный NER (parser/ner_matcher.py) — CPU-инференс LOC-спанов без torch.
+# rubert-tiny2 экспортируется в ONNX (training/export_onnx.py); грузится через
+# onnxruntime + tokenizers. Лёгкие колёса (~20 MB), на порядок легче torch.
+onnxruntime>=1.18
+tokenizers>=0.19
+numpy>=1.26
+
 # Configuration (через core.settings)
 environs>=11.0.0
 

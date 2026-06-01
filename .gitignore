@@ -8,6 +8,7 @@ __pycache__/
 dist/
 build/
 .venv/
+.venv-train/
 venv/
 env/
 
@@ -59,6 +60,8 @@ tests/test_messages.txt
 !CLAUDE.md
 !web/CLAUDE.md
 !docs/**/*.md
+!training/REPORT_retrain.md
+!ner_training_gpu/README.md
 pg_plan3.txt
 
 # Archived migration scripts and docs
@@ -69,11 +72,19 @@ docs/ARCHIVE/
 .DS_Store
 Thumbs.db
 
-# ML Models (large files — run scripts/export_onnx_model.py to regenerate)
-models/
+# ML Models (large files — run scripts/export_onnx_model.py to regenerate).
+# Use models/* (not models/) so specific subdirs can be re-included — git
+# cannot un-ignore a child if the parent directory itself is excluded.
+models/*
 !models/.gitkeep
 !models/gliner_onnx/
+!models/ner_loc_onnx/
 rubert-tiny2-onnx/
+
+# NER training intermediates (committed: training/*.py; ignored: data/checkpoints)
+training/data/
+training/output/
+training/.cache/
 
 # Frontend build artifacts
 web/node_modules/

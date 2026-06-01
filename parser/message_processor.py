@@ -23,6 +23,7 @@ import asyncpg
 
 from .layer_classifier import LayerClassifier
 from .morphology import Morphology
+from .ner_matcher import get_ner_matcher
 from .phonetic_index import PhoneticIndex
 from .razdel_tokenizer import RazdelTokenizer
 from .street_matcher import StreetMatcher
@@ -48,6 +49,8 @@ class MessageProcessor:
         self.matcher = StreetMatcher(self.morph, self.index)
         self.layer_classifier = LayerClassifier(self.morph)
         self._listen_conn: Optional[asyncpg.Connection] = None
+        # NER-детектор (lazy): инициализируется в initialize() при ner_enabled.
+        self.ner = None
 
     async def initialize(self) -> bool:
         """Инициализация при старте."""
@@ -71,6 +74,24 @@ class MessageProcessor:
             if not success:
                 logger.error("StreetMatcher initialization failed")
                 return False
+
+            # 1b. NER-детектор (опционально, за флагом). Грузится один раз;
+            # при ошибке — мягкая деградация на n-gram-путь (ner остаётся None).
+            if settings and settings.ner and settings.ner.ner_enabled:
+                ner = get_ner_matcher(
+                    model_dir=settings.ner.model_dir,
+                    onnx_filename=settings.ner.onnx_filename,
+                    max_seq_length=settings.ner.max_seq_length,
+                    intra_op_threads=settings.ner.intra_op_threads,
+                    inter_op_threads=settings.ner.inter_op_threads,
+                )
+                if ner.initialize():
+                    self.ner = ner
+                    logger.info("✅ NER detector enabled (rubert-tiny2 ONNX)")
+                else:
+                    logger.warning(
+                        "NER enabled but init failed → falling back to n-gram path"
+                    )
 
             # 2. Подписка на уведомления от PostgreSQL
             logger.info("Setting up PostgreSQL notifications...")
@@ -189,15 +210,36 @@ class MessageProcessor:
                 geom_wkt=self._generate_random_point_in_question_overlay(),
             )
 
-        # Phonetic-first поиск улиц.
+        # Поиск улиц. NER-путь (если включён и загружен): модель детектит
+        # LOC-спаны, линковка спан→street_id — теми же T2/T3-проходами.
+        # Иначе — классический phonetic-first n-gram-перебор.
         logger.info(
-            f"Message {message_id}: street search (tokens={len(tokens)})"
+            f"Message {message_id}: street search (tokens={len(tokens)}, "
+            f"ner={'on' if self.ner else 'off'})"
         )
         # threshold/top_k читаются из settings внутри find_streets per-call.
-        entities = self.matcher.find_streets(
-            tokens=tokens,
-            lemmas=lemmas,
-        )
+        if self.ner:
+            ner_spans = self.ner.predict_spans(preserved)
+            entities = self.matcher.find_streets_from_ner(
+                tokens=tokens,
+                lemmas=lemmas,
+                ner_spans=ner_spans,
+            )
+            # Гибрид: NER промолчал → откат на n-gram-перебор (страховка по полноте).
+            fallback = (
+                settings.ner.ner_fallback_ngram
+                if settings and settings.ner else True
+            )
+            if not entities and fallback:
+                logger.info(
+                    f"Message {message_id}: NER found 0 streets → n-gram fallback"
+                )
+                entities = self.matcher.find_streets(tokens=tokens, lemmas=lemmas)
+        else:
+            entities = self.matcher.find_streets(
+                tokens=tokens,
+                lemmas=lemmas,
+            )
 
         street_ids: list = []
         street_scores: list = []

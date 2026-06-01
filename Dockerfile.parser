@@ -52,6 +52,10 @@ RUN useradd -m -u 1000 parser && \
 
 COPY --chown=parser:parser parser/ ./parser/
 COPY --chown=parser:parser core/ ./core/
+# Кастомный NER-артефакт (ONNX + tokenizer). До первого обучения тут лежит
+# только .gitkeep — parser стартует с ner_enabled=False и работает на n-gram
+# пути; после training/export_onnx.py каталог содержит модель и путь активен.
+COPY --chown=parser:parser models/ner_loc_onnx/ ./models/ner_loc_onnx/
 
 # Healthcheck задаётся в docker-compose.yml (pgrep на процесс monitoring).
 

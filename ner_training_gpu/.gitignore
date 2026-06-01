@@ -1,0 +1,6 @@
+# local virtualenv + generated artifacts (keep data/dataset.retrain.json for transfer)
+.venv/
+__pycache__/
+*.pyc
+data/prepared/
+output/

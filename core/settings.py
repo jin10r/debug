@@ -283,6 +283,28 @@ class ParserConfig:
 
 
 @dataclass
+class NERConfig:
+    """Кастомный NER-детектор LOC-спанов (rubert-tiny2 ONNX).
+
+    Заменяет n-gram-перебор в StreetMatcher: модель находит спаны улиц, а
+    привязка спан→street_id остаётся за phonetic/lemma-проходами. Флаг
+    ner_enabled переключает путь в MessageProcessor (fallback на старый
+    n-gram-путь, если False или модель не загрузилась). Переопределяется через
+    env NER_ENABLED на время раскатки — остальное хардкод, как у прочих конфигов.
+    """
+    ner_enabled: bool = False
+    # Гибрид: если NER-путь не нашёл ни одной улицы (модель промолчала — частый
+    # кейс на редких/«грязных» сообщениях), откатиться на n-gram-перебор. Берёт
+    # лучшее: точность NER там, где он сработал, и полноту n-gram как страховку.
+    ner_fallback_ngram: bool = True
+    model_dir: str = "models/ner_loc_onnx"
+    onnx_filename: str = "model_quantized.onnx"
+    max_seq_length: int = 256
+    intra_op_threads: int = 2
+    inter_op_threads: int = 1
+
+
+@dataclass
 class QuestionOverlayConfig:
     """Границы зоны для событий без точной привязки к местности (круг)"""
     center_lon: float = 30.83135  # Центр по долготе
@@ -316,6 +338,7 @@ class Settings:
     similarity: SimilarityConfig = field(default_factory=SimilarityConfig)
     layers: LayerConfig = field(default_factory=LayerConfig)
     parser: ParserConfig = field(default_factory=ParserConfig)
+    ner: NERConfig = field(default_factory=NERConfig)
     question_overlay: QuestionOverlayConfig = field(default_factory=QuestionOverlayConfig)
 
 
@@ -444,6 +467,7 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
             similarity=SimilarityConfig(),
             layers=LayerConfig(),
             parser=ParserConfig(),
+            ner=NERConfig(ner_enabled=env.bool("NER_ENABLED", default=False)),
             question_overlay=QuestionOverlayConfig(),
         )
     except Exception as e:

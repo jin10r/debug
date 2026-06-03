@@ -12,12 +12,16 @@
 проход pymorphy3 на сообщение).
 
 Приоритет при совпадении ключей из разных слоёв: bus → cops → traffic → pig.
+Хэштег-токены (is_anchored=True из RazdelTokenizer) обрабатываются первыми:
+если хэштег явно указывает слой, он выигрывает у soft-keywords других слоёв.
+Пример: "##блокпост + полиция" → traffic (##блокпост explicit), а не cops.
 """
 
 import logging
-from typing import Dict, List, Set
+from typing import Dict, List, Optional, Sequence, Set
 
 from .morphology import Lemma, Morphology
+from .razdel_tokenizer import Token
 
 try:
     from .settings import settings
@@ -60,13 +64,29 @@ class LayerClassifier:
             return ''
         return self._morph.lemmatize_word(word).normal_form
 
-    def classify(self, lemmas: List[Lemma]) -> str:
+    def classify(
+        self,
+        lemmas: List[Lemma],
+        tokens: Optional[Sequence[Token]] = None,
+    ) -> str:
         """Слой по приоритету bus → cops → traffic, иначе 'pig'.
 
         Принимает уже лемматизированные токены (от Morphology.lemmatize_tokens).
+        Если передан список tokens, сначала проверяются только ##-хэштег-токены
+        (is_anchored=True): совпадение хэштега с ключевым словом любого слоя
+        даёт этот слой с наивысшим приоритетом, игнорируя soft-keywords.
         """
         if not lemmas:
             return 'pig'
+
+        # Хэштег-override: явный сигнал пользователя бьёт мягкие ключевые слова.
+        if tokens:
+            anchored_lemmas: Set[str] = {
+                self._lemma(t.text) for t in tokens if t.is_anchored
+            }
+            for layer in _LAYER_PRIORITY:
+                if self._keyword_lemmas[layer] & anchored_lemmas:
+                    return layer
 
         token_lemmas: Set[str] = {l.normal_form for l in lemmas if l.normal_form}
 

@@ -1,10 +1,11 @@
 # Аудит алгоритма парсера
 
-> Дата: 2026-05-30 · ветка `mawo_parser` · аудит по фактическому коду
-> (`parser/*.py` + `postgres/init-scripts/08-process-candidates.sql`).
-> **Внимание:** `docs/parser.md` описывает устаревшую архитектуру (natasha NER +
-> symspell + navec). В коде её уже нет — действует phonetic-first пайплайн.
-> Этот отчёт описывает то, что реально исполняется.
+> Дата: 2026-05-30 · ветка `mawo_parser` · аудит по фактическому коду.
+> **Обновление 2026-06-03:** phonetic-first пайплайн (Metaphone + fonetika)
+> заменён на **surface fuzzy** (rapidfuzz `token_sort_ratio` против сырых
+> alias-имён). NER и SymSpell удалены. Архитектура матчера описана в
+> [docs/parser.md](parser.md). Разделы §3.2 (мёртвый код) и §3.3 (phonetic) ниже
+> уже неактуальны — относятся к удалённому коду.
 
 ---
 

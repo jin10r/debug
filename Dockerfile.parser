@@ -1,4 +1,4 @@
-# Dockerfile.parser — Parser service (mawo-razdel/pymorphy3 + fonetika Metaphone + rapidfuzz, CPU-only)
+# Dockerfile.parser — Parser service (mawo-razdel/pymorphy3 + rapidfuzz, CPU-only)
 # Multi-stage build для минимизации размера образа
 
 # =============================================================================
@@ -21,11 +21,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     find /root/.local -type f -name "*.pyo" -delete && \
     find /root/.local -type f -name "*.md" -delete
 
-# Smoke-test: убедиться что fonetika.RussianMetaphone импортируется и работает.
-# Импортируем только .metaphone — peer pymorphy2 (через .soundex) не грузится.
 ENV PATH="/root/.local/bin:$PATH"
-RUN python -c "from fonetika.metaphone import RussianMetaphone; assert RussianMetaphone().transform('Москва')" \
-    && echo "✅ fonetika RussianMetaphone init OK"
+RUN python -c "from rapidfuzz import fuzz; from mawo_pymorphy3 import MorphAnalyzer; print('✅ deps OK')"
 
 # =============================================================================
 # Stage 2: Runtime (минимальный образ)
@@ -52,10 +49,6 @@ RUN useradd -m -u 1000 parser && \
 
 COPY --chown=parser:parser parser/ ./parser/
 COPY --chown=parser:parser core/ ./core/
-# Кастомный NER-артефакт (ONNX + tokenizer). До первого обучения тут лежит
-# только .gitkeep — parser стартует с ner_enabled=False и работает на n-gram
-# пути; после training/export_onnx.py каталог содержит модель и путь активен.
-COPY --chown=parser:parser models/ner_loc_onnx/ ./models/ner_loc_onnx/
 
 # Healthcheck задаётся в docker-compose.yml (pgrep на процесс monitoring).
 

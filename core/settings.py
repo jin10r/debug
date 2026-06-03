@@ -57,6 +57,12 @@ DEFAULT_LAYER_KEYWORDS: dict[str, tuple] = {
         # «менты/мент» — частый синоним полиции в корпусе канала; раньше были
         # только в стоп-словах ⇒ сообщения «...менты» классифицировались как pig.
         'мент', 'менты',
+        # «полицейские/полицейского» — падежи; «полицай» — укр. «полицаи»;
+        # «police» — латиница (pymorphy3 не склоняет, лемма = «police»).
+        'полицейский', 'полицай', 'police',
+        # «тцк» — Центр комплектования (военкомат); встречается в ~15% сообщений
+        # канала, но раньше не попадал ни в один слой → событие падало в pig.
+        'тцк',
     ),
     'traffic': (
         'дтп', 'авария', 'пробка', 'затор', 'светофор', 'блокпост', 'пост', 'бп',
@@ -126,135 +132,47 @@ class RedisConfig:
 
 @dataclass
 class SimilarityConfig:
-    """Параметры калибровки лексического матчера улиц.
+    """Параметры sliding-window линкера улиц и LayerClassifier.
 
-    Все значения настраиваются через одноимённые env-переменные (UPPER_SNAKE).
-    Используются StreetMatcher (parser/street_matcher.py) и LayerClassifier
-    (parser/layer_classifier.py).
+    Используются StreetMatcher (parser/street_matcher.py) и LayerClassifier.
     """
     stop_words: tuple = field(default_factory=lambda: DEFAULT_STOPWORDS)
 
-    # Минимальная длина «значимого» слова в n-грамм-фильтре. Слова короче
-    # отбрасываются (если только не цифры). Используется в
-    # StreetMatcher._generate_ngrams.
-    entity_min_word_length: int = 2
+    # Порог fuzzy-матча (0-1) для tier-3 lemma fuzzy в _link_span.
+    # 0.82: отсекает ложные позитивы (0.75–0.79) при сохранении typo-матчей (≥0.83).
+    entity_similarity_threshold: float = 0.82
 
-    # Порог фуззи-матча (0-1). adjusted_score = raw_score × length_bias ≥ X
-    # отсекает шумовые совпадения. Для 2+ gram держим базовый 0.75.
-    entity_similarity_threshold: float = 0.75
-    # R4: отдельный (более жёсткий) порог для 1-gram T3 tier-B fuzzy matches.
-    # Borderline 0.75 от «сторону → Героев Обороны» отсекается 0.80, при этом
-    # 2+ gram (где есть контекст) остаётся 0.75.
-    entity_similarity_threshold_1gram: float = 0.80
-
-    # Радиус псевдо-пересечений (метры) для process_candidates SQL. Если два
-    # alias-индекса дают разные street_id, но их геометрии не пересекаются
-    # физически, ST_DWithin в этом радиусе считает их «псевдо-пересечением».
+    # Радиус псевдо-пересечений (метры) для process_candidates SQL.
     pseudo_intersection_radius_meters: float = 150.0
 
-    # Максимум кандидатов на один n-грам в rapidfuzz.extract(limit=N).
-    # 2 — компромисс между recall и шумом: оставляет место для синонимов
-    # типа «Преображенская» + «пр. Преображенский», но не плодит 3+ кандидатов
-    # на одно слово («черноморка» → 3 разные улицы).
-    max_candidates_per_ngram: int = 2
+    # Финальный top-K результатов find_streets().
+    max_entities: int = 5
 
-    # Финальный top-K результатов find_streets() возвращает в matches[].
-    max_entities: int = 3
-
-    # Length-bias коэффициенты для adjusted_score = raw × bias.
-    # 1-грам ×0.85: одиночное слово менее уверенный сигнал, чем фраза.
-    # 2-грам ×0.90: фраза точнее, бонус.
-    length_bias_1gram: float = 0.85
-    length_bias_2gram: float = 0.90
-
-    # Длиннее этого порога (символов) сообщение НЕ считается релевантной
-    # локацией: поиск улиц пропускается, событию назначается random точка.
+    # Длиннее этого порога (символов) сообщение не считается релевантной локацией.
     max_text_length: int = 380
 
-    # ─── Phonetic matching (parser/phonetic_index.py) ────────────────────
-    # Включение фонетической стратегии (T2). False — только лемматический fallback.
-    phonetic_enabled: bool = True
-    # Порог rapidfuzz token_sort_ratio для верификации Metaphone-кандидатов (0-1).
+    # Порог fuzz.token_sort_ratio для surface fuzzy (Tier 1, 0-1).
     phonetic_match_threshold: float = 0.85
-    # Строгий порог для 1-gram phonetic-матчей (G3). Жёстче основного, чтобы
-    # отсечь близкие корни вроде «зелёный → Зелёная Балка».
-    phonetic_match_threshold_1gram: float = 0.95
-    # Включение лемматического fallback (T3).
+    # Включение lemma fuzzy fallback (tier-3 в _link_span).
     lemma_fallback_enabled: bool = True
-    # Максимальный размер n-граммы (количество токенов) для T2.
-    max_phonetic_ngram_length: int = 4
-    # Сколько словоформ на одно content-слово брать из parse[0].lexeme при сборке индекса.
-    phonetic_forms_cap: int = 12
-    # Жёсткий cap количества вариантов на одну улицу. При превышении —
-    # fallback на «инфлектировать только первое content-слово».
-    phonetic_variants_per_street_cap: int = 500
 
-    # ─── Generic-suffix фильтр для 1-gram (G1) ─────────────────────────
-    # Слова, которые сами по себе не должны порождать матч улицы. Только в
-    # составе 2+ gram. Закрывает FP «возле кладбища → 2 кладбища-улицы».
-    generic_suffixes: tuple = (
-        'кладбище', 'рынок', 'сквер', 'площадь', 'переулок', 'проспект',
-        'шоссе', 'мост', 'парк', 'бульвар', 'набережная', 'дорога',
-        'спуск', 'сад', 'треугольник', 'центр', 'район', 'посёлок',
-        'улица', 'станция', 'остановка',
-    )
+    # Sliding-window: максимальный размер окна (токенов) при генерации кандидатов.
+    # Окно 1..max_sliding_window охватывает улицы из 1, 2 или 3 слов.
+    max_sliding_window: int = 3
 
-    # ─── Razdel-шум: токены, не считаемые «словами» (G2) ──────────────
-    # Префильтр перед построением n-grams: эти токены выбрасываются, чтобы
-    # не раздувать size и не засорять matched_part.
+    # Бонус к score для кандидатов, которым предшествует локационный предлог
+    # ("на", "по", "в" и т.п.). Помогает при дедупе когда оба матча за одну улицу.
+    prepositional_boost: float = 0.05
+
+    # Токены-пунктуация: отфильтровываются из tokens до поиска (_strip_noise).
     punctuation_tokens: tuple = (
         '#', '/', ',', '.', '(', ')', '!', '?', '-', '«', '»', '"', ':', ';',
     )
 
-    # ─── Gap-grams (User#3) ────────────────────────────────────────────
-    # Максимальный разрыв между токенами при построении gap-n-gram. 0 = только
-    # подряд идущие; 3 = «Ольгиевский этот самый спуск» сматчится как 2-gram.
-    max_token_gap: int = 3
-
-    # ─── Hashtag-якорь улицы (##Name) ──────────────────────────────────
-    # Авторы канала тегают улицы как «##Краснова», «##Ольгиевский спуск».
-    # Для кандидатов из тегнутых токенов: (1) обходится multiword-penalty
-    # (тег = явная декларация улицы человеком, ждать второе ref-слово не нужно),
-    # (2) добавляется небольшой бонус к raw score. Это снимает FN на партиальных
-    # тегах («##Головатого» → «Атамана Головатого»). Не единственный путь —
-    # нетегнутый текст матчится как прежде.
-    hashtag_anchor_enabled: bool = True
-    hashtag_anchor_bonus: float = 8.0
-
-    # ─── Multi-word confirmation (User#1) ──────────────────────────────
-    # Окно поиска недостающего ref-слова многословной улицы вокруг matched n-gram.
-    multiword_confirm_window: int = 8
-    # Порог rapidfuzz для подтверждения второго ref-слова (мягче основного —
-    # фонетика+морфология уже доказали близость, ищем «второе слово где-то рядом»).
-    multiword_confirm_threshold: float = 0.70
-    # Бонус к raw score (0-100) при подтверждении ref-слова в окне.
-    multiword_confirm_bonus: float = 10.0
-    # Штраф к raw score (0-100), если ref-слова многословной улицы не найдены.
-    # 15.0 калибрировано: perfect 1-gram (raw=100) − 15 = 85, × bias_1g=0.85
-    # = 72.25, ниже threshold 75 → партиальные одиночные мнения многословных
-    # улиц без контекста отсекаются. Это закрывает FP «зелёный бус → Зелёная
-    # Балка/Горка», но и теряет легитимное «на арнаутской» без определителя.
-    # Соответствующее партиальное мнение появится только при наличии хотя бы
-    # одного ref-слова в окне (тогда bonus компенсирует штраф).
-    multiword_unconfirmed_penalty: float = 15.0
-
-    # ─── Per-word scoring + dynamic threshold (User#2) ─────────────────
-    # Шаг снижения порога на каждое дополнительное слово в n-grams.
-    # threshold = base - (size - 1) * step.
-    dynamic_threshold_step: float = 0.03
-    # Минимальный per-word порог при покомпонентной оценке (rapidfuzz.ratio
-    # каждой пары слов).
-    per_word_threshold: float = 0.75
-    # Softening rapidfuzz-порога когда Metaphone-код уже совпал (фонетическая
-    # идентичность доказана, rapidfuzz отсеивает ложные коллизии).
-    metaphone_softening: float = 0.10
-
     def get_stopwords(self) -> Set[str]:
-        """Стоп-слова (используются в _generate_ngrams)."""
         return set(DEFAULT_STOPWORDS)
 
     def get_layer_keywords(self, layer: str) -> tuple:
-        """Ключевые слова слоя для LayerClassifier."""
         return DEFAULT_LAYER_KEYWORDS.get(layer, ())
 
 
@@ -264,7 +182,7 @@ class ParserConfig:
 
     # Сколько сообщений тянуть из истории канала при старте парсера.
     # Высокое значение увеличивает startup latency, низкое — пропускает старые.
-    history_limit: int = 50
+    history_limit: int = 100
 
     # Размер asyncio.Queue для входящих сообщений (производитель-потребитель).
     message_queue_maxsize: int = 1000
@@ -280,28 +198,6 @@ class ParserConfig:
     proxy_host: Optional[str] = None
     proxy_scheme: str = "socks5"
     proxy_port: int = 1080
-
-
-@dataclass
-class NERConfig:
-    """Кастомный NER-детектор LOC-спанов (rubert-tiny2 ONNX).
-
-    Заменяет n-gram-перебор в StreetMatcher: модель находит спаны улиц, а
-    привязка спан→street_id остаётся за phonetic/lemma-проходами. Флаг
-    ner_enabled переключает путь в MessageProcessor (fallback на старый
-    n-gram-путь, если False или модель не загрузилась). Переопределяется через
-    env NER_ENABLED на время раскатки — остальное хардкод, как у прочих конфигов.
-    """
-    ner_enabled: bool = False
-    # Гибрид: если NER-путь не нашёл ни одной улицы (модель промолчала — частый
-    # кейс на редких/«грязных» сообщениях), откатиться на n-gram-перебор. Берёт
-    # лучшее: точность NER там, где он сработал, и полноту n-gram как страховку.
-    ner_fallback_ngram: bool = True
-    model_dir: str = "models/ner_loc_onnx"
-    onnx_filename: str = "model_quantized.onnx"
-    max_seq_length: int = 256
-    intra_op_threads: int = 2
-    inter_op_threads: int = 1
 
 
 @dataclass
@@ -338,7 +234,6 @@ class Settings:
     similarity: SimilarityConfig = field(default_factory=SimilarityConfig)
     layers: LayerConfig = field(default_factory=LayerConfig)
     parser: ParserConfig = field(default_factory=ParserConfig)
-    ner: NERConfig = field(default_factory=NERConfig)
     question_overlay: QuestionOverlayConfig = field(default_factory=QuestionOverlayConfig)
 
 
@@ -467,7 +362,6 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
             similarity=SimilarityConfig(),
             layers=LayerConfig(),
             parser=ParserConfig(),
-            ner=NERConfig(ner_enabled=env.bool("NER_ENABLED", default=False)),
             question_overlay=QuestionOverlayConfig(),
         )
     except Exception as e:

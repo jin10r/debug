@@ -13,11 +13,15 @@ n-грамм, layer_classifier для лемматизации ключевых 
 Конвертирует "пятый" → "5", чтобы "на пятой Фонтана" находило alias "5 ст Фонтана".
 """
 
+import re
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Iterable, List, Optional, Protocol
 
 import mawo_pymorphy3 as pymorphy3
+
+# "5я", "7я" и т.д. — порядковое числительное с суффиксом без дефиса.
+_DIGIT_ORDINAL_RE = re.compile(r'^(\d+)[яЯ]$')
 
 
 ORDINAL_MAP = {
@@ -114,6 +118,12 @@ class Morphology:
 
         if word.isdigit():
             result = Lemma(word, word, 'NUMR', False)
+            self._cache_store(key, result)
+            return result
+
+        m = _DIGIT_ORDINAL_RE.match(word)
+        if m:
+            result = Lemma(word, m.group(1), 'NUMR', False)
             self._cache_store(key, result)
             return result
 

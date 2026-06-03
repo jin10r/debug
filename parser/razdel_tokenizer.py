@@ -39,14 +39,30 @@ class RazdelTokenizer:
         Помечает `is_anchored` у токенов, перед которыми (без пробела) стоит '#'
         — хэштег-тег улицы. Сам символ '#' остаётся отдельным токеном и
         отсеивается позже префильтром пунктуации (G2).
+
+        Склеивает пары [DIGIT, "я"] в один токен "Nя" (порядковое числительное
+        с раздельным суффиксом: "5 я", "7 я" → "5я", "7я"), чтобы sliding-window
+        строил кандидаты "5я люстдорфская" вместо ложного "5 я" → "25я".
         """
         if not text:
             return []
+        raw = list(self._tokenize(text))
         out: List[Token] = []
-        for t in self._tokenize(text):
+        i = 0
+        while i < len(raw):
+            t = raw[i]
             anchored = t.start > 0 and text[t.start - 1] == '#'
-            out.append(Token(text=t.text, start=t.start, stop=t.stop,
-                             is_anchored=anchored))
+            if (t.text.isdigit()
+                    and i + 1 < len(raw)
+                    and raw[i + 1].text.lower() == 'я'):
+                next_t = raw[i + 1]
+                out.append(Token(text=t.text + 'я', start=t.start,
+                                 stop=next_t.stop, is_anchored=anchored))
+                i += 2
+            else:
+                out.append(Token(text=t.text, start=t.start, stop=t.stop,
+                                 is_anchored=anchored))
+                i += 1
         return out
 
     def sentenize(self, text: str) -> List[str]:

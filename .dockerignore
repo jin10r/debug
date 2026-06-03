@@ -68,3 +68,14 @@ web/tests/
 
 # Build/CI artifacts
 .github/
+
+# Training pipeline — not needed at runtime
+training/
+train_data/
+ner_training_gpu/
+
+# Legacy model directory (model moved to parser/ner_loc_onnx/)
+models/
+
+# Large unquantized model — only model_quantized.onnx is used at runtime (28 MB vs 116 MB)
+parser/ner_loc_onnx/model.onnx

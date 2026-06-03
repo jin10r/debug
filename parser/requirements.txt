@@ -5,8 +5,11 @@ tgcrypto>=1.2.0
 # Database
 asyncpg>=0.29.0          # PostgreSQL client
 
-# Lexical entity search + layer classification
+# Морфология + токенизация (mawo-экосистема)
 mawo-pymorphy3==1.0.4    # Russian morphological analyzer with DAWG (~15-20 MB RAM)
+mawo-razdel>=1.0.6       # Russian tokenizer/sentenizer (аббревиатуры, инициалы)
+
+# Фуззи-матч против alias-индекса
 rapidfuzz>=3.0.0         # Fast fuzzy string matching (C implementation, SIMD)
 
 # Configuration (через core.settings)

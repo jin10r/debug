@@ -15,10 +15,16 @@ _DB_PROBE_TTL_SEC = 5.0
 _db_probe_cache: dict = {'ts': 0.0, 'ok': False, 'error': None}
 
 
-async def _check_db_cached(db_request) -> tuple[bool, str]:
-    """Закешированная проверка PostgreSQL. Возвращает (ok, message)."""
+async def _check_db(db_request, *, use_cache: bool) -> tuple[bool, str]:
+    """Проверка PostgreSQL. Возвращает (ok, message).
+
+    Args:
+        use_cache: если True, возвращает результат не старше TTL без актуального
+            SELECT 1 (для /health liveness). False — всегда актуальный probe
+            (для /health/ready, чтобы LB не отправлял трафик на падающий DB).
+    """
     now = time.monotonic()
-    if now - _db_probe_cache['ts'] < _DB_PROBE_TTL_SEC:
+    if use_cache and now - _db_probe_cache['ts'] < _DB_PROBE_TTL_SEC:
         if _db_probe_cache['ok']:
             return True, 'Connected (cached)'
         return False, _db_probe_cache['error'] or 'Not connected (cached)'
@@ -36,6 +42,11 @@ async def _check_db_cached(db_request) -> tuple[bool, str]:
         _db_probe_cache.update({'ts': now, 'ok': False, 'error': msg})
         logger.error(f"Database health check failed: {e}")
         return False, msg
+
+
+async def _check_db_cached(db_request) -> tuple[bool, str]:
+    """Backwards-compat shim: использует кэш. Для /health (liveness)."""
+    return await _check_db(db_request, use_cache=True)
 
 
 async def health_live_handler(request: web.Request):
@@ -76,8 +87,9 @@ async def health_ready_handler(request: web.Request):
         'overall': 'healthy'
     }
     
-    # Check PostgreSQL — кэшируется на 5 с (см. _check_db_cached)
-    db_ok, db_msg = await _check_db_cached(db_request)
+    # Check PostgreSQL — readiness probe должна быть актуальной (без кэша),
+    # иначе LB направит трафик на падающий DB в течение TTL-окна.
+    db_ok, db_msg = await _check_db(db_request, use_cache=False)
     if db_ok:
         checks['database'] = {'status': 'healthy', 'message': db_msg}
     else:

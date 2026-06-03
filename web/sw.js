@@ -28,7 +28,7 @@ const SHELL_ASSETS = [
     '/assets/images/daynight.svg',
     '/assets/images/legend-info.svg',
     '/assets/images/banner.svg',
-    '/assets/images/overlay.svg',
+    '/assets/images/question.svg',
     '/dist/js/common.js',
     '/dist/js/core/store.js',
     '/dist/js/core/local_cache.js',
@@ -40,15 +40,7 @@ const SHELL_ASSETS = [
     '/dist/js/core/ui.js',
     '/dist/js/modules/popups.js',
     '/dist/js/modules/notifications.js',
-    '/js/telegram/integration.js',
-    // MapLibre GL JS + плагин + OpenFreeMap-стиль — basemap-слой Leaflet'а
-    // через L.maplibreGL (см. js/core/ui.js). Cross-origin, могут вернуть
-    // CORS-ошибку на precache, но catch выше превратит её в warn без
-    // падения precache.
-    'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js',
-    'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css',
-    'https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.0.22/leaflet-maplibre-gl.js',
-    'https://tiles.openfreemap.org/styles/positron'
+    '/js/telegram/integration.js'
 ];
 
 self.addEventListener('install', (event) => {
@@ -87,18 +79,7 @@ function shellCacheKey(url) {
 }
 
 function isTileRequest(url) {
-    // OpenFreeMap vector-тайлы (PBF + style/sprites/glyphs JSON) — основной
-    // источник basemap'а через MapLibre. OSM/Carto оставлены на случай,
-    // если кто-то возвращается на сохранённый URL со старым тайл-провайдером
-    // (исходный код больше их не использует).
-    return /tiles\.openfreemap\.org\/.*\.(?:pbf|json)|tile\.openstreetmap\.org|basemaps\.cartocdn\.com/.test(url);
-}
-
-// Cross-origin shell-ресурсы: MapLibre JS/CSS из unpkg + maplibre-gl-leaflet
-// плагин + OpenFreeMap style/sprites/fonts. Stale-while-revalidate в
-// SHELL_CACHE — оффлайн возвращаем кеш, при наличии сети обновляем.
-function isCdnRequest(url) {
-    return /^https:\/\/(unpkg\.com\/(maplibre-gl|@maplibre)|tiles\.openfreemap\.org\/(styles|sprites|fonts))/.test(url);
+    return /tile\.openstreetmap\.org|basemaps\.cartocdn\.com/.test(url);
 }
 
 async function trimCache(cacheName, limit) {
@@ -128,22 +109,6 @@ self.addEventListener('fetch', (event) => {
                         cache.put(req, res.clone());
                         trimCache(TILE_CACHE, TILE_CACHE_LIMIT);
                     }
-                    return res;
-                }).catch(() => cached);
-                return cached || network;
-            })
-        );
-        return;
-    }
-
-    // MapLibre CDN + OpenFreeMap style/sprites/fonts — stale-while-revalidate
-    // в SHELL_CACHE. Offline: возвращаем кеш; online: обновляем в фоне.
-    if (isCdnRequest(url)) {
-        event.respondWith(
-            caches.open(SHELL_CACHE).then(async (cache) => {
-                const cached = await cache.match(req);
-                const network = fetch(req).then((res) => {
-                    if (res && res.status === 200) cache.put(req, res.clone());
                     return res;
                 }).catch(() => cached);
                 return cached || network;

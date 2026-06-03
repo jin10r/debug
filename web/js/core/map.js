@@ -10,7 +10,18 @@ const ICON_CONFIG = {
     pig: { url: '/assets/images/pig.png', size: [25, 25] }
 };
 
+// Слой traffic не имеет PNG-иконки — рендерим эмодзи ⛔ через L.divIcon,
+// согласовано с легендой и чекбоксом в #layerControls.
 window.createIcon = function(layer) {
+    if (layer === 'traffic') {
+        return L.divIcon({
+            html: '<span style="font-size:22px;line-height:25px;">⛔</span>',
+            className: 'traffic-emoji-icon',
+            iconSize: [25, 25],
+            iconAnchor: [12.5, 12.5],
+            popupAnchor: [0, -20]
+        });
+    }
     const config = ICON_CONFIG[layer] || ICON_CONFIG.pig;
     return L.icon({
         iconUrl: config.url,
@@ -107,12 +118,40 @@ window.createPolygon = function(map, coords, properties) {
     return [polygon, marker];
 };
 
+// Оборачивает слова matched_part в <strong> в уже HTML-экранированном тексте.
+// matched_part — лемматизированный n-грамм ("молодёжный виноградово").
+// Стемный regex: первые max(4, len-2) символов слова леммы + любой суффикс
+// → "молодёжн" совпадает с "молодёжной" в description.
+function _highlightMatchedParts(escapedText, matches) {
+    if (!matches || !matches.length) return escapedText;
+    const parts = [...new Set(
+        matches.map(m => m.matched_part).filter(p => p && p.trim().length > 1)
+    )];
+    let result = escapedText;
+    for (const part of parts) {
+        for (const word of part.split(/\s+/)) {
+            if (word.length < 4) continue;
+            const stem = word.slice(0, Math.max(word.length - 2, 4));
+            const stemEsc = stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const regex = new RegExp(
+                '(?<![а-яёА-ЯЁa-zA-Z0-9])' + stemEsc + '[а-яёА-ЯЁa-zA-Z0-9]*(?![а-яёА-ЯЁa-zA-Z0-9])',
+                'gi'
+            );
+            result = result.replace(regex, m => `<strong>${m}</strong>`);
+        }
+    }
+    return result;
+}
+
 window.createPopupContent = function(properties) {
     if (!properties) return '';
 
     const time = properties.time ? window.formatDateTime(properties.time) : '';
-    const description = properties.description ?
-        `<span style="color: var(--tg-text-color, #000000);">${window.processTelegramHTML(properties.description)}</span>` : '';
+    const description = properties.description ? (() => {
+        const escaped = window.processTelegramHTML(properties.description);
+        const highlighted = _highlightMatchedParts(escaped, properties.matches);
+        return `<span style="color: var(--tg-text-color, #ffffff);">${highlighted}</span>`;
+    })() : '';
 
     const photoUrl = properties.photo_url;
     const photoHtml = photoUrl ?

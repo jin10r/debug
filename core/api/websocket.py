@@ -166,7 +166,7 @@ class WebSocketManager:
 
 async def websocket_handler(request: web.Request):
     """WebSocket endpoint for real-time event updates."""
-    ws = web.WebSocketResponse(heartbeat=30)
+    ws = web.WebSocketResponse(heartbeat=120)
     await ws.prepare(request)
 
     ws_manager = request.app.get('websocket_manager')

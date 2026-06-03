@@ -4,11 +4,13 @@ __version__ = '4.1.0'
 __author__ = 'Survival Map Team'
 
 from .message_processor import MessageProcessor
-from .lexical_matcher import LexicalMatcher
+from .phonetic_index import PhoneticIndex
+from .street_matcher import StreetMatcher
 from .db_adapter import DBAdapter
 
 __all__ = [
     'MessageProcessor',
     'DBAdapter',
-    'LexicalMatcher',
+    'PhoneticIndex',
+    'StreetMatcher',
 ]

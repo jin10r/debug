@@ -1,11 +1,12 @@
 """DB Adapter - подключение к PostgreSQL."""
 
 import logging
-import os
 import asyncio
 from typing import Optional
 
 import asyncpg
+
+from core.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -14,12 +15,12 @@ class DBAdapter:
     """Адаптер для работы с PostgreSQL."""
 
     def __init__(self):
-        """Инициализация адаптера."""
-        self._host = os.getenv('DB_HOST', 'postgres')
-        self._port = int(os.getenv('DB_PORT', '5432'))
-        self._database = os.getenv('DB_NAME', 'postgres')
-        self._user = os.getenv('DB_USER', 'postgres')
-        self._password = os.getenv('DB_PASSWORD', 'postgres')
+        """Инициализация адаптера — DB-параметры из централизованного settings."""
+        self._host = settings.db.host
+        self._port = settings.db.port
+        self._database = settings.db.database
+        self._user = settings.db.user
+        self._password = settings.db.password
         self.__pool: Optional[asyncpg.Pool] = None
 
     async def connect(self, max_retries: int = 10, retry_delay: float = 2.0) -> bool:
@@ -44,9 +45,11 @@ class DBAdapter:
                 
                 self.__pool = await asyncpg.create_pool(
                     dsn,
-                    min_size=2,
-                    max_size=10,
-                    command_timeout=30,
+                    # Параметры пула из централизованного settings.db (раньше
+                    # были захардкожены 2/10/30 и игнорировали конфиг).
+                    min_size=settings.db.pool_min_size,
+                    max_size=settings.db.pool_max_size,
+                    command_timeout=settings.db.command_timeout,
                     statement_cache_size=100,
                     # Киевский пояс на стороне сессии БД — консистентно с
                     # core/db/db_base.py; время событий хранится привязанным к Киеву.
@@ -80,6 +83,10 @@ class DBAdapter:
         только при создании тома данных; на уже существующем томе колонку
         message_id (дедупликация по Telegram message id) нужно добавить здесь —
         при каждом старте, безопасно для повторов.
+
+        Также подтягиваются in-place миграции данных, которые должны идти
+        вместе со схемой (напр., перевод photo_url с фс-путей на публичные
+        URL — старые строки иначе отдают браузеру битый src).
         """
         try:
             async with self.__pool.acquire() as conn:
@@ -90,6 +97,18 @@ class DBAdapter:
                     "CREATE UNIQUE INDEX IF NOT EXISTS idx_events_message_id "
                     "ON events(message_id)"
                 )
+                # photo_url: фс-путь /app/media/events/<file> → публичный
+                # /media/events/<file>. Старый формат браузером не открывается.
+                status = await conn.execute(
+                    "UPDATE events "
+                    "SET photo_url = '/media/events/' "
+                    "    || regexp_replace(photo_url, '^.*/', '') "
+                    "WHERE photo_url LIKE '/app/media/events/%'"
+                )
+                # asyncpg возвращает command tag, напр. "UPDATE 5"
+                migrated = int(status.split()[-1]) if status.startswith("UPDATE") else 0
+                if migrated:
+                    logger.info(f"✅ photo_url migrated: {migrated} rows")
             logger.info("✅ Schema ensured: events.message_id + unique index")
             return True
         except Exception as e:

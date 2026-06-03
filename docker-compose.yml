@@ -1,6 +1,14 @@
 # Docker Compose - Survival Map v2
 # Architecture: Parser with SQLite replica + PostgreSQL with PostGIS
 
+# Shared logging config — json-file с ротацией (max 50MB на сервис: 5×10MB).
+# Без этого docker накапливает логи без ограничений и съедает диск.
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   # =============================================================================
   # PostgreSQL - основной storage с PostGIS
@@ -10,11 +18,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.postgres
-      network: host
-    container_name: survival_postgres
+    container_name: postgres
     environment:
+      # Захардкожено: postgres-контейнер изолирован от внешнего мира (нет
+      # ports: блока, только expose внутри db-сети). Креды синхронизированы
+      # с core/settings.py DatabaseConfig дефолтами.
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_PASSWORD: postgres
       POSTGRES_DB: postgres
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -37,6 +47,7 @@ services:
           cpus: '0.25'
           memory: 256M
     restart: unless-stopped
+    logging: *default-logging
 
   # =============================================================================
   # Parser - Telegram парсер с in-memory кэшем
@@ -46,28 +57,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.parser
-      network: host
-    container_name: survival_parser
+    container_name: parser
     environment:
-      # PostgreSQL connection
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_NAME: postgres
-      DB_USER: postgres
-      DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      # Telegram
+      # Только credentials/per-deployment URL — всё остальное в core/settings.py.
       CHANNEL_ID: ${CHANNEL_ID}
-      # JWT Secret (required for settings validation)
       JWT_SECRET: ${JWT_SECRET}
-      # Media
-      EVENTS_MEDIA_DIR: /media/events
-      # Logging — json для агрегации, text для локального чтения логов
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      LOG_FORMAT: ${LOG_FORMAT:-json}
-      # Telegram proxy (optional, for blocked networks)
-      SOCKS5_HOST: ${SOCKS5_HOST:-}
-      PROXY_PORT: ${PROXY_PORT:-1080}
-      PROXY_SCHEME: ${PROXY_SCHEME:-socks5}
     volumes:
       - ./parser/session.session:/app/parser/session.session:rw
       - events_media:/media/events:rw
@@ -80,10 +74,11 @@ services:
     healthcheck:
       # Свежесть heartbeat-файла: parser обновляет его каждую секунду в
       # keep-alive цикле. Stale-файл = event loop завис → unhealthy.
+      # start_period 60s: PhoneticIndex build из ~1000 alias-фраз + PG connect.
       test: ["CMD-SHELL", "test -f /tmp/parser_heartbeat && [ $$(( $$(date +%s) - $$(cat /tmp/parser_heartbeat) )) -lt 60 ]"]
       interval: 30s
       timeout: 10s
-      start_period: 120s
+      start_period: 60s
       retries: 3
     deploy:
       resources:
@@ -101,14 +96,17 @@ services:
     tmpfs:
       - /tmp:noexec,nosuid,size=100m
     restart: unless-stopped
+    logging: *default-logging
 
   # =============================================================================
   # Redis - кэш и очереди (опционально)
   # =============================================================================
   redis:
     image: redis:7-alpine
-    container_name: survival_redis
-    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru --requirepass ${REDIS_PASSWORD:-}
+    container_name: redis
+    # Захардкоженный пароль: redis-контейнер изолирован (нет ports: блока,
+    # только internal-network). Синхронизирован с core/settings.py RedisConfig.
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru --requirepass redis
     volumes:
       - redis_data:/data
     networks:
@@ -116,7 +114,7 @@ services:
     expose:
       - "6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-}", "ping"]
+      test: ["CMD", "redis-cli", "-a", "redis", "ping"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -126,6 +124,7 @@ services:
           cpus: '0.25'
           memory: 256M
     restart: unless-stopped
+    logging: *default-logging
 
   # =============================================================================
   # App - API сервер (опционально)
@@ -135,43 +134,16 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      network: host
-    container_name: survival_app
+    container_name: app
     environment:
-      # Database
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_NAME: postgres
-      DB_USER: postgres
-      DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      # Redis
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
-      # JWT
-      JWT_SECRET: ${JWT_SECRET}
-      JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-900}
-      JWT_REFRESH_TTL: ${JWT_REFRESH_TTL:-604800}
-      # Bot
+      # Только credentials/per-deployment URL — всё остальное в core/settings.py.
       BOT_TOKEN: ${BOT_TOKEN}
       CHANNEL_ID: ${CHANNEL_ID}
-      # App
-      APP_HOST: 0.0.0.0
-      APP_PORT: 8080
-      # Безопасный дефолт: валидация Telegram включена, если явно не отключена
-      # в .env. Dev-режим (валидация off) включается осознанно.
-      APP_TELEGRAM_VALIDATION: ${TELEGRAM_VALIDATION_ENABLED:-True}
-      # Optional
+      JWT_SECRET: ${JWT_SECRET}
       WEBAPP_URL: ${WEBAPP_URL:-}
       REDIRECT_URL: ${REDIRECT_URL:-}
-      # CORS — пустое значение или '*' = CORS выключен (same-origin only).
-      # Только перечисленные через запятую origins включают CORS.
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
-      # Logging — json для агрегации, text для локального чтения
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      LOG_FORMAT: ${LOG_FORMAT:-json}
-      # Media
-      EVENTS_MEDIA_DIR: /media/events
+      # Optional override: dev-режим без валидации Telegram InitData (default True).
+      TELEGRAM_VALIDATION_ENABLED: ${TELEGRAM_VALIDATION_ENABLED:-True}
     volumes:
       - events_media:/media/events:ro
     depends_on:
@@ -194,9 +166,17 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.5'
-          memory: 256M
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     restart: unless-stopped
+    logging: *default-logging
 
   # =============================================================================
   # Nginx - reverse proxy
@@ -206,8 +186,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.nginx
-      network: host
-    container_name: survival_nginx
+    container_name: nginx
     ports:
       - "80:80"
     volumes:
@@ -227,9 +206,24 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.25'
+          cpus: '0.5'
           memory: 128M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # NET_BIND_SERVICE — для bind на 80, остальные drop'нуты.
+    cap_add:
+      - NET_BIND_SERVICE
+      - CHOWN
+      - SETGID
+      - SETUID
+      - DAC_OVERRIDE
     restart: unless-stopped
+    logging: *default-logging
 
 # =============================================================================
 # Networks

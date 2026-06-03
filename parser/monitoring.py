@@ -16,13 +16,17 @@ from zoneinfo import ZoneInfo
 from pyrogram import Client, filters
 from pyrogram.types import Message
 
-# Настраиваем логирование на уровне модуля — до любых импортов,
-# чтобы ошибки при загрузке зависимостей были видны в docker logs.
-# LOG_FORMAT=json (по умолчанию, симметрично main.py app-сервиса) → JSON-логи
-# через core.utils.logging_config.JSONFormatter; LOG_FORMAT=text — человеко-
-# читаемые логи для локальной разработки.
-_LOG_LEVEL = getattr(logging, os.getenv('LOG_LEVEL', 'INFO').upper(), logging.INFO)
-_LOG_FORMAT = os.getenv('LOG_FORMAT', 'json').lower()
+# Импорт settings первым делом — log-параметры берутся из централизованного
+# AppConfig (log_level/log_format), не из env. settings.py использует
+# logging.getLogger без basicConfig — это безопасно до настройки ниже.
+from core.settings import settings
+
+# Настраиваем логирование сразу после импорта settings, до загрузки тяжёлых
+# зависимостей (pymorphy3, fonetika), чтобы их init-логи попадали в нужный
+# формат. log_format=json (default) → JSON через JSONFormatter; =text —
+# человеко-читаемые логи для локальной разработки.
+_LOG_LEVEL = getattr(logging, settings.app.log_level.upper(), logging.INFO)
+_LOG_FORMAT = settings.app.log_format.lower()
 
 if _LOG_FORMAT == 'json':
     from core.utils.logging_config import JSONFormatter
@@ -37,7 +41,6 @@ _handler.setFormatter(_formatter)
 logging.root.handlers = [_handler]
 logging.root.setLevel(_LOG_LEVEL)
 
-from core.settings import settings
 from .db_adapter import DBAdapter
 from .message_processor import MessageProcessor
 
@@ -60,126 +63,106 @@ class ParserBot:
         self._messages_processed = 0
         self._errors = 0
         self._cleanup_listener_task: Optional[asyncio.Task] = None  # NOTIFY-слушатель удаления фото
-        # Очередь обработки: pyrogram-хендлер только кладёт сообщение в очередь,
-        # единственный воркер разбирает её последовательно — без гонок и потерь.
-        self._message_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
-        self._worker_task: Optional[asyncio.Task] = None
 
-        # Конфигурация из env через систему настроек
+        # Конфигурация из env через систему настроек — валидация до доступа
+        # к settings.parser, чтобы все последующие обращения были безопасны.
         if not settings or not settings.bot or not settings.bot.channel_id:
             raise RuntimeError(
                 "CHANNEL_ID not configured in settings. "
                 "Check that CHANNEL_ID is set in .env and passed to the parser container."
             )
         self.channel_id = settings.bot.channel_id
-        self.events_media_dir = os.getenv('EVENTS_MEDIA_DIR', '/app/media/events')
+        self.events_media_dir = settings.parser.events_media_dir
+
+        # Очередь обработки: pyrogram-хендлер только кладёт сообщение в очередь,
+        # единственный воркер разбирает её последовательно — без гонок и потерь.
+        self._message_queue: asyncio.Queue = asyncio.Queue(
+            maxsize=settings.parser.message_queue_maxsize
+        )
+        self._worker_task: Optional[asyncio.Task] = None
 
     async def initialize(self) -> bool:
-        """
-        Инициализация компонентов.
-
-        Returns:
-            True если успешно, False иначе
-        """
+        """Инициализация компонентов: БД → процессор → Telegram-клиент."""
         try:
-            # 1. Подключение к PostgreSQL
-            logger.info("Connecting to PostgreSQL...")
-            self.db = DBAdapter()
-            success = await self.db.connect()
-            if not success:
-                logger.error("Failed to connect to PostgreSQL, exiting")
+            if not await self._init_database():
                 return False
-            logger.info("✅ PostgreSQL connected")
-
-            # 1a. Гарантируем схему (миграция для существующего тома БД)
-            logger.info("Ensuring database schema...")
-            if not await self.db.ensure_schema():
-                logger.error("Failed to ensure database schema, exiting")
+            if not await self._init_processor():
                 return False
-
-            # 2. Инициализация процессора сообщений
-            logger.info("Initializing message processor...")
-            self.processor = MessageProcessor(
-                db_pool=self.db.pool  # ← Используем property pool
-            )
-
-            success = await self.processor.initialize()
-            if not success:
-                logger.error("Failed to initialize message processor")
+            if not await self._init_telegram_client():
                 return False
-
-            logger.info("✅ Message processor initialized")
-
-            # 3. Инициализация Telegram клиента
-            # Используется пользовательская сессия (не бот)
-            # api_id/api_hash не используются, авторизация делается отдельно
-            # сессия уже содержит авторизацию пользователя
-            logger.info("Initializing Telegram client...")
-
-            # session.session создаётся администратором вручную вне приложения
-            # и монтируется в контейнер; в рантайме сессия не создаётся.
-            session_path = os.path.join("/app/parser", "session.session")
-            if not os.path.exists(session_path):
-                logger.error(
-                    f"❌ Session file not found: {session_path}. "
-                    "Файл session.session должен быть создан администратором "
-                    "вручную и смонтирован в контейнер (volume)."
-                )
-                return False
-
-            try:
-                proxy_host = os.getenv('SOCKS5_HOST') or os.getenv('PROXY_HOST')
-                proxy_config = None
-                if proxy_host:
-                    proxy_config = {
-                        "scheme": os.getenv('PROXY_SCHEME', 'socks5'),
-                        "hostname": proxy_host,
-                        "port": int(os.getenv('PROXY_PORT', '1080')),
-                    }
-                    logger.info(f"Using proxy: {proxy_config['scheme']}://{proxy_config['hostname']}:{proxy_config['port']}")
-
-                self.app = Client(
-                    name="session",
-                    workdir="/app/parser",
-                    **({"proxy": proxy_config} if proxy_config else {})
-                )
-                logger.info("✅ Telegram client created")
-                
-                # Диагностика состояния клиента перед запуском
-                logger.info("Diagnosing client state before start...")
-                logger.info(f"Client is_connected: {self.app.is_connected}")
-                logger.info(f"Client is_initialized: {self.app.is_initialized}")
-                
-                # Важно: всегда пытаемся остановить клиент перед перезапуском
-                # Это предотвращает "already connected" ошибки
-                try:
-                    if self.app.is_connected:
-                        logger.info("Stopping existing client connection...")
-                        await self.app.stop()
-                        logger.info("✅ Existing client stopped")
-                        # Даем небольшое время для завершения
-                        await asyncio.sleep(1)
-                except Exception as stop_error:
-                    logger.warning(f"Error stopping client (may be expected): {stop_error}")
-                
-                # Только после этого запускаем клиент
-                if not self.app.is_connected:
-                    logger.info("Starting Telegram client...")
-                    await self.app.start()
-                    logger.info("✅ Telegram client started successfully")
-                else:
-                    logger.warning("⚠️  Client still connected after attempted stop - this may cause issues")
-                
-            except Exception as e:
-                logger.error(f"❌ Failed to initialize Telegram client: {e}")
-                logger.error("Check if session.session file exists and is valid")
-                return False
-
             logger.info("✅ ParserBot initialized")
             return True
-
         except Exception as e:
             logger.error(f"❌ Failed to initialize ParserBot: {e}")
+            return False
+
+    async def _init_database(self) -> bool:
+        """Подключение к PostgreSQL и гарантия схемы (миграция тома)."""
+        logger.info("Connecting to PostgreSQL...")
+        self.db = DBAdapter()
+        if not await self.db.connect():
+            logger.error("Failed to connect to PostgreSQL, exiting")
+            return False
+        logger.info("✅ PostgreSQL connected")
+
+        logger.info("Ensuring database schema...")
+        if not await self.db.ensure_schema():
+            logger.error("Failed to ensure database schema, exiting")
+            return False
+        return True
+
+    async def _init_processor(self) -> bool:
+        """Инициализация процессора сообщений (общий пул БД)."""
+        logger.info("Initializing message processor...")
+        self.processor = MessageProcessor(db_pool=self.db.pool)
+        if not await self.processor.initialize():
+            logger.error("Failed to initialize message processor")
+            return False
+        logger.info("✅ Message processor initialized")
+        return True
+
+    async def _init_telegram_client(self) -> bool:
+        """Старт pyrogram-клиента под существующей пользовательской сессией.
+
+        session.session создаётся администратором вручную вне приложения и
+        монтируется volume'ом; рантайм сессию не создаёт. SOCKS5/HTTP-прокси
+        задаётся через ParserConfig.{socks5_host,proxy_*} (см. core/settings).
+        """
+        session_path = os.path.join("/app/parser", "session.session")
+        if not os.path.exists(session_path):
+            logger.error(
+                f"❌ Session file not found: {session_path}. "
+                "Файл session.session должен быть создан администратором "
+                "вручную и смонтирован в контейнер (volume)."
+            )
+            return False
+
+        proxy_host = settings.parser.socks5_host or settings.parser.proxy_host
+        proxy_config = None
+        if proxy_host:
+            proxy_config = {
+                "scheme": settings.parser.proxy_scheme,
+                "hostname": proxy_host,
+                "port": settings.parser.proxy_port,
+            }
+            logger.info(
+                f"Using proxy: {proxy_config['scheme']}://"
+                f"{proxy_config['hostname']}:{proxy_config['port']}"
+            )
+
+        try:
+            self.app = Client(
+                name="session",
+                workdir="/app/parser",
+                **({"proxy": proxy_config} if proxy_config else {})
+            )
+            logger.info("Starting Telegram client...")
+            await self.app.start()
+            logger.info("✅ Telegram client started successfully")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize Telegram client: {e}")
+            logger.error("Check if session.session file exists and is valid")
             return False
 
     async def _load_chat_history(self):
@@ -187,10 +170,12 @@ class ParserBot:
         try:
             logger.info(f"Loading history from channel {self.channel_id}...")
 
+            await self._warmup_peer()
+
             count = 0
             async for message in self.app.get_chat_history(
                 chat_id=self.channel_id,
-                limit=25
+                limit=settings.parser.history_limit,
             ):
                 await self._message_queue.put(message)
                 count += 1
@@ -199,6 +184,29 @@ class ParserBot:
 
         except Exception as e:
             logger.error(f"Failed to load chat history: {e}")
+
+    async def _warmup_peer(self) -> bool:
+        """Populate session peer cache before history fetch.
+
+        Pyrogram needs access_hash in session.session for numeric peer IDs.
+        Iterating get_dialogs() until we find the target channel writes it
+        without fetching the full dialog list.
+        Returns True if peer was found, False otherwise.
+        """
+        target_id = int(self.channel_id)
+        try:
+            async for dialog in self.app.get_dialogs():
+                if dialog.chat.id == target_id:
+                    logger.info(f"Peer cache warmed for channel {self.channel_id}")
+                    return True
+            logger.warning(
+                f"Channel {self.channel_id} not found in dialogs — "
+                "peer cache not warmed, history load may fail"
+            )
+            return False
+        except Exception as e:
+            logger.warning(f"Peer warmup failed ({e}) — will attempt history load anyway")
+            return False
 
     async def start(self):
         """Запуск бота."""
@@ -313,6 +321,41 @@ class ParserBot:
                         f"Message {message.id}: giving up after {attempts} attempts: {e}"
                     )
 
+    @staticmethod
+    def _extract_text(message) -> str:
+        """Извлечь текст сообщения, исключив символы, ломающие UTF-16 entity-парсер pyrogram.
+
+        Pyrogram применяет Telegram-entities (bold, mention и т.д.) используя
+        UTF-16-смещения. Если символ вне BMP (emoji, code point > U+FFFF) попадает
+        на границу entity, возникает UnicodeDecodeError 'utf-16-le … unexpected end of data'.
+        При падении обращаемся к неформатированному тексту и вырезаем не-BMP символы —
+        источник проблемы — оставляя остальной контент нетронутым.
+        """
+        try:
+            return message.text or message.caption or ''
+        except UnicodeDecodeError:
+            pass
+        # entity-форматирование упало — читаем сырой текст в обход entity-парсера.
+        # pyrogram 2.x хранит неформатированный текст в _text / _caption.
+        raw = (getattr(message, '_text', None)
+               or getattr(message, '_caption', None)
+               or '')
+        if not raw:
+            raw_obj = getattr(message, '_raw', None)
+            if raw_obj:
+                raw = (getattr(raw_obj, 'message', None)
+                       or getattr(raw_obj, 'caption', None)
+                       or '')
+        # Убираем символы вне BMP — именно они создают суррогатные пары в UTF-16
+        # и вызывают смещение entity-границ.
+        stripped = ''.join(c for c in raw if ord(c) <= 0xFFFF)
+        logger.warning(
+            "Message %s: entity formatting failed (non-BMP char at entity boundary); "
+            "stripped %d char(s), processing continues without formatting",
+            getattr(message, 'id', '?'), len(raw) - len(stripped),
+        )
+        return stripped
+
     async def _process_message(self, message: Message):
         """Обработать одно сообщение канала: предобработка и сохранение события.
 
@@ -329,7 +372,7 @@ class ParserBot:
 
         msg_data = {
             'message_id': message_id,
-            'text': message.text or message.caption or '',
+            'text': self._extract_text(message),
             'event_time': self._to_kiev(message.date),
             'photo': message.photo,
         }
@@ -351,32 +394,57 @@ class ParserBot:
             logger.info(f"Message {message_id}: skipped (duplicate or no geometry)")
 
     async def _download_photo(self, message: Message) -> Optional[str]:
-        """
-        Скачать фото сообщения.
+        """Скачать фото сообщения и вернуть **публичный URL** для фронтенда.
 
-        Args:
-            message: Сообщение с фото
+        Файл пишется на диск в ``events_media_dir`` (контейнерный путь, напр.
+        ``/app/media/events``), но в БД сохраняется публичный URL
+        ``/media/events/<filename>`` — именно его браузер кладёт в ``<img src>``.
+        nginx обслуживает ``/media/events/*.jpg`` напрямую с диска (alias),
+        с fallback на ``/api/media/events/<file>`` если файла нет (см. nginx.conf).
 
         Returns:
-            Путь к файлу или None
+            Публичный URL фото или None при ошибке / path-traversal / symlink-attack.
         """
         try:
             if not self.events_media_dir:
                 return None
 
-            # Создаём директорию если нет
-            os.makedirs(self.events_media_dir, exist_ok=True)
+            from pathlib import Path
 
-            # Генерируем имя файла
+            # Канонизируем target-директорию: resolve следует за symlink'ами
+            # и нормализует .. компоненты.
+            target_dir = Path(self.events_media_dir).resolve()
+            target_dir.mkdir(parents=True, exist_ok=True)
+
+            # Имя файла строится из timestamp + msg.id. Используем Path().name
+            # для извлечения базового имени — никаких path-components.
             timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
-            filename = f"event_{timestamp}_{message.id}.jpg"
-            filepath = os.path.join(self.events_media_dir, filename)
+            safe_msg_id = abs(int(message.id))  # защита от отрицательных/inf
+            filename = Path(f"event_{timestamp}_{safe_msg_id}.jpg").name
+            final_path = (target_dir / filename).resolve()
 
-            # Скачиваем через client.download_media
-            await self.app.download_media(message.photo, file_name=filepath)
+            # Path-traversal guard: финальный путь должен быть строго внутри
+            # target_dir (а не выше или сбоку через symlink в target_dir).
+            try:
+                final_path.relative_to(target_dir)
+            except ValueError:
+                logger.error(
+                    f"Path traversal blocked: {final_path} not under {target_dir}"
+                )
+                return None
 
-            logger.debug(f"Downloaded photo to {filepath}")
-            return filepath
+            # Symlink-attack guard: если файл уже существует как symlink —
+            # удалить, чтобы download_media не записал по адресу target'а.
+            if final_path.is_symlink():
+                logger.warning(f"Removing pre-existing symlink: {final_path}")
+                final_path.unlink()
+
+            # Скачиваем через client.download_media на диск.
+            await self.app.download_media(message.photo, file_name=str(final_path))
+
+            public_url = f"/media/events/{filename}"
+            logger.debug(f"Downloaded photo to {final_path} → URL {public_url}")
+            return public_url
 
         except Exception as e:
             logger.error(f"Failed to download photo: {e}")
@@ -390,43 +458,87 @@ class ParserBot:
         список в поле photo_urls уведомления events_cleaned. Этот метод
         получает уведомление и удаляет файлы — сервис parser монтирует
         /media/events с правами :rw, в отличие от app (:ro).
+
+        Auto-reconnect: при потере PostgreSQL connection (network blip,
+        server restart) listener молча отваливался. Теперь — exponential
+        backoff (1s/5s/30s) с повторным acquire+add_listener.
         """
-        conn = None
-        try:
-            conn = await self.db.pool.acquire()
+        media_dir = self.events_media_dir.rstrip('/')
 
-            def _on_notify(connection, pid, channel, payload):
-                try:
-                    data = json.loads(payload)
-                    for url in data.get('photo_urls') or []:
-                        if url and os.path.isfile(url):
-                            try:
-                                os.unlink(url)
-                                logger.info(f"Удалено устаревшее фото: {url}")
-                            except OSError as e:
-                                logger.warning(f"Не удалось удалить фото {url}: {e}")
-                except Exception as e:
-                    logger.warning(f"Ошибка обработчика events_cleaned: {e}")
+        def _resolve_photo_path(url: str) -> Optional[str]:
+            """URL из photo_url-колонки → реальный путь на диске.
 
-            await conn.add_listener('events_cleaned', _on_notify)
-            logger.info("Слушаем events_cleaned для удаления устаревших фото")
+            Новый формат: ``/media/events/<file>`` → ``<media_dir>/<file>``.
+            Legacy: ``/app/media/events/<file>`` (фс-путь) → как есть.
+            """
+            if not url:
+                return None
+            if url.startswith('/media/events/'):
+                return f"{media_dir}/{url[len('/media/events/'):]}"
+            return url  # legacy absolute path
 
-            while self._running:
-                await asyncio.sleep(1)
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.error(f"Photo cleanup listener завершился с ошибкой: {e}", exc_info=True)
-        finally:
-            if conn is not None:
-                try:
-                    await conn.remove_listener('events_cleaned', _on_notify)
-                except Exception:
-                    pass
-                try:
-                    await self.db.pool.release(conn)
-                except Exception:
-                    pass
+        def _on_notify(connection, pid, channel, payload):
+            try:
+                data = json.loads(payload)
+                for url in data.get('photo_urls') or []:
+                    path = _resolve_photo_path(url)
+                    if path and os.path.isfile(path):
+                        try:
+                            os.unlink(path)
+                            logger.info(f"Удалено устаревшее фото: {path}")
+                        except OSError as e:
+                            logger.warning(f"Не удалось удалить фото {path}: {e}")
+            except Exception as e:
+                logger.warning(f"Ошибка обработчика events_cleaned: {e}")
+
+        backoff_schedule = [1, 5, 30]  # секунды между retry
+        backoff_idx = 0
+
+        while self._running:
+            conn = None
+            try:
+                conn = await self.db.pool.acquire()
+                await conn.add_listener('events_cleaned', _on_notify)
+                logger.info("Слушаем events_cleaned для удаления устаревших фото")
+                backoff_idx = 0  # успех — сбросить backoff
+
+                # Heartbeat-loop: спим, периодически проверяя что соединение
+                # ещё живо. asyncpg бросит при closed connection — поймаем
+                # в outer except.
+                while self._running:
+                    await asyncio.sleep(5)
+                    # ping connection — если упал, поймает заголовок цикла
+                    if conn.is_closed():
+                        raise ConnectionError("Listener connection closed")
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                delay = backoff_schedule[min(backoff_idx, len(backoff_schedule) - 1)]
+                logger.warning(
+                    f"Photo cleanup listener lost connection ({e}), "
+                    f"retry in {delay}s"
+                )
+                backoff_idx += 1
+            finally:
+                if conn is not None:
+                    try:
+                        await conn.remove_listener('events_cleaned', _on_notify)
+                    except Exception:
+                        pass
+                    try:
+                        await self.db.pool.release(conn)
+                    except Exception:
+                        pass
+
+            if not self._running:
+                break
+            # Backoff sleep ВНЕ try-блока, чтобы не путать с listener error
+            try:
+                await asyncio.sleep(
+                    backoff_schedule[min(backoff_idx - 1, len(backoff_schedule) - 1)]
+                )
+            except asyncio.CancelledError:
+                raise
 
     async def shutdown(self):
         """Корректное завершение работы."""
@@ -465,13 +577,11 @@ class ParserBot:
 
 
 async def main():
-    """Точка входа."""
-    # Настройка логирования
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
+    """Точка входа.
 
+    Логирование уже настроено на module-level из settings.app.log_format/log_level
+    сразу после импорта settings (до загрузки тяжёлых зависимостей).
+    """
     parser = ParserBot()
 
     try:

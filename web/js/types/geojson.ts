@@ -16,7 +16,7 @@ import {
 /**
  * Event layer types
  */
-export type EventLayer = 'pig' | 'cops' | 'bus' | 'unknown';
+export type EventLayer = 'pig' | 'cops' | 'bus' | 'traffic' | 'unknown';
 
 /**
  * Event strategy types

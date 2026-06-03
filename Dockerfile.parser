@@ -1,10 +1,10 @@
-# Dockerfile.parser — Parser service (pymorphy3 + rapidfuzz, CPU-only)
+# Dockerfile.parser — Parser service (mawo-razdel/pymorphy3 + rapidfuzz, CPU-only)
 # Multi-stage build для минимизации размера образа
 
 # =============================================================================
-# Stage 1: Builder (установка зависимостей)
+# Stage 1: Builder (установка зависимостей + smoke-test fonetika)
 # =============================================================================
-FROM python:3.11-slim AS builder
+FROM python:3.11.10-slim-bookworm AS builder
 
 WORKDIR /build
 
@@ -21,10 +21,13 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     find /root/.local -type f -name "*.pyo" -delete && \
     find /root/.local -type f -name "*.md" -delete
 
+ENV PATH="/root/.local/bin:$PATH"
+RUN python -c "from rapidfuzz import fuzz; from mawo_pymorphy3 import MorphAnalyzer; print('✅ deps OK')"
+
 # =============================================================================
 # Stage 2: Runtime (минимальный образ)
 # =============================================================================
-FROM python:3.11-slim
+FROM python:3.11.10-slim-bookworm
 
 WORKDIR /app
 

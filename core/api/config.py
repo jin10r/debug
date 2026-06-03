@@ -1,5 +1,4 @@
 """Configuration API handlers"""
-import os
 import json
 from aiohttp import web
 
@@ -7,7 +6,7 @@ from core.settings import settings
 
 
 async def get_config_handler(request: web.Request):
-    """Return client configuration from environment variables"""
+    """Return client configuration from centralized settings."""
     # Поддержка как GET, так и POST запросов
     if request.method == 'POST':
         try:
@@ -15,15 +14,16 @@ async def get_config_handler(request: web.Request):
         except Exception:
             pass  # Игнорируем ошибки при чтении тела POST-запроса
 
+    layer_keywords = {
+        layer: list(keywords)
+        for layer, keywords in (settings.layers.as_dict().items() if settings else ())
+    }
+
     config = {
-        'redirect_url': os.getenv('REDIRECT_URL', ''),
+        'redirect_url': (settings.bot.redirect_url if settings and settings.bot else '') or '',
         'telegram_validation_enabled': settings.app.telegram_validation_enabled if settings and settings.app else False,
         'stopwords': list(settings.similarity.stop_words) if settings else [],
-        'layer_keywords': {
-            'pig': list(settings.layers.pig) if settings else [],
-            'cops': list(settings.layers.cops) if settings else [],
-            'bus': list(settings.layers.bus) if settings else []
-        }
+        'layer_keywords': layer_keywords,
     }
 
     return web.json_response(config)

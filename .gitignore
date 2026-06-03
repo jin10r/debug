@@ -53,14 +53,12 @@ secrets/*.txt
 # Test data
 tests/test_messages.txt
 
-# Analysis reports
+# Documentation (whitelist-style: by default all *.md ignored; allow only
+# living docs in docs/ and developer rules CLAUDE.md)
 *.md
-!README.md
-!docs/README.md
-!docs/ARCHITECTURE_REPORT.md
-!docs/DOCKER_ARCHITECTURE.md
-!docs/PROJECT_OVERVIEW.md
-!docs/SECURITY.md
+!CLAUDE.md
+!web/CLAUDE.md
+!docs/**/*.md
 pg_plan3.txt
 
 # Archived migration scripts and docs
@@ -71,11 +69,6 @@ docs/ARCHIVE/
 .DS_Store
 Thumbs.db
 
-# ML Models (large files — run scripts/export_onnx_model.py to regenerate)
-models/
-!models/.gitkeep
-!models/gliner_onnx/
-rubert-tiny2-onnx/
 
 # Frontend build artifacts
 web/node_modules/
@@ -86,3 +79,11 @@ media/
 logs
 # Build / profiling artifacts
 optimization_results.json
+
+# Training data artifacts (large, generated locally — not versioned)
+train_data/
+nnew_events_export.csv
+events_export.csv
+
+# Local utility / one-off scripts (not part of deployed service)
+scripts/

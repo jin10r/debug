@@ -1,34 +1,82 @@
 """Предобработка текста сообщений parser.
 
-Чистые функции без морфологии — единственное место предобработки текста
-(раньше логика дублировалась между monitoring.py и message_processor.py).
+Две стадии:
+  • preprocess_light — мягкая очистка, СОХРАНЯЕТ регистр и пунктуацию. Нужна
+    razdel-токенизации (аббревиатуры "ул.", "пр." требуют точек) и сохранения
+    границ слов для фонетической стратегии.
+  • clean — агрессивная очистка, lowercase + без пунктуации. Применяется к
+    alias-именам при сборке phonetic-индекса и для канонизации фрагментов.
 
-Конвейер обработки сообщения (порядок фиксирован):
-  1. strip_tail — отбросить служебный хвост сообщения;
-  2. clean      — снять HTML, удалить время, пунктуацию, привести к нижнему
-                  регистру;
-  3. определение слоя (layer_classifier) — над очищенным текстом;
-  4. если текст пустой или длиннее MAX_TEXT_LENGTH — поиск улиц пропускается.
+Конвейер обработки сообщения:
+  1. strip_tail   — отбросить служебный хвост;
+  2. preprocess_light — для razdel/морфологии;
+  3. clean(name)  — применяется в phonetic_index при сборке вариантов улицы.
+
+`strip_tail` остаётся неизменным — он не зависит от регистра/пунктуации.
 """
 
 import html
 import re
 
-# Сообщение длиннее этого порога не считается релевантной локацией:
-# поиск улиц пропускается, событию назначается стратегия 'random'.
-MAX_TEXT_LENGTH = 380
-
 # Маркеры служебного хвоста: всё начиная с самого раннего из них отбрасывается.
-_TAIL_MARKERS = ('сообщить', 'подписаться', '|')
+# Раньше '|' тоже был маркером, но он конфликтует с alias-separator в БД
+# («улица|переулок» — synonym, ломалось при появлении в тексте). Удалён.
+_TAIL_MARKERS = ('сообщить', 'подписаться')
 
 # HH:MM с разделителем ':' или '.', часы 0-23, минуты 00-59.
 # Удаляется до замены пунктуации, иначе '14:30' распалось бы на '14' и '30'.
 _TIME_RE = re.compile(r'\b([01]?\d|2[0-3])[:.][0-5]\d\b')
+# «б/п», «б\п», «б / п» → «бп»: razdel дробит слэш на отдельные токены, из-за
+# чего аббревиатура блокпоста не совпадала с layer-keyword «бп» (слой traffic).
+# Схлопываем до старта токенизации.
+_BP_SLASH_RE = re.compile(r'\bб\s*[/\\]\s*п\b', re.IGNORECASE)
 _TAG_RE = re.compile(r'<[^>]+>')
 _NON_ALNUM_RE = re.compile(r'[^a-zA-Zа-яА-ЯёЁ0-9]')
 _SPACES_RE = re.compile(r'\s+')
+
+# Emoji и пиктограммы. При поиске названий улиц/сущностей это шум: они
+# попадают в токены, ломают лемматизацию и смещают границы фраз. Убираются
+# ТОЛЬКО на этапе матчинга (см. strip_emoji) — в description, уходящем на
+# фронтенд, emoji СОХРАНЯЮТСЯ. Диапазоны покрывают основные emoji-блоки
+# Unicode плюс служебные модификаторы (variation selectors, ZWJ, keycap).
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F300-\U0001FAFF"  # Misc Symbols/Pictographs … Symbols & Pictographs Ext-A
+    "\U0001F000-\U0001F02F"  # Mahjong / Domino
+    "\U0001F0A0-\U0001F0FF"  # Playing cards
+    "\U00002600-\U000027BF"  # Misc symbols + Dingbats
+    "\U00002B00-\U00002BFF"  # Misc Symbols and Arrows
+    "\U00002190-\U000021FF"  # Arrows
+    "\U0000FE00-\U0000FE0F"  # Variation Selectors
+    "\U0001F1E6-\U0001F1FF"  # Regional indicators (флаги)
+    "\U0000200D"             # Zero Width Joiner
+    "\U000020E3"             # Combining Enclosing Keycap
+    "\U00002122\U00002139"   # ™ ℹ
+    "]+",
+    flags=re.UNICODE,
+)
 # Украинские буквы → русские: і,ї → и; є → е.
-_UA_TABLE = str.maketrans('іїє', 'иие')
+_UA_TABLE = str.maketrans('іїєІЇЄ', 'иииИИЕ')
+
+# Украинские окончания → русские эквиваленты (G6). Применяется ПОСЛЕ _UA_TABLE,
+# чтобы дополнительно нормализовать прилагательные/существительные:
+#   «Балкивська» → «Балковская», «Дерибасівський» → «Дерибасовский»,
+#   «Пушкінської» → «Пушкинской».
+# Регекспы case-insensitive чтобы покрыть Title Case.
+_UA_SUFFIX_FIXES = [
+    (re.compile(r'івська\b', re.IGNORECASE), 'овская'),
+    (re.compile(r'івський\b', re.IGNORECASE), 'овский'),
+    (re.compile(r'івської\b', re.IGNORECASE), 'овской'),
+    (re.compile(r'івською\b', re.IGNORECASE), 'овской'),
+    (re.compile(r'івському\b', re.IGNORECASE), 'овскому'),
+    (re.compile(r'ська\b', re.IGNORECASE), 'ская'),
+    (re.compile(r'ський\b', re.IGNORECASE), 'ский'),
+    (re.compile(r'ської\b', re.IGNORECASE), 'ской'),
+    (re.compile(r'ською\b', re.IGNORECASE), 'ской'),
+    (re.compile(r'ському\b', re.IGNORECASE), 'скому'),
+    (re.compile(r'цька\b', re.IGNORECASE), 'цкая'),
+    (re.compile(r'цький\b', re.IGNORECASE), 'цкий'),
+]
 
 
 def strip_tail(text: str) -> str:
@@ -46,10 +94,43 @@ def strip_tail(text: str) -> str:
     return text[:cut].strip()
 
 
-def clean(text: str) -> str:
-    """Нормализовать текст: снять HTML и время, убрать пунктуацию, lower-case.
+def strip_emoji(text: str) -> str:
+    """Удалить emoji/пиктограммы — для этапа матчинга названий сущностей.
 
-    Порядок шагов важен: время удаляется до замены пунктуации на пробелы.
+    НЕ применять к тексту, уходящему на фронтенд: там emoji должны остаться
+    в исходном виде. Используется только перед токенизацией/классификацией.
+    """
+    if not text:
+        return ''
+    return _SPACES_RE.sub(' ', _EMOJI_RE.sub(' ', text)).strip()
+
+
+def preprocess_light(text: str) -> str:
+    """Мягкая очистка: снять HTML, удалить таймстампы, нормализовать укр. буквы.
+
+    СОХРАНЯЕТ регистр и пунктуацию — нужно razdel-токенизации (аббревиатуры
+    "ул.", "пр." требуют точек). Возвращает строку, пригодную для подачи в
+    mawo_razdel.tokenize.
+    """
+    if not text:
+        return ''
+
+    text = html.unescape(text)
+    text = _TAG_RE.sub(' ', text)
+    text = _TIME_RE.sub(' ', text)
+    text = _BP_SLASH_RE.sub('бп', text)
+    text = text.translate(_UA_TABLE)
+    for pattern, repl in _UA_SUFFIX_FIXES:
+        text = pattern.sub(repl, text)
+    text = _SPACES_RE.sub(' ', text)
+    return text.strip()
+
+
+def clean(text: str) -> str:
+    """Агрессивная нормализация: убрать пунктуацию, lower-case.
+
+    Применяется к небольшим фрагментам (LOC-спаны, alias-имена улиц) для
+    приведения к канонической форме перед лексическим фуззи-матчем.
     """
     if not text:
         return ''
@@ -59,5 +140,7 @@ def clean(text: str) -> str:
     text = _TIME_RE.sub(' ', text)
     text = _NON_ALNUM_RE.sub(' ', text)
     text = text.translate(_UA_TABLE)
+    for pattern, repl in _UA_SUFFIX_FIXES:
+        text = pattern.sub(repl, text)
     text = _SPACES_RE.sub(' ', text)
     return text.strip().lower()

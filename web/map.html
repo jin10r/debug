@@ -16,19 +16,11 @@
     <link rel="stylesheet" href="/assets/lib/leaflet.css"/>
     <link rel="stylesheet" href="/assets/lib/MarkerCluster.css" />
     <link rel="stylesheet" href="/assets/lib/MarkerCluster.Default.css" />
-    <!-- MapLibre GL JS — используется только как basemap-слой через
-         плагин @maplibre/maplibre-gl-leaflet. Leaflet остаётся хозяином
-         карты (маркеры, кластеры, попапы, оверлеи), MapLibre заменяет
-         растровые тайлы на vector-тайлы OpenFreeMap с кастомной палитрой. -->
-    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+    <link href="/assets/lib/maplibre-gl.css" rel="stylesheet" />
     <link rel="stylesheet" href="css/styles.css">
 
     <!-- Telegram Web App -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-
-    <!-- MapLibre GL JS — без зависимости от L. Плагин (см. ниже) грузится
-         после leaflet.js, потому что расширяет L.maplibreGL. -->
-    <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 
     <!-- Synchronous setup: auth headers, default config, user info -->
     <script>
@@ -102,7 +94,7 @@
 
     <div id="controlsContainer">
         <div id="controlsSlider">
-            <!-- Первый слайд: Время и Слои (объединенные) -->
+            <!-- Первый слайд: фильтр времени -->
             <div id="realtimeControls" class="controlPanel">
                 <div class="centered-content">
                     <p>Отображать события за:</p>
@@ -113,16 +105,38 @@
                     </div>
                 </div>
             </div>
+            <!-- Второй слайд: чекбоксы слоёв -->
+            <div id="layerControls" class="controlPanel">
+                <div class="layers">
+                    <label>
+                        <img src="/assets/images/bus.png" alt="Бус">
+                        <input type="checkbox" data-layer="bus" checked>
+                    </label>
+                    <label>
+                        <img src="/assets/images/cops.png" alt="Менты">
+                        <input type="checkbox" data-layer="cops" checked>
+                    </label>
+                    <label>
+                        <span class="emoji-icon" aria-label="Трафик">⛔</span>
+                        <input type="checkbox" data-layer="traffic" checked>
+                    </label>
+                    <label>
+                        <img src="/assets/images/pig.png" alt="Остальное">
+                        <input type="checkbox" data-layer="pig" checked>
+                    </label>
+                </div>
+            </div>
+        </div>
+        <div id="controlsIndicators">
+            <div class="dot active"></div>
+            <div class="dot"></div>
         </div>
     </div>
 
     <script src="/assets/lib/leaflet.js"></script>
     <script src="/assets/lib/leaflet.markercluster.js"></script>
-    <!-- maplibre-gl-leaflet расширяет L (нужно после leaflet.js). Регистрирует
-         L.maplibreGL — фабрику слоя, который рендерит MapLibre canvas внутри
-         tilePane Leaflet'а (z-index 200), pointer-events: none, поэтому все
-         клики получают Leaflet-маркеры/попапы поверх. -->
-    <script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.0.22/leaflet-maplibre-gl.js"></script>
+    <script src="/assets/lib/maplibre-gl.js"></script>
+    <script src="/assets/lib/maplibre-gl-leaflet.js"></script>
 
     <!-- Hard validation gate + bootstrap -->
     <script>

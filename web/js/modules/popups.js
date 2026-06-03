@@ -152,35 +152,37 @@ async function copyToClipboard(text) {
  * Создает и показывает попап легенды
  */
 function showLegendPopup() {
+    // Порядок строк соответствует приоритету классификации слоёв
+    // (parser/layer_classifier.py: bus → cops → traffic → pig-fallback).
+    const rowStyle = 'padding: 10px 0; color: var(--tg-text-color, #000); font-size: 15px; line-height: 1.4;';
+    const iconCellStyle = 'padding: 10px 12px 10px 0; width: 44px; text-align: center;';
+    const imgStyle = 'width: 32px; height: 32px; display: block; margin: 0 auto;';
+
     const content = `
         <h3 style="text-align: center; margin: 0 0 16px 0; font-size: 18px;">Легенда</h3>
         <table style="border-spacing: 0; width: 100%; margin-bottom: 16px;">
             <tbody>
                 <tr>
-                    <td style="padding: 10px 12px 10px 0; width: 44px;">
-                        <img src="/assets/images/bus.png" style="width: 32px; height: 32px; display: block;" alt="Bus">
+                    <td style="${iconCellStyle}">
+                        <img src="/assets/images/bus.png" style="${imgStyle}" alt="Bus">
                     </td>
-                    <td style="padding: 10px 0; color: var(--tg-text-color, #000); font-size: 15px; line-height: 1.4;">Бус</td>
+                    <td style="${rowStyle}"><strong>Бус</strong> — автобусы, спринтеры, H1–H5</td>
                 </tr>
                 <tr>
-                    <td style="padding: 10px 12px 10px 0;">
-                        <img src="/assets/images/cops.png" style="width: 32px; height: 32px; display: block;" alt="Cops">
+                    <td style="${iconCellStyle}">
+                        <img src="/assets/images/cops.png" style="${imgStyle}" alt="Cops">
                     </td>
-                    <td style="padding: 10px 0; color: var(--tg-text-color, #000); font-size: 15px; line-height: 1.4;">Менты либо блокпост</td>
+                    <td style="${rowStyle}"><strong>Менты</strong> — полиция, патруль, мигалка</td>
                 </tr>
                 <tr>
-                    <td style="padding: 10px 12px 10px 0;">
-                        <img src="/assets/images/pig.png" style="width: 32px; height: 32px; display: block;" alt="Pig">
-                    </td>
-                    <td style="padding: 10px 0; color: var(--tg-text-color, #000); font-size: 15px; line-height: 1.4;">Остальное</td>
+                    <td style="${iconCellStyle} font-size: 28px; line-height: 32px;">⛔</td>
+                    <td style="${rowStyle}"><strong>Трафик</strong> — ДТП, пробки, блокпосты</td>
                 </tr>
                 <tr>
-                    <td style="padding: 10px 12px 10px 0; text-align: center; font-size: 28px;">
-                        ⛔
+                    <td style="${iconCellStyle}">
+                        <img src="/assets/images/pig.png" style="${imgStyle}" alt="Pig">
                     </td>
-                    <td style="padding: 10px 0; color: var(--tg-text-color, #000); font-size: 15px; line-height: 1.4;">
-                        <strong>Трафик</strong> — ДТП, пробки, ремонты
-                    </td>
+                    <td style="${rowStyle}"><strong>Остальное</strong> — события без явного слоя</td>
                 </tr>
             </tbody>
         </table>

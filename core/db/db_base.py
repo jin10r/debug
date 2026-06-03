@@ -8,6 +8,11 @@ import asyncpg
 import logging
 from typing import List, Dict, Any, Optional
 
+try:
+    from core.settings import settings
+except Exception:
+    settings = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -52,12 +57,18 @@ class Database:
         kwargs.setdefault('server_settings', {})
         kwargs['server_settings'].setdefault('timezone', 'Europe/Kiev')
 
+        # Pool tuning из settings (env-overrides). Fallback на defaults
+        # совпадает с hardcoded версией.
+        pool_min = settings.db.pool_min_size if settings and settings.db else 5
+        pool_max = settings.db.pool_max_size if settings and settings.db else 20
+        cmd_timeout = settings.db.command_timeout if settings and settings.db else 60
+
         for attempt in range(1, max_retries + 1):
             try:
                 self.pool = await asyncpg.create_pool(
-                    min_size=5,
-                    max_size=20,
-                    command_timeout=60,
+                    min_size=pool_min,
+                    max_size=pool_max,
+                    command_timeout=cmd_timeout,
                     **kwargs
                 )
                 logger.info(f"Database connection pool created on attempt {attempt}/{max_retries}")

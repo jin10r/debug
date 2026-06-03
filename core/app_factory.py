@@ -1,6 +1,5 @@
 """Application factory for creating and configuring the aiohttp application"""
 import json
-import os
 import time
 import logging
 import asyncio
@@ -286,14 +285,12 @@ async def create_app():
     setup_routes(app)
 
     # CORS: фронтенд приходит через тот же nginx (same-origin) — CORS вообще
-    # не нужен в нормальном режиме. Если ALLOWED_ORIGINS не задан или равен
-    # '*', НЕ включаем CORS (закрытое API, кросс-доменные запросы блокирует
-    # браузер). Только при явно перечисленных origins-ах включаем CORS с
+    # не нужен в нормальном режиме. settings.app.allowed_origins пустой =
+    # CORS выключен. При явно перечисленных origins-ах включаем CORS с
     # credentials на каждый перечисленный домен.
-    allowed_origins_raw = os.getenv('ALLOWED_ORIGINS', '').strip()
     allowed_origins = [
-        o.strip() for o in allowed_origins_raw.split(',')
-        if o.strip() and o.strip() != '*'
+        o for o in settings.app.allowed_origins
+        if o and o != '*'
     ]
 
     if allowed_origins:

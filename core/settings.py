@@ -7,64 +7,107 @@ logger = logging.getLogger(__name__)
 
 # Constants for fallback (used if database is not available)
 DEFAULT_STOPWORDS = (
-    "ул", "улица", "пр", "проспект", "пер", "переулок", "зеленый", "оливки", "маслины", "тцк", "планшету", "планшетом", "черном", "парковке", "парковку", "парковка", "военная", "аллея", "дорога", "таврия", "выезде", "выезд", "сильпо", "атб", "долго", "доброе", "катаются", "дастер", "Рено", "бульвар", "маршрутка", "маршрутки", "светлая", "светлый", "светлая", "светлый", "повернули", "спринтер", "сообщить", "опасности", "заявка", "подписку", "ссылке", "помочь", "каналу", "видео", "щепкино"
+    # Уличные постфиксы / типы объектов (как часть n-gram, но не самостоятельно)
+    "ул", "улица", "пр", "проспект", "пер", "переулок", "бульвар", "аллея",
+    "дорога", "выезде", "выезд", "парк",
+    # Локативные предлоги/наречия (R3, основной источник substring-FP)
+    "сторона", "сторону", "стороны",
+    "возле", "около", "рядом", "перед", "после", "между", "напротив",
+    "район", "середине", "посередине",
+    # Количественные/числительные именованные (R3)
+    "много", "мало", "пара", "двое", "трое", "четверо", "несколько", "оба",
+    # Единицы измерения (R3 — «Метров» ≠ «Метро» по требованию пользователя)
+    "метр", "метров", "метра", "метре",
+    # Бытовые/общеупотребительные существительные (R3)
+    "дом", "дома", "дому", "доме", "роддом",
+    "двор", "дворе", "дворы", "дворов", "дворах",
+    "город", "города", "городе", "посёлок",
+    "арка", "аркой", "арки", "арке",
+    "стоп", "стопа",
+    "отделения", "отделение",
+    "почты", "почта",
+    # Цвета (для машин/одежды — не топонимы)
+    "черный", "чёрный", "черном", "чёрном", "белый", "белом", "серый", "серым",
+    "зеленый", "зелёный", "красный", "красном", "синий", "светлая", "светлый",
+    # Часто употребляемые контекстные слова из одесского корпуса
+    "оливки", "оливок", "маслины", "тцк", "планшету", "планшетом",
+    "парковке", "парковку", "парковка", "военная", "таврия", "сильпо", "атб",
+    "долго", "доброе", "катаются", "дастер", "Рено", "маршрутка", "маршрутки",
+    "повернули", "спринтер", "сообщить", "опасности", "заявка", "подписку",
+    "ссылке", "помочь", "каналу", "видео", "щепкино",
+    "менты", "мент", "мента", "мусора", "люди", "ребята", "ребят",
 )
 
 # Ключевые слова слоёв — канонические словоформы (не стемы).
 # LayerClassifier лемматизирует и ключи, и токены сообщения через mawo_pymorphy3,
 # поэтому все падежи/числа словоформ совпадают автоматически.
-DEFAULT_LAYER_KEYWORDS_COPS = (
-    'коп', 'полиция', 'мусор', 'люстра', 'блокпост', 'мигалка', 'патруль', 'пост', 'бп'
-)
+#
+# Порядок ключей задаёт приоритет классификации: первый совпавший слой
+# выигрывает (см. parser/layer_classifier.py). 'pig' — fallback без ключей.
+DEFAULT_LAYER_KEYWORDS: dict[str, tuple] = {
+    'bus': (
+        'автобус', 'бус', 'хайс', 'спринтер', 'рено', 'фольксваген', 'хёндай',
+        'вито', 'сталкер', 'транспортёр', 'h1', 'h2', 'h3', 'h4', 'h5', 'Т5',
+        # pymorphy лемматизирует «бус»→«бусы», но «буса»/«бусик»→самостоятельные
+        # леммы ⇒ косвенные/слэнговые формы не совпадали. Добавлены явно.
+        'буса', 'бусик',
+    ),
+    'cops': (
+        'коп', 'полиция', 'мусор', 'люстра', 'мигалка', 'патруль', 'экипаж',
+        # «менты/мент» — частый синоним полиции в корпусе канала; раньше были
+        # только в стоп-словах ⇒ сообщения «...менты» классифицировались как pig.
+        'мент', 'менты',
+        # «полицейские/полицейского» — падежи; «полицай» — укр. «полицаи»;
+        # «police» — латиница (pymorphy3 не склоняет, лемма = «police»).
+        'полицейский', 'полицай', 'police',
+        # «тцк» — Центр комплектования (военкомат); встречается в ~15% сообщений
+        # канала, но раньше не попадал ни в один слой → событие падало в pig.
+        'тцк',
+    ),
+    'traffic': (
+        'дтп', 'авария', 'пробка', 'затор', 'светофор', 'блокпост', 'пост', 'бп',
+    ),
+    'pig': (),
+}
 
-DEFAULT_LAYER_KEYWORDS_BUS = (
-    'автобус', 'бус', 'хайс', 'спринтер', 'рено', 'фольксваген', 'хёндай',
-    'вито', 'сталкер', 'транспортёр', 'h1', 'h2', 'h3', 'h4', 'h5'
-)
-
-DEFAULT_LAYER_KEYWORDS_TRAFFIC = (
-    'дтп', 'авария', 'пробка', 'затор', 'светофор'
-)
+# Порядок приоритета (исключая fallback 'pig').
+LAYER_PRIORITY: tuple = tuple(k for k in DEFAULT_LAYER_KEYWORDS if k != 'pig')
 
 
 @dataclass
 class DatabaseConfig:
-    host: str
-    port: int
-    database: str
-    user: str
-    password: str
+    """PostgreSQL — креды захардкожены: контейнер изолирован от внешнего мира
+    (нет port mapping в docker-compose), безопасно держать default `postgres`."""
+    host: str = "postgres"
+    port: int = 5432
+    database: str = "postgres"
+    user: str = "postgres"
+    password: str = "postgres"
+    # asyncpg pool tuning
+    pool_min_size: int = 5
+    pool_max_size: int = 20
+    # Command timeout для одиночного SQL-запроса (process_candidates ~5-50ms,
+    # default 60s достаточно при transient lag, не убивает быстрые запросы).
+    command_timeout: int = 60
 
 
 @dataclass
 class AppConfig:
-    host: str
-    port: int
+    host: str = "0.0.0.0"
+    port: int = 8080
     telegram_validation_enabled: bool = True
-    
-    @classmethod
-    def from_env(cls, env: Env) -> 'AppConfig':
-        """Создать AppConfig из переменных окружения"""
-        # Читаем переменную APP_TELEGRAM_VALIDATION (из docker-compose)
-        # или TELEGRAM_VALIDATION_ENABLED (напрямую из .env)
-        validation_raw = env.str("APP_TELEGRAM_VALIDATION", None)
-        if validation_raw is None:
-            validation_raw = env.str("TELEGRAM_VALIDATION_ENABLED", "True")
-        
-        # Конвертируем строку в bool (поддерживаем: True/False, true/false, 1/0)
-        validation_enabled = validation_raw.lower() in ("true", "1", "yes", "on")
-        
-        return cls(
-            host=env.str("APP_HOST", "0.0.0.0"),
-            port=env.int("APP_PORT", 8080),
-            telegram_validation_enabled=validation_enabled
-        )
+    # Логирование (main.py, parser/monitoring.py читают эти поля)
+    log_level: str = "INFO"
+    log_format: str = "json"  # json | text
+    # CORS: пустой кортеж = same-origin only (nginx проксирует фронтенд →
+    # CORS не нужен). При явном списке доменов app_factory включает CORS.
+    allowed_origins: tuple = ()
 
 
 @dataclass
 class BotConfig:
     token: str
-    channel_id: str  # NEW: Add CHANNEL_ID as required field
+    channel_id: str
     webapp_url: Optional[str] = None
     redirect_url: Optional[str] = None
 
@@ -73,45 +116,88 @@ class BotConfig:
 class JWTConfig:
     secret: str
     access_token_ttl: int = 900  # 15 minutes
-    refresh_token_ttl: int = 604800  # 7 days
+    refresh_token_ttl: int = 86400  # 24 hours
     algorithm: str = "HS256"
 
 
 @dataclass
 class RedisConfig:
+    """Redis — внутренний кэш в изолированной docker-сети (нет ports: блока).
+    Креды захардкожены: внешнего доступа нет, env-переопределение не нужно."""
     host: str = "redis"
     port: int = 6379
     db: int = 0
-    password: Optional[str] = None
+    password: str = "redis"
 
 
 @dataclass
 class SimilarityConfig:
-    stop_words: tuple = field(default_factory=lambda: DEFAULT_STOPWORDS)
-    entity_min_word_length: int = 3  # Учитываем все слова от 3 символов
-    entity_similarity_threshold: float = 0.6  # Порог для фильтрации
+    """Параметры sliding-window линкера улиц и LayerClassifier.
 
-    # Поля для загрузки из БД
-    db_stopwords: Set[str] = field(default_factory=set)
-    db_layer_keywords: dict = field(default_factory=dict)
+    Используются StreetMatcher (parser/street_matcher.py) и LayerClassifier.
+    """
+    stop_words: tuple = field(default_factory=lambda: DEFAULT_STOPWORDS)
+
+    # Порог fuzzy-матча (0-1) для tier-3 lemma fuzzy в _link_span.
+    # 0.82: отсекает ложные позитивы (0.75–0.79) при сохранении typo-матчей (≥0.83).
+    entity_similarity_threshold: float = 0.82
+
+    # Радиус псевдо-пересечений (метры) для process_candidates SQL.
+    pseudo_intersection_radius_meters: float = 150.0
+
+    # Финальный top-K результатов find_streets().
+    max_entities: int = 5
+
+    # Длиннее этого порога (символов) сообщение не считается релевантной локацией.
+    max_text_length: int = 380
+
+    # Порог fuzz.token_sort_ratio для surface fuzzy (Tier 1, 0-1).
+    phonetic_match_threshold: float = 0.85
+    # Включение lemma fuzzy fallback (tier-3 в _link_span).
+    lemma_fallback_enabled: bool = True
+
+    # Sliding-window: максимальный размер окна (токенов) при генерации кандидатов.
+    # Окно 1..max_sliding_window охватывает улицы из 1, 2 или 3 слов.
+    max_sliding_window: int = 3
+
+    # Бонус к score для кандидатов, которым предшествует локационный предлог
+    # ("на", "по", "в" и т.п.). Помогает при дедупе когда оба матча за одну улицу.
+    prepositional_boost: float = 0.05
+
+    # Токены-пунктуация: отфильтровываются из tokens до поиска (_strip_noise).
+    punctuation_tokens: tuple = (
+        '#', '/', ',', '.', '(', ')', '!', '?', '-', '«', '»', '"', ':', ';',
+    )
 
     def get_stopwords(self) -> Set[str]:
-        """Вернуть стоп-слова (из БД или fallback)."""
-        return self.db_stopwords if self.db_stopwords else set(DEFAULT_STOPWORDS)
+        return set(DEFAULT_STOPWORDS)
 
     def get_layer_keywords(self, layer: str) -> tuple:
-        """Вернуть ключевые слова для слоя (из БД или fallback)."""
-        if layer in self.db_layer_keywords and self.db_layer_keywords[layer]:
-            return tuple(self.db_layer_keywords[layer])
+        return DEFAULT_LAYER_KEYWORDS.get(layer, ())
 
-        # Fallback
-        if layer == 'cops':
-            return DEFAULT_LAYER_KEYWORDS_COPS
-        elif layer == 'bus':
-            return DEFAULT_LAYER_KEYWORDS_BUS
-        elif layer == 'traffic':
-            return DEFAULT_LAYER_KEYWORDS_TRAFFIC
-        return ()
+
+@dataclass
+class ParserConfig:
+    """Параметры parser-сервиса (monitoring.py)."""
+
+    # Сколько сообщений тянуть из истории канала при старте парсера.
+    # Высокое значение увеличивает startup latency, низкое — пропускает старые.
+    history_limit: int = 100
+
+    # Размер asyncio.Queue для входящих сообщений (производитель-потребитель).
+    message_queue_maxsize: int = 1000
+
+    # Каталог хранения медиафайлов (фотографии событий). Монтируется через
+    # volume в docker-compose, путь синхронизирован с разделом volumes.
+    events_media_dir: str = "/media/events"
+
+    # SOCKS5/HTTP proxy для pyrogram (если телеграм блокируется в сети
+    # развёртывания). None = без proxy. Меняется правкой settings.py для
+    # конкретной инсталляции — не env.
+    socks5_host: Optional[str] = None
+    proxy_host: Optional[str] = None
+    proxy_scheme: str = "socks5"
+    proxy_port: int = 1080
 
 
 @dataclass
@@ -128,10 +214,14 @@ class QuestionOverlayConfig:
 
 @dataclass
 class LayerConfig:
-    cops: tuple = field(default_factory=lambda: DEFAULT_LAYER_KEYWORDS_COPS)
-    bus: tuple = field(default_factory=lambda: DEFAULT_LAYER_KEYWORDS_BUS)
-    traffic: tuple = field(default_factory=lambda: DEFAULT_LAYER_KEYWORDS_TRAFFIC)
-    pig: tuple = field(default=())
+    cops: tuple = field(default_factory=lambda: DEFAULT_LAYER_KEYWORDS['cops'])
+    bus: tuple = field(default_factory=lambda: DEFAULT_LAYER_KEYWORDS['bus'])
+    traffic: tuple = field(default_factory=lambda: DEFAULT_LAYER_KEYWORDS['traffic'])
+    pig: tuple = field(default_factory=lambda: DEFAULT_LAYER_KEYWORDS['pig'])
+
+    def as_dict(self) -> dict:
+        """Слой → tuple ключевых слов. Порядок соответствует LAYER_PRIORITY + 'pig'."""
+        return {layer: getattr(self, layer) for layer in DEFAULT_LAYER_KEYWORDS}
 
 
 @dataclass
@@ -143,6 +233,7 @@ class Settings:
     redis: RedisConfig = field(default_factory=RedisConfig)
     similarity: SimilarityConfig = field(default_factory=SimilarityConfig)
     layers: LayerConfig = field(default_factory=LayerConfig)
+    parser: ParserConfig = field(default_factory=ParserConfig)
     question_overlay: QuestionOverlayConfig = field(default_factory=QuestionOverlayConfig)
 
 
@@ -236,50 +327,42 @@ def _get_required_channel_id(env: Env) -> str:
 
 
 def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> Settings:
-    """Loads settings from environment variables."""
+    """Load settings — env читается ТОЛЬКО для credentials/per-deployment URL.
+
+    Всё остальное — хардкодные дефолты в соответствующих `@dataclass`. Чтобы
+    изменить калибровку матчера / параметры БД / прокси и т.п., правится
+    `core/settings.py` напрямую (не env).
+
+    Keep-list env: BOT_TOKEN, CHANNEL_ID, WEBAPP_URL, REDIRECT_URL, JWT_SECRET.
+    """
     env = Env()
     env.read_env(env_path)
 
     try:
-        jwt_config = None
-        if require_jwt:
-            jwt_config = JWTConfig(
-                secret=_get_required_secret(env),
-                access_token_ttl=env.int("JWT_ACCESS_TTL", default=900),
-                refresh_token_ttl=env.int("JWT_REFRESH_TTL", default=604800)
-            )
-        
+        jwt_config = (
+            JWTConfig(secret=_get_required_secret(env))
+            if require_jwt else None
+        )
+
         return Settings(
-            app=AppConfig.from_env(env),
-            db=DatabaseConfig(
-                host=env.str("DB_HOST", "postgres"),
-                port=env.int("DB_PORT", 5432),
-                database=env.str("DB_NAME", "map"),
-                user=env.str("DB_USER", "postgres"),
-                password=env.str("DB_PASSWORD", "postgres")
+            app=AppConfig(
+                telegram_validation_enabled=env.bool(
+                    "TELEGRAM_VALIDATION_ENABLED", default=True
+                ),
             ),
+            db=DatabaseConfig(),
             bot=BotConfig(
                 token=env.str("BOT_TOKEN", ""),
-                channel_id=_get_required_channel_id(env),  # NEW: Add validated channel_id
+                channel_id=_get_required_channel_id(env),
                 webapp_url=env.str("WEBAPP_URL", None),
-                redirect_url=env.str("REDIRECT_URL", None)
+                redirect_url=env.str("REDIRECT_URL", None),
             ),
             jwt=jwt_config,
-            redis=RedisConfig(
-                host=env.str("REDIS_HOST", "redis"),
-                port=env.int("REDIS_PORT", 6379),
-                db=env.int("REDIS_DB", 0),
-                password=env.str("REDIS_PASSWORD", None)
-            ),
-            similarity=SimilarityConfig(
-                entity_min_word_length=env.int("ENTITY_MIN_WORD_LENGTH", default=3),
-                entity_similarity_threshold=env.float("ENTITY_SIMILARITY_THRESHOLD", default=0.67)
-            ),
-            question_overlay=QuestionOverlayConfig(
-                center_lon=env.float("QUESTION_OVERLAY_CENTER_LON", default=30.83135),
-                center_lat=env.float("QUESTION_OVERLAY_CENTER_LAT", default=46.49804),
-                radius=env.float("QUESTION_OVERLAY_RADIUS", default=0.045)
-            )
+            redis=RedisConfig(),
+            similarity=SimilarityConfig(),
+            layers=LayerConfig(),
+            parser=ParserConfig(),
+            question_overlay=QuestionOverlayConfig(),
         )
     except Exception as e:
         raise ValueError(f"Configuration error: {e}")

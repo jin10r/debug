@@ -165,6 +165,14 @@ async def on_shutdown(app: web.Application):
     if shutdown_event:
         shutdown_event.set()
 
+    ws_manager = app.get('websocket_manager')
+    if ws_manager:
+        try:
+            await asyncio.wait_for(ws_manager.close_all(), timeout=5.0)
+            logger.info("WebSocket connections closed")
+        except asyncio.TimeoutError:
+            logger.warning("WebSocket close timed out")
+
     shutdown_tasks = []
 
     async def stop_bot_polling():

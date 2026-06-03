@@ -135,6 +135,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: app
+    stop_grace_period: 30s
     environment:
       # Только credentials/per-deployment URL — всё остальное в core/settings.py.
       BOT_TOKEN: ${BOT_TOKEN}

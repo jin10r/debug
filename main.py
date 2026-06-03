@@ -2,7 +2,6 @@
 import asyncio
 import logging
 import signal
-import sys
 
 from aiohttp import web
 
@@ -17,54 +16,41 @@ setup_logging(
 )
 logger = logging.getLogger(__name__)
 
-# Global shutdown event
-shutdown_event = asyncio.Event()
-
-
-def signal_handler(signum, frame):
-    """Handle shutdown signals gracefully."""
-    sig_name = signal.Signals(signum).name
-    logger.info(f"Received {sig_name} signal, initiating graceful shutdown...")
-    shutdown_event.set()
-
 
 async def main():
     """Main entry point for the application."""
-    # Register signal handlers for graceful shutdown
-    if sys.platform != 'win32':
-        signal.signal(signal.SIGTERM, signal_handler)
-        signal.signal(signal.SIGINT, signal_handler)
-    
+    shutdown_event = asyncio.Event()
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(
+            sig,
+            lambda s=sig: (
+                logger.info(f"Received {signal.Signals(s).name}, initiating graceful shutdown..."),
+                shutdown_event.set(),
+            )
+        )
+
     app = await create_app()
     runner = web.AppRunner(app)
     await runner.setup()
-    # Ensure the web server listens on all interfaces, crucial for Docker
     site = web.TCPSite(runner, host='0.0.0.0', port=settings.app.port)
-    
+
     logger.info("Starting web server and bot...")
     await site.start()
     logger.info(f"--- Server started at http://{settings.app.host}:{settings.app.port} ---")
 
-    try:
-        # Wait for shutdown signal
-        await shutdown_event.wait()
-        logger.info("--- Shutdown signal received, starting graceful shutdown ---")
-    except KeyboardInterrupt:
-        logger.info("--- Keyboard interrupt received ---")
-    finally:
-        logger.info("--- Shutting down application ---")
-        # Stop accepting new connections
-        await site.stop()
-        logger.info("--- Web server stopped accepting connections ---")
-        
-        # Cleanup runner (this will trigger on_shutdown handlers)
-        await runner.cleanup()
-        logger.info("--- Application shutdown complete ---")
+    await shutdown_event.wait()
+    logger.info("--- Shutdown signal received, starting graceful shutdown ---")
+
+    logger.info("--- Shutting down application ---")
+    await site.stop()
+    logger.info("--- Web server stopped accepting connections ---")
+    await runner.cleanup()
+    logger.info("--- Application shutdown complete ---")
 
 
 if __name__ == "__main__":
-    # Settings are already loaded and validated in core/settings.py
-    # If any required env variable is missing, it will raise ValueError on import
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):

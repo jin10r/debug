@@ -43,6 +43,17 @@ class WebSocketManager:
         self.connections.discard(ws)
         logger.debug(f"WebSocket connection unregistered. Total: {len(self.connections)}")
 
+    async def close_all(self) -> None:
+        """Close all active WebSocket connections (called during server shutdown)."""
+        for ws in list(self.connections):
+            try:
+                await asyncio.wait_for(
+                    ws.close(code=1001, message=b'server shutdown'), timeout=2.0
+                )
+            except Exception:
+                pass
+        self.connections.clear()
+
     async def _broadcast_payload(self, payload: str) -> int:
         """Send payload string to all connected clients; remove dead ones. Returns success count."""
         snapshot = list(self.connections)

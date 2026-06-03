@@ -40,24 +40,31 @@ async def _run_bot_polling(app: web.Application):
     delay = 30
     max_delay = 60  # 60s вместо 300s — graceful shutdown не должен ждать 5 минут
 
-    while not shutdown_event.is_set():
-        try:
-            logger.info("Starting bot polling...")
-            delay = 30
-            await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
-            break
-        except asyncio.CancelledError:
-            logger.info("Bot polling cancelled (shutdown requested)")
-            break
-        except Exception as e:
-            if shutdown_event.is_set():
-                break
-            logger.warning(f"Bot polling failed: {e}. Retry in {delay}s...")
+    try:
+        while not shutdown_event.is_set():
             try:
-                await asyncio.sleep(delay)
-            except asyncio.CancelledError:
+                logger.info("Starting bot polling...")
+                delay = 30
+                await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
                 break
-            delay = min(delay * 2, max_delay)
+            except asyncio.CancelledError:
+                logger.info("Bot polling cancelled (shutdown requested)")
+                break
+            except Exception as e:
+                if shutdown_event.is_set():
+                    break
+                logger.warning(f"Bot polling failed: {e}. Retry in {delay}s...")
+                try:
+                    await asyncio.sleep(delay)
+                except asyncio.CancelledError:
+                    break
+                delay = min(delay * 2, max_delay)
+    finally:
+        # aiogram.start_polling() регистрирует собственный SIGTERM-хендлер,
+        # который перезаписывает наш loop.add_signal_handler() в main.py.
+        # finally гарантирует, что main() выйдет из shutdown_event.wait()
+        # и запустит runner.cleanup() независимо от того, кто обработал сигнал.
+        shutdown_event.set()
 
 
 async def _run_pg_notify_listener(app: web.Application):

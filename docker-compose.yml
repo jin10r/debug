@@ -188,6 +188,7 @@ services:
       context: .
       dockerfile: Dockerfile.nginx
     container_name: nginx
+    stop_grace_period: 30s
     ports:
       - "80:80"
     volumes:

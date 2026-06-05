@@ -59,6 +59,7 @@ tests/test_messages.txt
 !CLAUDE.md
 !web/CLAUDE.md
 !docs/**/*.md
+!README.md
 pg_plan3.txt
 
 # Archived migration scripts and docs

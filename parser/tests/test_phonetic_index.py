@@ -1,8 +1,13 @@
-"""Unit-тесты PhoneticIndex (после Phase 1 refactor: P1 — multi-word streets
-матчатся только полнофразово, single-word индексация только для одно-токенных).
+"""Unit-тесты PhoneticIndex — индекс улиц: surface-фразы (Tier 1) + lemma-кортежи
+(Tier 2) + lemma-фразы (Tier 3).
 
-Запуск:
-    pytest parser/tests/test_phonetic_index.py -v
+После миграции NER→sliding-window фонетика убрана: индекс больше НЕ матчит сам
+(метод query_phonetic удалён). Он только отдаёт параллельные списки, по которым
+rapidfuzz гоняет StreetMatcher. Тайпо-устойчивость проверяется в
+test_street_matcher.py (surface fuzzy), здесь — структура и точечные запросы индекса.
+
+Запуск (внутри parser-контейнера, mawo_razdel есть только там):
+    docker-compose exec parser python -m pytest parser/tests/test_phonetic_index.py -v
 """
 
 import os
@@ -38,141 +43,150 @@ def built_index():
     return idx
 
 
-def test_build_returns_positive_variant_count(built_index):
+def _has_surface(idx: PhoneticIndex, street_id: int, needle: str = None) -> bool:
+    """True если в surface-индексе есть фраза улицы (опц. содержащая needle)."""
+    phrases, meta = idx.surface_phrases()
+    return any(
+        m.street_id == street_id and (needle is None or needle in p)
+        for p, m in zip(phrases, meta)
+    )
+
+
+# ----------------------------------------------------------- build / структура
+
+def test_empty_before_build():
+    """Свежий индекс пуст."""
+    assert PhoneticIndex(Morphology()).is_empty
+
+
+def test_not_empty_after_build(built_index):
     """Индекс непустой после build."""
     assert not built_index.is_empty
 
 
-def test_singleword_street_matches_inflected_form(built_index):
-    """Одно-токенная улица «Пастера» матчится по любой словоформе через 1-gram."""
-    for query in ('пастера', 'пастеры', 'пастере', 'пастеру'):
-        cands = built_index.query_phonetic(query)
-        assert any(c.street_id == 6 for c in cands), \
-            f'«{query}» (1-gram) должна найти Пастера (id=6)'
-
-
-def test_singleword_street_full_phrase(built_index):
-    """Одно-токенная «Канатная» тоже находится — там 1-gram = полная фраза."""
-    cands = built_index.query_phonetic('канатная')
-    assert any(c.street_id == 7 for c in cands)
-
-
-def test_multiword_street_NOT_matched_by_single_word(built_index):
-    """P1: 1-gram «арнаутская» НЕ должен находить Малую Арнаутскую через phonetic.
-
-    Реcall на партиальных мнениях восстанавливается через T3 lemma_fuzzy в матчере.
-    """
-    cands = built_index.query_phonetic('арнаутская')
-    assert not any(c.street_id == 1 for c in cands), \
-        'P1: «арнаутская» (1-gram) не должна находить Малую Арнаутскую'
-
-
-def test_multiword_street_matched_by_full_phrase(built_index):
-    """Многословная улица матчится полной фразой (любым склонением)."""
-    cands = built_index.query_phonetic('малая арнаутская')
-    assert any(c.street_id == 1 for c in cands)
-    cands = built_index.query_phonetic('малой арнаутской')
-    assert any(c.street_id == 1 for c in cands)
-
-
-def test_multiword_devoicing_via_full_phrase(built_index):
-    """Оглушение работает в составе фразы: «проспект шевченка» матчится."""
-    cands = built_index.query_phonetic('проспект шевченка')
-    assert any(c.street_id == 3 for c in cands)
-    cands = built_index.query_phonetic('проспект шевченко')
-    assert any(c.street_id == 3 for c in cands)
-
-
-def test_query_phonetic_empty_for_unknown_word(built_index):
-    """Незнакомое слово возвращает пустой список."""
-    cands = built_index.query_phonetic('квантовая электроника')
-    assert cands == []
-
-
-def test_query_lemma_tuple_exact_match(built_index):
-    """T3 tier-A: точный кортеж лемм находит улицу."""
-    cands = built_index.query_lemma_tuple(('малый', 'арнаутский'))
-    assert any(c.street_id == 1 for c in cands)
-
-
-def test_query_lemma_tuple_miss(built_index):
-    """T3 tier-A: несовпадающий кортеж — пустой результат."""
-    cands = built_index.query_lemma_tuple(('квантовый',))
-    assert cands == []
+def test_surface_phrases_parallel_lists_synced(built_index):
+    """surface_phrases() возвращает параллельные списки одинаковой длины."""
+    phrases, meta = built_index.surface_phrases()
+    assert len(phrases) == len(meta) >= len(SAMPLE_ROWS)
+    # surface — сырые алиасы (lowercase, без пунктуации).
+    assert all(p == p.lower() for p in phrases)
 
 
 def test_lemma_phrases_synced_with_meta(built_index):
-    """lemma_phrases возвращает параллельные списки одинаковой длины."""
+    """lemma_phrases() — тоже параллельные списки одинаковой длины."""
     phrases, meta = built_index.lemma_phrases()
     assert len(phrases) == len(meta)
     assert len(phrases) >= len(SAMPLE_ROWS)
 
 
-def test_get_lemma_tuple_for_street_returns_canonical(built_index):
-    """User#1 reverse-index: street_id → lemma_tuple первого алиаса."""
+# ----------------------------------------------------------- surface (Tier 1)
+
+def test_singleword_street_in_surface_index(built_index):
+    """Одно-токенные улицы попадают в surface-индекс целиком."""
+    assert _has_surface(built_index, 6, 'пастера')
+    assert _has_surface(built_index, 7, 'канатная')
+
+
+def test_multiword_street_stored_as_full_phrase(built_index):
+    """Многословная улица хранится в surface-индексе ПОЛНОЙ фразой, не по словам."""
+    phrases, meta = built_index.surface_phrases()
+    street1 = [p for p, m in zip(phrases, meta) if m.street_id == 1]
+    assert street1, 'у Малой Арнаутской должна быть surface-фраза'
+    assert all(' ' in p for p in street1), 'хранится целой фразой, а не отдельными словами'
+    assert any('арнаутская' in p and 'малая' in p for p in street1)
+
+
+def test_all_aliases_indexed(built_index):
+    """Оба алиаса многословной улицы (id=4) попадают в surface-индекс."""
+    phrases, meta = built_index.surface_phrases()
+    s4 = [p for p, m in zip(phrases, meta) if m.street_id == 4]
+    assert any('1' in p for p in s4)        # «1-я станция Фонтана»
+    assert any('первая' in p for p in s4)   # «первая станция Фонтана»
+
+
+def test_entry_canonical_is_first_name(built_index):
+    """canonical_name любой записи = первое значение из streets.names."""
+    phrases, meta = built_index.surface_phrases()
+    s4_meta = [m for m in meta if m.street_id == 4]
+    assert s4_meta and all(m.canonical_name == '1-я станция Фонтана' for m in s4_meta)
+
+
+# --------------------------------------------------------- lemma tuple (Tier 2)
+
+def test_query_lemma_tuple_exact_match(built_index):
+    """Tier 2: точный кортеж лемм находит улицу."""
+    cands = built_index.query_lemma_tuple(('малый', 'арнаутский'))
+    assert any(c.street_id == 1 for c in cands)
+
+
+def test_query_lemma_tuple_miss(built_index):
+    """Tier 2: несовпадающий кортеж — пустой результат."""
+    assert built_index.query_lemma_tuple(('квантовый',)) == []
+    assert built_index.query_lemma_tuple(()) == []
+
+
+def test_get_lemma_tuple_for_street(built_index):
+    """Обратный индекс street_id → lemma_tuple первого алиаса."""
     assert built_index.get_lemma_tuple_for_street(1) == ('малый', 'арнаутский')
     assert built_index.get_lemma_tuple_for_street(3) == ('проспект', 'шевченко')
-    # Single-token street → tuple длины 1 (pymorphy3 даёт «пастер» из «пастера»).
+    # Single-token street → tuple длины 1.
     tup6 = built_index.get_lemma_tuple_for_street(6)
     assert len(tup6) == 1 and tup6[0] in ('пастер', 'пастера')
     # Неизвестный id → пустой.
     assert built_index.get_lemma_tuple_for_street(999) == ()
 
 
+# --------------------------------------------------------- lemma split (Tier 3)
+
+def test_lemma_phrases_split_single_vs_multi(built_index):
+    """lemma_phrases_split разносит одно- и многословные фразы корректно."""
+    single_p, single_m, multi_p, multi_m = built_index.lemma_phrases_split()
+    assert len(single_p) == len(single_m)
+    assert len(multi_p) == len(multi_m)
+    assert all(' ' not in p for p in single_p)
+    assert all(' ' in p for p in multi_p)
+    # Сумма = полный список lemma-фраз.
+    all_phrases, _ = built_index.lemma_phrases()
+    assert len(single_p) + len(multi_p) == len(all_phrases)
+
+
+# ----------------------------------------------------------- replace_street
+
 def test_replace_street_removes_entries():
-    """replace_street(id, None) убирает все записи улицы."""
-    morph = Morphology()
-    idx = PhoneticIndex(morph)
+    """replace_street(id, None) убирает все записи улицы, не задевая другие."""
+    idx = PhoneticIndex(Morphology())
     idx.build(SAMPLE_ROWS)
 
-    # До удаления — Пастера (single-word) находится.
-    assert idx.query_phonetic('пастера')
+    assert _has_surface(idx, 6)
     assert idx.get_lemma_tuple_for_street(6) != ()
 
     idx.replace_street(6, None)
-    assert not idx.query_phonetic('пастера')
+
+    assert not _has_surface(idx, 6)
     assert idx.get_lemma_tuple_for_street(6) == ()
     # Другие улицы не задеты.
-    assert idx.query_phonetic('канатная')
+    assert _has_surface(idx, 7, 'канатная')
 
 
 def test_replace_street_updates_existing():
-    """replace_street с новой row заменяет содержимое + lemma_tuple reverse index."""
-    morph = Morphology()
-    idx = PhoneticIndex(morph)
+    """replace_street с новой row заменяет содержимое + обратный индекс."""
+    idx = PhoneticIndex(Morphology())
     idx.build(SAMPLE_ROWS)
 
-    # Заменим проспект Шевченко на single-word «Дерибасовская» под тем же id.
     idx.replace_street(3, {'id': 3, 'names': ['Дерибасовская']})
 
-    # Старая фраза «проспект Шевченко» больше не находится.
-    cands = idx.query_phonetic('проспект шевченко')
-    assert not any(c.street_id == 3 for c in cands)
-
-    # Новая single-word улица находится по 1-gram.
-    cands = idx.query_phonetic('дерибасовская')
-    assert any(c.street_id == 3 for c in cands)
-    tup = idx.get_lemma_tuple_for_street(3)
-    assert len(tup) == 1  # pymorphy3 даёт нестандартную лемму, главное — есть
-
-
-def test_variants_per_street_cap_respected():
-    """phonetic_variants_per_street_cap не превышен для длинных имён."""
-    morph = Morphology()
-    idx = PhoneticIndex(morph)
-    rows = [{'id': 99, 'names': ['Малая Преображенская Старая Арнаутская']}]
-    idx.build(rows)
-
-    total_entries = sum(
-        sum(1 for e in entries if e.street_id == 99)
-        for entries in idx._phonetic.values()
+    # Старый кортезь «проспект шевченко» больше не указывает на street 3.
+    assert not any(
+        c.street_id == 3 for c in idx.query_lemma_tuple(('проспект', 'шевченко'))
     )
-    cap = idx._variants_cap()
-    assert total_entries <= cap
+    # Новая single-word улица в surface-индексе.
+    assert _has_surface(idx, 3, 'дерибасовская')
+    assert len(idx.get_lemma_tuple_for_street(3)) == 1
 
 
-def test_phonetic_entry_canonical_is_first_name(built_index):
-    """canonical_name = первое значение из streets.names."""
-    cands = built_index.query_phonetic('первая станция фонтана')
-    assert cands, 'индекс должен содержать полнофразовый матч'
-    assert any(c.canonical_name == '1-я станция Фонтана' for c in cands)
+def test_phonetic_entry_shape():
+    """PhoneticEntry — frozen dataclass (street_id, canonical_name, variant_text)."""
+    e = PhoneticEntry(42, 'Канонічна', 'вариант')
+    assert (e.street_id, e.canonical_name, e.variant_text) == (42, 'Канонічна', 'вариант')
+    with pytest.raises(Exception):
+        e.street_id = 0  # frozen

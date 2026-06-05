@@ -63,8 +63,8 @@ class MessageProcessor:
                 )
 
             # 1. StreetMatcher + PhoneticIndex — критично, без них парсер не работает.
-            # matcher.initialize() сам грузит streets из БД и строит phonetic-индекс
-            # (off-loaded в thread, т.к. lexeme×Metaphone — это секунды CPU).
+            # matcher.initialize() сам грузит streets из БД и строит surface+lemma индекс
+            # (off-loaded в thread, т.к. лемматизация всех алиасов — это секунды CPU).
             logger.info("Initializing StreetMatcher + PhoneticIndex...")
             success = await self.matcher.initialize(self.db_pool)
             if not success:

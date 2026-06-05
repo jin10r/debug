@@ -22,7 +22,7 @@ from pyrogram.types import Message
 from core.settings import settings
 
 # Настраиваем логирование сразу после импорта settings, до загрузки тяжёлых
-# зависимостей (pymorphy3, fonetika), чтобы их init-логи попадали в нужный
+# зависимостей (pymorphy3, mawo-razdel, rapidfuzz), чтобы их init-логи попадали в нужный
 # формат. log_format=json (default) → JSON через JSONFormatter; =text —
 # человеко-читаемые логи для локальной разработки.
 _LOG_LEVEL = getattr(logging, settings.app.log_level.upper(), logging.INFO)

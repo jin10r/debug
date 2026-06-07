@@ -523,12 +523,12 @@ class ParserBot:
                 if conn is not None:
                     try:
                         await conn.remove_listener('events_cleaned', _on_notify)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"remove_listener failed: {e}")
                     try:
-                        await self.db.pool.release(conn)
-                    except Exception:
-                        pass
+                        await self.db.pool.release(conn, force=True)
+                    except Exception as e:
+                        logger.warning(f"pool.release failed: {e}")
 
             if not self._running:
                 break

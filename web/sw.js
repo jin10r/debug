@@ -4,7 +4,7 @@
 // with no network. Event data is NOT cached here — it lives in localStorage
 // and arrives via WebSocket.
 
-// __BUILD_ID__ подставляется на сборке (Dockerfile.nginx) — таймстамп билда.
+// __BUILD_ID__ подставляется на сборке (Dockerfile.web) — таймстамп билда.
 // Любой деплой меняет CACHE_VERSION → старая оболочка инвалидируется в activate.
 const CACHE_VERSION = '__BUILD_ID__';
 const SHELL_CACHE = `survival-shell-${CACHE_VERSION}`;
@@ -15,13 +15,13 @@ const TILE_CACHE_LIMIT = 300;
 const SHELL_ASSETS = [
     '/map.html',
     '/index.html',
+    // Bootstrap scripts externalized from the HTML (strict CSP) — part of the
+    // app shell, must be precached so the offline gate keeps working.
+    '/assets/js/gate.js',
+    '/assets/js/map-setup.js',
+    '/assets/js/map-bootstrap.js',
     '/manifest.webmanifest',
     '/css/styles.css',
-    '/assets/lib/leaflet.css',
-    '/assets/lib/MarkerCluster.css',
-    '/assets/lib/MarkerCluster.Default.css',
-    '/assets/lib/leaflet.js',
-    '/assets/lib/leaflet.markercluster.js',
     '/assets/images/pig.png',
     '/assets/images/cops.png',
     '/assets/images/bus.png',

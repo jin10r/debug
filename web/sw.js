@@ -6,7 +6,7 @@
 
 // __BUILD_ID__ подставляется на сборке (Dockerfile.web) — таймстамп билда.
 // Любой деплой меняет CACHE_VERSION → старая оболочка инвалидируется в activate.
-const CACHE_VERSION = '__BUILD_ID__';
+const CACHE_VERSION = '__BUILD_ID__-2';
 const SHELL_CACHE = `survival-shell-${CACHE_VERSION}`;
 const TILE_CACHE = `survival-tiles-${CACHE_VERSION}`;
 const TILE_CACHE_LIMIT = 300;
@@ -139,6 +139,7 @@ self.addEventListener('fetch', (event) => {
                 if (cached) {
                     fetch(req).then((res) => {
                         if (res && res.status === 200) cache.put(key, res.clone());
+                        else if (res && (res.status === 404 || res.status === 410)) cache.delete(key);
                     }).catch(() => {});
                     return cached;
                 }

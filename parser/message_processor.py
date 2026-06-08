@@ -2,7 +2,7 @@
 
 Конвейер на сообщение (sliding-window архитектура):
   strip_tail → preprocess_light (regex-чистка с сохранением регистра/пунктуации)
-  → RazdelTokenizer.tokenize (токены)
+  → word_tokenizer.tokenize (токены)
   → Morphology.lemmatize_tokens (леммы с POS)
   → LayerClassifier.classify (lemmas) (определение слоя)
   → если текст пустой/длинный — strategy='random'
@@ -24,8 +24,8 @@ import asyncpg
 from .layer_classifier import LayerClassifier
 from .morphology import Morphology
 from .phonetic_index import PhoneticIndex
-from .razdel_tokenizer import RazdelTokenizer
 from .street_matcher import StreetMatcher
+from .word_tokenizer import tokenize
 from .text_preprocessor import preprocess_light, strip_tail
 
 try:
@@ -43,7 +43,6 @@ class MessageProcessor:
         self.db_pool = db_pool
         # Один MorphAnalyzer на процесс — переиспользуется индексом, матчером и классификатором
         self.morph = Morphology()
-        self.tokenizer = RazdelTokenizer()
         self.index = PhoneticIndex(self.morph)
         self.matcher = StreetMatcher(self.morph, self.index)
         self.layer_classifier = LayerClassifier(self.morph)
@@ -162,7 +161,7 @@ class MessageProcessor:
         preserved = self._sanitize_text(preprocess_light(stripped)) or ''
 
         # Токенизация + лемматизация для матчера/классификатора (один проход).
-        tokens = self.tokenizer.tokenize(preserved)
+        tokens = tokenize(preserved)
         lemmas = self.morph.lemmatize_tokens(tokens)
 
         # Определение слоя — на готовых леммах.

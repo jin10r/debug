@@ -10,7 +10,6 @@
 |-----------|-----------|
 | `kurigram` (pyrogram fork) | Telegram MTProto client |
 | `mawo-pymorphy3` 1.0.4 | Морфологический анализатор (DAWG, ~15-20 MB RAM) |
-| `mawo-razdel` 1.0.6 | Токенизация русского (аббревиатуры, инициалы, `##`-якоря) |
 | `rapidfuzz` 3.0+ | Surface fuzzy + lemma fuzzy матч против alias-индекса |
 | `asyncpg` 0.29+ | PostgreSQL async driver |
 
@@ -21,7 +20,7 @@ parser/
 ├── monitoring.py          # Pyrogram client + asyncio.Queue + worker
 ├── message_processor.py   # Оркестратор pipeline
 ├── text_preprocessor.py   # strip_tail + preprocess_light (мягкая очистка)
-├── razdel_tokenizer.py    # Wrapper над mawo_razdel; ## → is_anchored=True
+├── word_tokenizer.py      # regex-разбивка по не-буквенным символам; ## → is_anchored=True
 ├── morphology.py          # mawo_pymorphy3 + Lemma dataclass + LRU-кэш
 ├── layer_classifier.py    # cops/bus/traffic/pig по keyword-матчу (hashtag-override)
 ├── phonetic_index.py      # Сборщик surface + lemma индексов при старте
@@ -39,7 +38,7 @@ parser/
 5. preprocess_light(text) — HTML/время/укр-буквы+суффиксы; регистр сохранён = preserved
 6. _sanitize_text — выбросить одиночные суррогаты
 7. strip_emoji → match_text (только для матчинга)
-8. RazdelTokenizer.tokenize(match_text) → tokens
+8. word_tokenizer.tokenize(match_text) → tokens
 9. Morphology.lemmatize_tokens(tokens) → lemmas (pymorphy3, LRU 10k)
 10. LayerClassifier.classify(lemmas, tokens) → 'cops'|'bus'|'traffic'|'pig'
     └─ ## -якорные токены проверяются первыми (hashtag-override)
@@ -64,7 +63,7 @@ flowchart TD
     A[Pyrogram handler<br/>chat filter] --> B[asyncio.Queue<br/>maxsize=1000]
     B --> C[_message_worker<br/>+heartbeat /tmp/parser_heartbeat]
     C --> D[strip_tail<br/>+ preprocess_light]
-    D -->|match_text| E[RazdelTokenizer.tokenize<br/>## → is_anchored]
+    D -->|match_text| E[word_tokenizer.tokenize<br/>## → is_anchored]
     E --> F[Morphology.lemmatize_tokens<br/>mawo_pymorphy3 LRU10k<br/>~30-80ms]
     F --> G[LayerClassifier.classify<br/>hashtag-override → keyword ∩ lemmas]
     F -->|lemmas| H

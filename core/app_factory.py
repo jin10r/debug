@@ -18,7 +18,7 @@ from core.middlewares.ratelimit import RateLimiter
 from core.utils.metrics import setup_metrics_routes, set_application_info, metrics_middleware
 from core.utils.logging_config import setup_logging, logging_middleware
 from core.api.routes import setup_routes
-from core.api.auth import init_redis, close_redis
+from core.api.auth import init_redis
 from core.api.websocket import WebSocketManager
 from core.middlewares.jwt_auth import jwt_auth_middleware
 from core.middlewares.auth import check_redis_required_connection
@@ -45,7 +45,15 @@ async def _run_bot_polling(app: web.Application):
             try:
                 logger.info("Starting bot polling...")
                 delay = 30
-                await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+                # handle_signals=False: иначе aiogram ставит СВОИ SIGTERM/SIGINT-хендлеры
+                # поверх main.py — он останавливает только polling, а aiohttp-сервер
+                # (site/runner) не получает shutdown и процесс висит до SIGKILL (137).
+                # Сигналы обрабатывает единый хендлер в main.py → shutdown_event.
+                await dp.start_polling(
+                    bot,
+                    handle_signals=False,
+                    allowed_updates=dp.resolve_used_update_types(),
+                )
                 break
             except asyncio.CancelledError:
                 logger.info("Bot polling cancelled (shutdown requested)")
@@ -60,10 +68,10 @@ async def _run_bot_polling(app: web.Application):
                     break
                 delay = min(delay * 2, max_delay)
     finally:
-        # aiogram.start_polling() регистрирует собственный SIGTERM-хендлер,
-        # который перезаписывает наш loop.add_signal_handler() в main.py.
-        # finally гарантирует, что main() выйдет из shutdown_event.wait()
-        # и запустит runner.cleanup() независимо от того, кто обработал сигнал.
+        # Сигналы обрабатывает main.py (polling запущен с handle_signals=False).
+        # Этот finally — страховка: если polling завершился по иной причине
+        # (исчерпан ретрай, краш), main() всё равно выйдет из shutdown_event.wait()
+        # и запустит runner.cleanup().
         shutdown_event.set()
 
 
@@ -114,17 +122,21 @@ async def _run_pg_notify_listener(app: web.Application):
             if not task.done():
                 task.cancel()
         if conn is not None:
+            # Каждый шаг ограничен дедлайном: если UNLISTEN/release зависнут,
+            # они не должны затормозить shutdown. Главное — вернуть соединение
+            # в пул, иначе graceful pool.close() будет ждать его бесконечно.
             try:
-                await conn.remove_listener('events_new', _on_notify)
-                await conn.remove_listener('events_cleaned', _on_notify)
-            except Exception:
+                await asyncio.wait_for(conn.remove_listener('events_new', _on_notify), timeout=1.0)
+                await asyncio.wait_for(conn.remove_listener('events_cleaned', _on_notify), timeout=1.0)
+            except (asyncio.TimeoutError, Exception):
                 pass
             try:
                 db_pool = app.get('db_pool')
                 if db_pool and getattr(db_pool, 'pool', None):
-                    await db_pool.pool.release(conn)
-            except Exception:
+                    await asyncio.wait_for(db_pool.pool.release(conn), timeout=1.0)
+            except (asyncio.TimeoutError, Exception):
                 pass
+            app['pg_notify_conn'] = None
 
 
 async def on_startup(app: web.Application):
@@ -202,12 +214,20 @@ async def on_shutdown(app: web.Application):
 
     async def stop_pg_notify_listener():
         pg_task = app.get('pg_notify_task')
-        if pg_task and not pg_task.done():
+        if not pg_task or pg_task.done():
+            return
+        # shutdown_event уже выставлен (см. начало on_shutdown) — listener сам
+        # выходит из await и выполняет finally: снимает подписки и возвращает
+        # соединение в пул. НЕ отменяем его здесь преждевременно — cancel прервал
+        # бы release, соединение утекло бы, и graceful pool.close() завис бы до
+        # terminate(). Отменяем только как аварийный fallback по таймауту.
+        try:
+            await asyncio.wait_for(pg_task, timeout=3.0)
+        except asyncio.TimeoutError:
             pg_task.cancel()
-            try:
-                await asyncio.wait_for(pg_task, timeout=3.0)
-            except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
-                pass
+            await asyncio.gather(pg_task, return_exceptions=True)
+        except Exception:
+            pass
 
     shutdown_tasks.append(stop_pg_notify_listener())
 
@@ -239,11 +259,6 @@ async def on_shutdown(app: web.Application):
             await asyncio.wait_for(db_pool.close(), timeout=5.0)
         except (asyncio.TimeoutError, Exception) as e:
             logger.debug(f"Database close: {e}")
-
-    try:
-        await asyncio.wait_for(close_redis(app), timeout=3.0)
-    except (asyncio.TimeoutError, Exception) as e:
-        logger.debug(f"Redis close: {e}")
 
 
 async def create_app():

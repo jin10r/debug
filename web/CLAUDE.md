@@ -81,6 +81,6 @@ recreated, so GeoJSON layers on top stay untouched.
 
 ## 8. Lightweight final image
 
-The Docker build is multi-stage (`Dockerfile.nginx`): node/npm live only in the
+The Docker build is multi-stage (`Dockerfile.web`): node/npm live only in the
 builder stage. The final image is `nginx:alpine` plus static assets — no
 `node_modules`, no build tooling. Keep dependencies minimal.

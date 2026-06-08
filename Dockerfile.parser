@@ -1,4 +1,4 @@
-# Dockerfile.parser — Parser service (mawo-razdel/pymorphy3 + rapidfuzz, CPU-only)
+# Dockerfile.parser — Parser service (mawo-pymorphy3 + rapidfuzz, CPU-only)
 # Multi-stage build для минимизации размера образа
 
 # =============================================================================

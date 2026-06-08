@@ -87,9 +87,19 @@ class Database:
         return False
 
     async def close(self) -> None:
-        """Close connection pool properly."""
+        """Close connection pool.
+
+        Сначала graceful close с коротким дедлайном. Если он не успевает
+        (например, удерживается долгоживущее LISTEN/NOTIFY-соединение —
+        тогда asyncpg ждёт его возврата в пул бесконечно), рвём все
+        соединения немедленно через terminate(), чтобы не висеть при
+        остановке контейнера.
+        """
         if self.pool:
-            await self.pool.close()
+            try:
+                await asyncio.wait_for(self.pool.close(), timeout=2.0)
+            except (asyncio.TimeoutError, Exception):
+                self.pool.terminate()
             self.pool = None
             logger.info("Database connection pool closed")
 

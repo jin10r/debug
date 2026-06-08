@@ -22,7 +22,7 @@ from pyrogram.types import Message
 from core.settings import settings
 
 # Настраиваем логирование сразу после импорта settings, до загрузки тяжёлых
-# зависимостей (pymorphy3, mawo-razdel, rapidfuzz), чтобы их init-логи попадали в нужный
+# зависимостей (pymorphy3, rapidfuzz), чтобы их init-логи попадали в нужный
 # формат. log_format=json (default) → JSON через JSONFormatter; =text —
 # человеко-читаемые логи для локальной разработки.
 _LOG_LEVEL = getattr(logging, settings.app.log_level.upper(), logging.INFO)
@@ -323,38 +323,16 @@ class ParserBot:
 
     @staticmethod
     def _extract_text(message) -> str:
-        """Извлечь текст сообщения, исключив символы, ломающие UTF-16 entity-парсер pyrogram.
+        """Извлечь текст сообщения как обычный str.
 
-        Pyrogram применяет Telegram-entities (bold, mention и т.д.) используя
-        UTF-16-смещения. Если символ вне BMP (emoji, code point > U+FFFF) попадает
-        на границу entity, возникает UnicodeDecodeError 'utf-16-le … unexpected end of data'.
-        При падении обращаемся к неформатированному тексту и вырезаем не-BMP символы —
-        источник проблемы — оставляя остальной контент нетронутым.
+        pyrogram отдаёт текст объектом Str (наследник str) с переопределённым
+        __getitem__, который гоняет срез через UTF-16 surrogate round-trip. При
+        срезе, попавшем на середину суррогатной пары не-BMP символа (emoji), это
+        падает с UnicodeDecodeError 'utf-16-le … unexpected end of data'. Приводим
+        к обычному str — срезы downstream (strip_tail, токенизатор) работают по
+        code point и не ломаются.
         """
-        try:
-            return message.text or message.caption or ''
-        except UnicodeDecodeError:
-            pass
-        # entity-форматирование упало — читаем сырой текст в обход entity-парсера.
-        # pyrogram 2.x хранит неформатированный текст в _text / _caption.
-        raw = (getattr(message, '_text', None)
-               or getattr(message, '_caption', None)
-               or '')
-        if not raw:
-            raw_obj = getattr(message, '_raw', None)
-            if raw_obj:
-                raw = (getattr(raw_obj, 'message', None)
-                       or getattr(raw_obj, 'caption', None)
-                       or '')
-        # Убираем символы вне BMP — именно они создают суррогатные пары в UTF-16
-        # и вызывают смещение entity-границ.
-        stripped = ''.join(c for c in raw if ord(c) <= 0xFFFF)
-        logger.warning(
-            "Message %s: entity formatting failed (non-BMP char at entity boundary); "
-            "stripped %d char(s), processing continues without formatting",
-            getattr(message, 'id', '?'), len(raw) - len(stripped),
-        )
-        return stripped
+        return str(message.text or message.caption or '')
 
     async def _process_message(self, message: Message):
         """Обработать одно сообщение канала: предобработка и сохранение события.
@@ -526,7 +504,7 @@ class ParserBot:
                     except Exception as e:
                         logger.warning(f"remove_listener failed: {e}")
                     try:
-                        await self.db.pool.release(conn, force=True)
+                        await self.db.pool.release(conn, timeout=5)
                     except Exception as e:
                         logger.warning(f"pool.release failed: {e}")
 

@@ -33,9 +33,9 @@ if str(_REPO) not in sys.path:
 from parser.layer_classifier import LayerClassifier
 from parser.morphology import Morphology
 from parser.phonetic_index import PhoneticIndex
-from parser.razdel_tokenizer import RazdelTokenizer
 from parser.street_matcher import StreetMatcher
 from parser.text_preprocessor import preprocess_light, strip_emoji, strip_tail
+from parser.word_tokenizer import tokenize
 
 _STREETS_CSV = _REPO / 'postgres' / 'data' / 'streets.csv'
 _STOPWORDS_CSV = _REPO / 'postgres' / 'data' / 'stopwords.csv'
@@ -79,16 +79,15 @@ def build_matcher():
     matcher._initialized = True
     matcher._stopwords = _load_stopwords()
     classifier = LayerClassifier(morph)
-    tokenizer = RazdelTokenizer()
-    return matcher, morph, classifier, tokenizer
+    return matcher, morph, classifier
 
 
-def run_case(text, matcher, morph, classifier, tokenizer):
+def run_case(text, matcher, morph, classifier):
     """Воспроизводит цепочку MessageProcessor.process_message (matching-ветка)."""
     stripped = strip_tail(text or '')
     preserved = preprocess_light(stripped) or ''
     match_text = strip_emoji(preserved)
-    tokens = tokenizer.tokenize(match_text)
+    tokens = tokenize(match_text)
     lemmas = morph.lemmatize_tokens(tokens)
     layer = classifier.classify(lemmas)
     entities = matcher.find_streets(tokens=tokens, lemmas=lemmas)
@@ -100,7 +99,7 @@ def run_case(text, matcher, morph, classifier, tokenizer):
 
 
 def evaluate(verbose=False):
-    matcher, morph, classifier, tokenizer = build_matcher()
+    matcher, morph, classifier = build_matcher()
     cases = _load_golden()
 
     tp = fp = fn = 0
@@ -108,7 +107,7 @@ def evaluate(verbose=False):
     rows = []
     for c in cases:
         expected = set(c.get('expected_streets', []))
-        got = run_case(c['text'], matcher, morph, classifier, tokenizer)
+        got = run_case(c['text'], matcher, morph, classifier)
         got_set = set(got['streets'])
 
         case_tp = len(expected & got_set)

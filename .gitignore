@@ -81,10 +81,6 @@ logs
 # Build / profiling artifacts
 optimization_results.json
 
-# Training data artifacts (large, generated locally — not versioned)
-train_data/
+# Generated event exports (large, produced locally — not versioned)
 nnew_events_export.csv
 events_export.csv
-
-# Local utility / one-off scripts (not part of deployed service)
-scripts/

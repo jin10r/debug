@@ -103,8 +103,9 @@ def validate_telegram_webapp_data(init_data: str, bot_token: str, max_age_hours:
             hashlib.sha256
         ).hexdigest()
         
-        # Compare hashes
-        if calculated_hash != hash_value:
+        # Compare hashes — constant-time, чтобы не сливать инфу о совпадении
+        # префикса хэша через тайминг (защита от timing-side-channel).
+        if not hmac.compare_digest(calculated_hash, hash_value):
             logger.warning("Hash mismatch - possible tampering detected")
             return False, None
         

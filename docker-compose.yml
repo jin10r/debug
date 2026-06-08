@@ -127,14 +127,14 @@ services:
     logging: *default-logging
 
   # =============================================================================
-  # App - API сервер (опционально)
+  # Core - API сервер (опционально)
   # =============================================================================
-  app:
-    image: survival_app:latest
+  core:
+    image: survival_core:latest
     build:
       context: .
-      dockerfile: Dockerfile
-    container_name: app
+      dockerfile: Dockerfile.core
+    container_name: core
     stop_grace_period: 30s
     environment:
       # Только credentials/per-deployment URL — всё остальное в core/settings.py.
@@ -180,14 +180,14 @@ services:
     logging: *default-logging
 
   # =============================================================================
-  # Nginx - reverse proxy
+  # Web - reverse proxy + статика фронтенда
   # =============================================================================
-  nginx:
-    image: survival_nginx:latest
+  web:
+    image: survival_web:latest
     build:
       context: .
-      dockerfile: Dockerfile.nginx
-    container_name: nginx
+      dockerfile: Dockerfile.web
+    container_name: web
     stop_grace_period: 30s
     ports:
       - "80:80"
@@ -195,7 +195,7 @@ services:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - events_media:/media/events:ro
     depends_on:
-      app:
+      core:
         condition: service_healthy
     networks:
       - frontend

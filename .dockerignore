@@ -46,7 +46,7 @@ legacy/
 node_modules/
 web/node_modules/
 
-# Frontend build output — regenerated inside Dockerfile.nginx builder stage
+# Frontend build output — regenerated inside Dockerfile.web builder stage
 web/dist/
 
 # Session (mounted via volume)

@@ -15,8 +15,8 @@ os.environ.setdefault('REDIS_PASSWORD', 'z')
 
 from parser.morphology import Morphology
 from parser.phonetic_index import PhoneticIndex
-from parser.razdel_tokenizer import RazdelTokenizer
 from parser.street_matcher import StreetMatcher
+from parser.word_tokenizer import tokenize
 from parser.text_preprocessor import preprocess_light
 
 
@@ -34,6 +34,9 @@ ROWS = [
     {'id': 11, 'names': ['Еврейское кладбище']},
     {'id': 12, 'names': ['Шестая']},
     {'id': 13, 'names': ['Атамана Головатого']},
+    {'id': 14, 'names': ['Градоначальницкая']},
+    {'id': 15, 'names': ['Степана Олейника спуск']},
+    {'id': 16, 'names': ['Вице-адмирала Жукова']},
 ]
 
 
@@ -52,8 +55,7 @@ def _process(matcher_ready, text: str):
     """Вызвать matcher.find_streets со sliding-window поиском."""
     matcher, morph = matcher_ready
     text = preprocess_light(text)
-    tokenizer = RazdelTokenizer()
-    tokens = tokenizer.tokenize(text)
+    tokens = tokenize(text)
     lemmas = morph.lemmatize_tokens(tokens)
     return matcher.find_streets(tokens=tokens, lemmas=lemmas)
 
@@ -72,12 +74,20 @@ def test_singleword_street_matches_inflected(matcher_ready):
 
 
 def test_multiword_surface_fuzzy_full_phrase(matcher_ready):
-    """Многословная улица матчится полной фразой через surface_fuzzy tier-1."""
-    entities = _process(matcher_ready, 'едут по Малой Арнаутской вверх')
+    """Многословная улица в им. падеже матчится полной фразой surface_fuzzy tier-1."""
+    entities = _process(matcher_ready, 'едут по улице Малая Арнаутская вверх')
     hit = next((e for e in entities if e['street_id'] == 1), None)
     assert hit is not None
     assert hit['source'] == 'surface_fuzzy'
     assert hit['score'] >= 0.85
+
+
+def test_multiword_inflected_via_lemma_exact(matcher_ready):
+    """Косвенный падеж многословной улицы (surface < 85%) → lemma_exact tier-2."""
+    entities = _process(matcher_ready, 'едут по Малой Арнаутской вверх')
+    hit = next((e for e in entities if e['street_id'] == 1), None)
+    assert hit is not None
+    assert hit['source'] in ('lemma_exact', 'lemma_fuzzy')
 
 
 def test_multiword_partial_via_lemma_fuzzy(matcher_ready):
@@ -103,6 +113,38 @@ def test_hashtag_noise_stripped(matcher_ready):
     """G2: «##Пастера» → пунктуация удаляется _strip_noise, улица находится."""
     entities = _process(matcher_ready, '##Пастера вверх')
     assert any(e['street_id'] == 6 for e in entities)
+
+
+# ------------------------------------------------ дефис-перекрёстки (word split)
+
+def test_hyphen_intersection_resolves_street(matcher_ready):
+    """Перекрёсток через дефис: «Градоначальницкая-Олейника» больше не random.
+
+    Слова режутся по дефису → «градоначальницкая» матчится surface_fuzzy.
+    Раньше склеенный токен не дотягивал ни до одного порога → 0 улиц → random.
+    """
+    entities = _process(matcher_ready, 'Градоначальницкая-Олейника будет ##блокпост')
+    assert entities, 'ожидали ≥1 улицу вместо пустого результата (random)'
+    assert any(e['street_id'] == 14 for e in entities)
+
+
+def test_hyphen_both_full_names_intersection(matcher_ready):
+    """Обе улицы записаны полными именами через дефис → обе резолвятся."""
+    entities = _process(matcher_ready, 'Канатная-Пастера перекрыли')
+    ids = {e['street_id'] for e in entities}
+    assert {6, 7} <= ids
+
+
+def test_hyphen_compound_name_still_matches(matcher_ready):
+    """Регресс: дефисное составное имя собирается обратно окном 1..3."""
+    entities = _process(matcher_ready, 'едут по Вице-адмирала Жукова')
+    assert any(e['street_id'] == 16 for e in entities)
+
+
+def test_ordinal_hyphen_not_broken(matcher_ready):
+    """Регресс: «1-я станция Фонтана» — цифра+я склеивается, улица находится."""
+    entities = _process(matcher_ready, 'на 1-я станция Фонтана')
+    assert any(e['street_id'] == 4 for e in entities)
 
 
 # ----------------------------------------------------- G6: UA suffix

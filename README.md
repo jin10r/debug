@@ -9,7 +9,7 @@ Telegram Mini App — интерактивная карта событий Од�
   fuzzy-сопоставление (`rapidfuzz`) против газеттира улиц. Без NER/нейросетей,
   CPU-only. Детали алгоритма — [docs/parser.md](docs/parser.md).
 - **Карта** — PWA на нативном MapLibre GL JS, offline-first. Детали —
-  [docs/frontend.md](docs/frontend.md), правила — [web/CLAUDE.md](web/CLAUDE.md).
+  [docs/web.md](docs/web.md), правила — [web/CLAUDE.md](web/CLAUDE.md).
 
 ## Архитектура
 
@@ -19,19 +19,19 @@ Telegram Mini App — интерактивная карта событий Од�
 |------------|-------------------------------------------------------------------|----------------|
 | `postgres` | PostgreSQL + PostGIS: улицы (газеттир) и события с геометрией      | —              |
 | `parser`   | kurigram-клиент: канал → матчер → запись событий + `pg_notify`     | —              |
-| `app`      | aiohttp: REST + WebSocket, JWT-валидация Telegram, `LISTEN events` | —              |
+| `core`     | aiohttp: REST + WebSocket, JWT-валидация Telegram, `LISTEN events` | —              |
 | `redis`    | кэш                                                               | —              |
-| `nginx`    | reverse-proxy + статика фронтенда (собирается в образе)            | **80**         |
+| `web`      | reverse-proxy + статика фронтенда (собирается в образе)            | **80**         |
 
 Поток данных:
 
 ```
 Telegram-канал → parser (sliding-window матчер) → PostgreSQL (PostGIS)
-   → pg_notify → app (LISTEN → WebSocket) → nginx → фронтенд (карта MapLibre)
+   → pg_notify → core (LISTEN → WebSocket) → web → фронтенд (карта MapLibre)
 ```
 
 Сети изолированы: БД во внутренней сети (`internal: true`), наружу торчит только
-nginx:80.
+web:80.
 
 ## Деплой
 
@@ -46,10 +46,10 @@ nginx:80.
 Парсер **не логинится в рантайме** — он ожидает готовый файл
 `parser/session.session` и монтирует его volume'ом
 (см. `_init_telegram_client` в [parser/monitoring.py](parser/monitoring.py)).
-Сессию нужно создать **один раз заранее** на машине администратора.
+Сессию нужно создать **один раз заранее** вне приложения чтобы не хранить ваш api_id и api_hash в кодовой базе.
 
 1. Получите `api_id` и `api_hash` на <https://my.telegram.org/apps>.
-2. Установите клиент локально: `pip install kurigram tgcrypto`.
+2. Установите клиент локально: `pip install kurigram qrcode`.
 3. Создайте `gen_session.py` и запустите его — он спросит номер телефона и код
    из Telegram (и пароль 2FA, если включён):
 
@@ -60,9 +60,15 @@ nginx:80.
    API_ID = 0000000                       # с my.telegram.org/apps
    API_HASH = "xxxxxxxxxxxxxxxxxxxxxxxx"  # с my.telegram.org/apps
 
-   with Client("session", api_id=API_ID, api_hash=API_HASH, workdir=".") as app:
-       me = app.get_me()
-       print("OK:", me.first_name, me.id)
+   app = Client(
+    "session",
+    api_id=API_ID,
+    api_hash=API_HASH
+  )
+
+  app.start(use_qr=True)
+  print("Сессия создана:", app.get_me().username)
+  app.stop()
    ```
 
    ```bash
@@ -102,9 +108,9 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-Фронтенд собирается внутри `Dockerfile.nginx` (node-builder → `nginx:alpine`),
+Фронтенд собирается внутри `Dockerfile.web` (node-builder → `nginx:alpine`),
 отдельный `npm run build` не нужен. Порядок готовности:
-`postgres → parser/app → nginx`. Приложение доступно на `http://<host>:80/`.
+`postgres → parser/core → web`. Приложение доступно на `http://<host>:80/`.
 
 Проверка:
 
@@ -142,15 +148,29 @@ docker compose down -v     # + удалить тома (БД, медиа, redis)
 ## Структура репозитория
 
 ```
-core/        backend (aiohttp app, API, БД-адаптеры, settings)
-parser/      микросервис-парсер (kurigram + sliding-window матчер)
+core/        backend сервиса `core` (aiohttp app, API, БД-адаптеры, settings)
+parser/      сервис `parser` (kurigram + sliding-window матчер)
 postgres/    init-скрипты схемы и данные (streets.csv, stopwords.csv)
-web/         фронтенд (TypeScript + MapLibre GL, webpack)
-docs/        parser.md, frontend.md, parser_audit.md, project_review.md
+web/         фронтенд сервиса `web` (TypeScript + MapLibre GL, webpack)
+docs/        по одному файлу на микросервис (core, parser, web, postgres, redis)
 ```
 
 ## Документация
 
+По документу на каждый микросервис:
+
+- [docs/core.md](docs/core.md) — backend: REST + WebSocket API, JWT/Telegram, middleware, БД-адаптеры
 - [docs/parser.md](docs/parser.md) — алгоритм парсера (sliding-window, тиры матча)
-- [docs/frontend.md](docs/frontend.md) — архитектура фронтенда (PWA, MapLibre)
-- [docs/project_review.md](docs/project_review.md) — известные проблемы и техдолг
+- [docs/web.md](docs/web.md) — фронтенд + nginx (PWA, MapLibre, reverse-proxy)
+- [docs/postgres.md](docs/postgres.md) — схема PostGIS, газеттир, TTL событий
+- [docs/redis.md](docs/redis.md) — кэш / session-store
+
+Поддержать разработчиков монетой здесь:
+ https://bastyon.com/keep_alive_odessa?ref=PHQHKADhBPxxSwjiggV6G2BxSvy6TY1Lgb
+
+
+
+
+
+
+

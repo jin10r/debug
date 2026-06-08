@@ -1,4 +1,4 @@
-# Dockerfile.nginx — frontend compilation + nginx runtime
+# Dockerfile.web — frontend compilation + nginx runtime
 # Multi-stage: node/npm live only in the builder stage and never reach the
 # final image. The builder is an isolated, throwaway environment — only the
 # compiled artifacts (web/dist + static assets) are copied forward.

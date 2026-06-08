@@ -12,7 +12,7 @@
 проход pymorphy3 на сообщение).
 
 Приоритет при совпадении ключей из разных слоёв: bus → cops → traffic → pig.
-Хэштег-токены (is_anchored=True из RazdelTokenizer) обрабатываются первыми:
+Хэштег-токены (is_anchored=True из word_tokenizer) обрабатываются первыми:
 если хэштег явно указывает слой, он выигрывает у soft-keywords других слоёв.
 Пример: "##блокпост + полиция" → traffic (##блокпост explicit), а не cops.
 """
@@ -21,7 +21,7 @@ import logging
 from typing import Dict, List, Optional, Sequence, Set
 
 from .morphology import Lemma, Morphology
-from .razdel_tokenizer import Token
+from .word_tokenizer import Token
 
 try:
     from .settings import settings

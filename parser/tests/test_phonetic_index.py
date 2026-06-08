@@ -6,8 +6,8 @@
 rapidfuzz гоняет StreetMatcher. Тайпо-устойчивость проверяется в
 test_street_matcher.py (surface fuzzy), здесь — структура и точечные запросы индекса.
 
-Запуск (внутри parser-контейнера, mawo_razdel есть только там):
-    docker-compose exec parser python -m pytest parser/tests/test_phonetic_index.py -v
+Запуск (нужен mawo-pymorphy3 для Morphology):
+    python -m pytest parser/tests/test_phonetic_index.py -v
 """
 
 import os

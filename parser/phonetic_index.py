@@ -19,8 +19,8 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from .morphology import Morphology
-from .razdel_tokenizer import RazdelTokenizer
 from .text_preprocessor import clean
+from .word_tokenizer import tokenize
 
 try:
     from .settings import settings
@@ -42,7 +42,7 @@ class PhoneticEntry:
 
 
 class PhoneticIndex:
-    """Индекс улиц: surface-phrases + lemma-tuple + lemma-phrases. Использует Morphology+razdel.
+    """Индекс улиц: surface-phrases + lemma-tuple + lemma-phrases. Использует Morphology + токенайзер.
 
     Полная пересборка через `build(rows)`; точечная замена одной улицы через
     `replace_street(street_id, row)`. Оба метода — sync (без await); вызываются
@@ -53,8 +53,6 @@ class PhoneticIndex:
 
     def __init__(self, morph: Morphology) -> None:
         self._morph = morph
-        # Tokenizer лениво — чтобы тесты импорта не падали без mawo_razdel.
-        self._tokenizer: Optional[RazdelTokenizer] = None
 
         # Основные структуры индекса. Пустые до первого build().
         self._lemma_tuple: Dict[Tuple[str, ...], List[PhoneticEntry]] = {}
@@ -72,15 +70,6 @@ class PhoneticIndex:
         # Обратный индекс street_id → lemma_tuple первого алиаса.
         self._street_to_lemmas: Dict[int, Tuple[str, ...]] = {}
 
-    # --------------------------------------------------------------- lazy deps
-
-    def _get_tokenizer(self) -> RazdelTokenizer:
-        if self._tokenizer is None:
-            self._tokenizer = RazdelTokenizer()
-        return self._tokenizer
-
-    # ------------------------------------------------------------ config knobs
-
     # ----------------------------------------------------------- lemma helpers
 
     def _lemma_tuple_for_name(self, name: str) -> Tuple[str, ...]:
@@ -88,7 +77,7 @@ class PhoneticIndex:
         cleaned = clean(name)
         if not cleaned:
             return ()
-        tokens = self._get_tokenizer().tokenize(cleaned)
+        tokens = tokenize(cleaned)
         if not tokens:
             return ()
         lemmas = self._morph.lemmatize_tokens(tokens)

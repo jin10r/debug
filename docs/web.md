@@ -1,10 +1,13 @@
-# Frontend microservice — логика и алгоритм
+# Web microservice — логика и алгоритм
 
-Vanilla TypeScript PWA Telegram Mini App. Карта `MapLibre GL JS` (native),
-state — единый `zustand` store, события из WebSocket агрегируются client-side.
-nginx раздаёт скомпилированный webpack bundle.
+Сервис `web` (контейнер из `Dockerfile.web`) = nginx, который раздаёт
+скомпилированный фронтенд и проксирует API/WebSocket на сервис `core`.
+Фронтенд — vanilla TypeScript PWA Telegram Mini App: карта `MapLibre GL JS`
+(native), state — единый `zustand` store, события из WebSocket агрегируются
+client-side.
 
-См. также `web/CLAUDE.md` — 8 архитектурных правил-инвариантов.
+См. также `web/CLAUDE.md` — 8 архитектурных правил-инвариантов, и `nginx.conf`
+— reverse-proxy/CSP/кэш-политики.
 
 ## Технологический стек
 
@@ -144,12 +147,12 @@ Telegram WebApp HapticFeedback API:
 
 ## Диагностика «haptic не работает»
 
-### Шаг 1: подтвердить что новый dist в контейнере nginx
+### Шаг 1: подтвердить что новый dist в контейнере web
 
 ```bash
-sudo docker exec nginx grep -c "navigator.vibrate" /usr/share/nginx/html/dist/js/common.js
-# Ожидаем >0. Если 0 — нужно rebuild nginx:
-sudo docker-compose build nginx && sudo docker-compose up -d nginx
+sudo docker exec web grep -c "navigator.vibrate" /usr/share/nginx/html/dist/js/common.js
+# Ожидаем >0. Если 0 — нужно rebuild сервиса web:
+sudo docker compose build web && sudo docker compose up -d web
 ```
 
 ### Шаг 2: инвалидация service worker cache
@@ -201,23 +204,3 @@ CSS `hapticPulse` срабатывает на всех — это visual fallbac
    нет per-object diffing. Это компромисс простоты vs cherrypick.
 4. **localStorage limits**: ~5 MB per-origin в большинстве WebView.
    При 60-min TTL и средних события рост контролируется
-
-## План оптимизации фронтенда
-
-### 🔒 Безопасность
-- CSP header в nginx — строгий для Mini App (script-src 'self', no inline)
-- sessionStorage tokens — рассмотреть переход на httpOnly cookies (HTTPS-only)
-- WebSocket auth: передавать JWT в первом фрейме, а не URL query
-  (избегает попадания в access-logs)
-
-### 🛡 Надёжность
-- WebSocket reconnect с exponential backoff (есть, проверить кэп)
-- Service worker — добавить версионирование cache name по `__BUILD_ID__`
-- TTL prune — добавить guard против race с pendingFeature batch
-
-### ⚡ Производительность
-- Webpack content-hash в bundle names → immutable cache (1 год через
-  `Cache-Control: public, max-age=31536000`)
-- Code-splitting: вынести `popups.js` в lazy chunk (открывается по клику)
-- Map style — pre-fetch tiles для viewport до WebSocket connect
-- IDB вместо localStorage для events_geojson (≥10 MB, async API)

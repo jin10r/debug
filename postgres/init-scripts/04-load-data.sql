@@ -25,12 +25,31 @@ COPY temp_streets_wkt(names, wkt_geom)
 FROM '/docker-entrypoint-initdb.d/data/streets.csv'
 WITH (FORMAT csv, HEADER true, ENCODING 'UTF8');
 
--- Вставляем улицы с преобразованием pipe-разделителя в массив
+-- Безопасный парсер WKT: одна битая геометрия не должна валить ВЕСЬ INSERT
+-- (а с ним и инициализацию БД — postgres exit 3 → streets пустой → все события
+-- становятся 'random'). Невалидная строка пропускается с WARNING.
+CREATE OR REPLACE FUNCTION safe_geom_from_text(wkt text, srid int)
+RETURNS geometry AS $$
+BEGIN
+    RETURN ST_SetSRID(ST_GeomFromText(wkt, srid), srid);
+EXCEPTION WHEN OTHERS THEN
+    RAISE WARNING 'streets load: skipping invalid geometry: %', left(wkt, 80);
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Вставляем улицы с преобразованием pipe-разделителя в массив.
+-- safe_geom_from_text вычисляется один раз в подзапросе; строки с NULL-геометрией
+-- (битый WKT) отсекаются — остальные грузятся.
 INSERT INTO streets(names, geom)
-SELECT
-    string_to_array(names, '|'),  -- разбиваем по pipe на массив
-    ST_SetSRID(ST_GeomFromText(wkt_geom, 4326), 4326)
-FROM temp_streets_wkt
+SELECT names_arr, geom
+FROM (
+    SELECT
+        string_to_array(names, '|') AS names_arr,  -- разбиваем по pipe на массив
+        safe_geom_from_text(wkt_geom, 4326)         AS geom
+    FROM temp_streets_wkt
+) s
+WHERE geom IS NOT NULL
 ON CONFLICT DO NOTHING;
 
 DROP TABLE temp_streets_wkt;

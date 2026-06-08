@@ -19,7 +19,7 @@ from rapidfuzz import process as rf_process
 
 from .morphology import Lemma, Morphology
 from .phonetic_index import PhoneticEntry, PhoneticIndex
-from .razdel_tokenizer import Token
+from .word_tokenizer import Token
 
 try:
     from .settings import settings

@@ -53,13 +53,11 @@ secrets/*.txt
 # Test data
 tests/test_messages.txt
 
-# Documentation (whitelist-style: by default all *.md ignored; allow only
-# living docs in docs/ and developer rules CLAUDE.md)
-*.md
-!CLAUDE.md
-!web/CLAUDE.md
-!docs/**/*.md
-!README.md
+# Documentation: markdown (README.md, docs/, CLAUDE.md) is tracked by default.
+# Do NOT blanket-ignore *.md and re-allow with `!` negations — many copy/export
+# tools that honor .gitignore drop the ignored files but skip the `!` rules,
+# silently leaving README.md & docs out of the copy. Ignore specific scratch
+# markdown by name instead, e.g.:  /REVIEW.md
 pg_plan3.txt
 
 # Archived migration scripts and docs

@@ -65,7 +65,6 @@ web:80.
     api_id=API_ID,
     api_hash=API_HASH
   )
-
   app.start(use_qr=True)
   print("Сессия создана:", app.get_me().username)
   app.stop()
@@ -167,10 +166,3 @@ docs/        по одному файлу на микросервис (core, par
 
 Поддержать разработчиков монетой здесь:
  https://bastyon.com/keep_alive_odessa?ref=PHQHKADhBPxxSwjiggV6G2BxSvy6TY1Lgb
-
-
-
-
-
-
-

@@ -458,14 +458,18 @@ class ParserBot:
         def _on_notify(connection, pid, channel, payload):
             try:
                 data = json.loads(payload)
+                deleted = 0
                 for url in data.get('photo_urls') or []:
                     path = _resolve_photo_path(url)
                     if path and os.path.isfile(path):
                         try:
                             os.unlink(path)
-                            logger.info(f"Удалено устаревшее фото: {path}")
+                            deleted += 1
+                            logger.debug(f"Удалено устаревшее фото: {path}")
                         except OSError as e:
                             logger.warning(f"Не удалось удалить фото {path}: {e}")
+                if deleted:
+                    logger.info(f"Удалено устаревших фото: {deleted}")
             except Exception as e:
                 logger.warning(f"Ошибка обработчика events_cleaned: {e}")
 

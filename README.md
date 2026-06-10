@@ -64,17 +64,17 @@ web:80.
     "session",
     api_id=API_ID,
     api_hash=API_HASH
-  )
-  app.start(use_qr=True)
-  print("Сессия создана:", app.get_me().username)
-  app.stop()
+   )
+   app.start(use_qr=True)
+   print("Сессия создана:", app.get_me().username)
+   app.stop()
    ```
 
    ```bash
    python gen_session.py        # вводите телефон + код
    ```
 
-4. Положите полученный файл рядом с парсером и закройте права:
+4. Положите полученный файл в папку parser и закройте права командой:
 
    ```bash
    mv session.session parser/session.session

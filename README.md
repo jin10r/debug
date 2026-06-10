@@ -49,37 +49,28 @@ web:80.
 Сессию нужно создать **один раз заранее** вне приложения чтобы не хранить ваш api_id и api_hash в кодовой базе.
 
 1. Получите `api_id` и `api_hash` на <https://my.telegram.org/apps>.
-2. Установите клиент локально: `pip install kurigram qrcode`.
-3. Создайте `gen_session.py` и запустите его — он спросит номер телефона и код
-   из Telegram (и пароль 2FA, если включён):
-
-   ```python
-   # gen_session.py — запустить ОДИН раз; создаёт ./session.session
-   from pyrogram import Client            # модуль ставится пакетом kurigram
-
-   API_ID = 0000000                       # с my.telegram.org/apps
-   API_HASH = "xxxxxxxxxxxxxxxxxxxxxxxx"  # с my.telegram.org/apps
-
-   app = Client(
-    "session",
-    api_id=API_ID,
-    api_hash=API_HASH
-   )
-   app.start(use_qr=True)
-   print("Сессия создана:", app.get_me().username)
-   app.stop()
-   ```
+2. Создайте виртуальное окружение и установите клиент:
 
    ```bash
-   python gen_session.py        # вводите телефон + код
+   python3 -m venv .venv
+   source .venv/bin/activate
+   pip install kurigram qrcode
    ```
 
-4. Положите полученный файл в папку parser и закройте права командой:
+3. Запустите готовый скрипт [gen_session.py](gen_session.py), передав
+   `api_id`/`api_hash` аргументами:
 
    ```bash
-   mv session.session parser/session.session
-   chmod 600 parser/session.session
+   python gen_session.py <api_id> <api_hash>           # вход по QR (по умолчанию)
+   python gen_session.py <api_id> <api_hash> --phone   # вход по телефону + коду
    ```
+
+   По QR: Telegram → Настройки → Устройства → «Подключить устройство» →
+   отсканируйте QR из терминала. По `--phone` — введите номер и код из Telegram
+   (и пароль 2FA, если включён).
+
+4. Готово — скрипт сам сохраняет `parser/session.session` с правами `600`.
+   Ручные `mv`/`chmod` не нужны.
 
 `api_id`/`api_hash` зашиваются внутрь `session.session` — в рантайме они больше
 не нужны. Файл в `.gitignore` (`*.session`), в репозиторий не попадает.

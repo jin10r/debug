@@ -6,7 +6,7 @@ Telegram Mini App — интерактивная карта событий Од�
 События живут 60 минут (TTL) и исчезают сами.
 
 - **Извлечение улиц** — sliding-window матчер: морфология (`mawo-pymorphy3`) +
-  fuzzy-сопоставление (`rapidfuzz`) против газеттира улиц. Без NER/нейросетей,
+  fuzzy-сопоставление (`rapidfuzz`) против справочника гео-объектов (postgres/data/streets.csv). Без NER/нейросетей,
   CPU-only. Детали алгоритма — [docs/parser.md](docs/parser.md).
 - **Карта** — PWA на нативном MapLibre GL JS, offline-first. Детали —
   [docs/web.md](docs/web.md), правила — [web/CLAUDE.md](web/CLAUDE.md).
@@ -17,7 +17,7 @@ Telegram Mini App — интерактивная карта событий Од�
 
 | Сервис     | Назначение                                                        | Публичный порт |
 |------------|-------------------------------------------------------------------|----------------|
-| `postgres` | PostgreSQL + PostGIS: улицы (газеттир) и события с геометрией      | —              |
+| `postgres` | PostgreSQL + PostGIS: объекты (справочник) и события с геометрией      | —              |
 | `parser`   | kurigram-клиент: канал → матчер → запись событий + `pg_notify`     | —              |
 | `core`     | aiohttp: REST + WebSocket, JWT-валидация Telegram, `LISTEN events` | —              |
 | `redis`    | кэш                                                               | —              |
@@ -121,7 +121,7 @@ docker compose logs -f parser           # «Telegram client started», обра�
 
 ### 4. Обновление данных улиц
 
-Газеттир — [postgres/data/streets.csv](postgres/data/streets.csv)
+Справочник гео-объектов — [postgres/data/streets.csv](postgres/data/streets.csv)
 (формат `название|алиас1|алиас2,WKT-геометрия`). Он загружается **при инициализации
 БД**, поэтому после правки нужно либо пересоздать том БД:
 
@@ -161,7 +161,7 @@ docs/        по одному файлу на микросервис (core, par
 - [docs/core.md](docs/core.md) — backend: REST + WebSocket API, JWT/Telegram, middleware, БД-адаптеры
 - [docs/parser.md](docs/parser.md) — алгоритм парсера (sliding-window, тиры матча)
 - [docs/web.md](docs/web.md) — фронтенд + nginx (PWA, MapLibre, reverse-proxy)
-- [docs/postgres.md](docs/postgres.md) — схема PostGIS, газеттир, TTL событий
+- [docs/postgres.md](docs/postgres.md) — схема PostGIS, справочник, TTL событий
 - [docs/redis.md](docs/redis.md) — кэш / session-store
 
 Поддержать разработчиков монетой здесь:

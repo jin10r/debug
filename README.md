@@ -56,7 +56,7 @@ cd survival_map
 `parser/session.session` и монтирует его volume'ом
 (см. `_init_telegram_client` в [parser/monitoring.py](parser/monitoring.py)).
 Делается **один раз**: пока сессия валидна, при обновлении или передеплое
-приложения повторять не нужно. `api_id`/`api_hash` в кодовой базе не хранятся.
+приложения пересоздавать сессию не нужно. `api_id`/`api_hash` в кодовой базе не хранятся.
 
 1. Получите `api_id` и `api_hash` на <https://my.telegram.org/apps>.
 2. Создайте виртуальное окружение и установите клиент:

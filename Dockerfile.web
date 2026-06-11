@@ -40,9 +40,10 @@ RUN npm run build && \
 # =============================================================================
 FROM nginx:1.27-alpine
 
-# wget нужен для docker-compose healthcheck (`wget -qO- /health/ready`).
-# В nginx:alpine он не включён по умолчанию.
-RUN apk add --no-cache wget
+# Healthcheck (`wget -qO- /health/ready` в docker-compose.yml) использует
+# busybox-wget, уже входящий в nginx:alpine, — отдельная установка не нужна.
+# Это убирает зависимость сборки от зеркала Alpine (apk), которое может быть
+# временно недоступно.
 
 WORKDIR /usr/share/nginx/html
 

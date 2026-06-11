@@ -75,13 +75,19 @@ cd survival_map
    ```
 
    По QR: Telegram → Настройки → Устройства → «Подключить устройство» →
-   отсканируйте QR из терминала. По `--phone` — введите номер и код из Telegram
-   (и пароль 2FA, если включён).
+   отсканируйте QR из терминала. (и пароль 2FA, если включён).
 
 4. Готово — скрипт сам сохраняет `parser/session.session` с правами `600`.
    Ручные `mv`/`chmod` не нужны.
 
 `api_id`/`api_hash` зашиваются внутрь `session.session` — в рантайме они больше не нужны. Файл в `.gitignore` (`*.session`), в репозиторий не попадает.
+
+5. Деактивируем виртуальное окружение и удаляем его
+
+```bash
+   deactivate
+   rm -rf .venv
+   ```
 
 ### 3. Конфигурация `.env`
 
@@ -117,24 +123,6 @@ curl -fsS http://localhost/health/ready # 200 OK
 docker compose logs -f parser           # «Telegram client started», обработка сообщений
 ```
 
-### 5. Обновление данных улиц
-
-Справочник гео-объектов — [postgres/data/streets.csv](postgres/data/streets.csv)
-(формат `название|алиас1|алиас2,WKT-геометрия`). Он загружается **при инициализации
-БД**, поэтому после правки нужно либо пересоздать том БД:
-
-```bash
-docker compose down -v && docker compose up -d --build
-```
-
-либо добавить запись в работающую БД вручную (без потери событий):
-
-```bash
-docker compose exec postgres psql -U postgres -c \
-  "INSERT INTO streets(names, geom) VALUES (ARRAY['7 км'],
-   ST_GeomFromText('POINT(30.6402739 46.4419476)',4326));"
-```
-
 ### Остановка
 
 ```bash
@@ -142,7 +130,7 @@ docker compose down        # все сервисы завершаются кор
 docker compose down -v     # + удалить тома (БД, медиа, redis)
 ```
 
-## Структура репозитория
+#### Структура репозитория
 
 ```
 core/        backend сервиса `core` (aiohttp app, API, БД-адаптеры, settings)
@@ -152,7 +140,7 @@ web/         фронтенд сервиса `web` (TypeScript + MapLibre GL, we
 docs/        по одному файлу на микросервис (core, parser, web, postgres, redis)
 ```
 
-## Документация
+##### Документация
 
 По документу на каждый микросервис:
 

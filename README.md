@@ -41,12 +41,22 @@ web:80.
 - Telegram-аккаунт для чтения канала (парсер работает под **пользовательской**
   сессией, не под ботом) и бот от [@BotFather](https://t.me/BotFather) для Mini App
 
-### 1. Создание Telegram-сессии (отдельно от приложения)
+### 1. Клонирование репозитория
+
+```bash
+git clone https://gitlab.com/trav1s/survival_map.git
+cd survival_map
+```
+
+Все последующие команды выполняются **из корня проекта** (`survival_map/`).
+
+### 2. Создание Telegram-сессии (один раз)
 
 Парсер **не логинится в рантайме** — он ожидает готовый файл
 `parser/session.session` и монтирует его volume'ом
 (см. `_init_telegram_client` в [parser/monitoring.py](parser/monitoring.py)).
-Сессию нужно создать **один раз заранее** вне приложения чтобы не хранить ваш api_id и api_hash в кодовой базе.
+Делается **один раз**: пока сессия валидна, при обновлении или передеплое
+приложения повторять не нужно. `api_id`/`api_hash` в кодовой базе не хранятся.
 
 1. Получите `api_id` и `api_hash` на <https://my.telegram.org/apps>.
 2. Создайте виртуальное окружение и установите клиент:
@@ -62,7 +72,6 @@ web:80.
 
    ```bash
    python gen_session.py <api_id> <api_hash>           # вход по QR (по умолчанию)
-   python gen_session.py <api_id> <api_hash> --phone   # вход по телефону + коду
    ```
 
    По QR: Telegram → Настройки → Устройства → «Подключить устройство» →
@@ -72,17 +81,15 @@ web:80.
 4. Готово — скрипт сам сохраняет `parser/session.session` с правами `600`.
    Ручные `mv`/`chmod` не нужны.
 
-`api_id`/`api_hash` зашиваются внутрь `session.session` — в рантайме они больше
-не нужны. Файл в `.gitignore` (`*.session`), в репозиторий не попадает.
+`api_id`/`api_hash` зашиваются внутрь `session.session` — в рантайме они больше не нужны. Файл в `.gitignore` (`*.session`), в репозиторий не попадает.
 
-### 2. Конфигурация `.env`
+### 3. Конфигурация `.env`
 
 ```bash
 cp .env.example .env
 ```
 
-Заполните (`.env.example` содержит только секреты и per-deployment URL; остальное
-захардкожено в [core/settings.py](core/settings.py)):
+Заполните (`.env.example` содержит только секреты и per-deployment URL; остальное захардкожено дефолтными значениями в [core/settings.py](core/settings.py)):
 
 | Переменная                    | Обяз. | Описание                                            |
 |-------------------------------|-------|-----------------------------------------------------|
@@ -92,7 +99,7 @@ cp .env.example .env
 | `WEBAPP_URL` / `REDIRECT_URL` | нет   | публичные HTTPS-URL для Telegram WebApp             |
 | `TELEGRAM_VALIDATION_ENABLED` | нет   | по умолч. `True`; `False` — только для dev          |
 
-### 3. Запуск
+### 4. Запуск
 
 ```bash
 docker compose up -d --build
@@ -110,7 +117,7 @@ curl -fsS http://localhost/health/ready # 200 OK
 docker compose logs -f parser           # «Telegram client started», обработка сообщений
 ```
 
-### 4. Обновление данных улиц
+### 5. Обновление данных улиц
 
 Справочник гео-объектов — [postgres/data/streets.csv](postgres/data/streets.csv)
 (формат `название|алиас1|алиас2,WKT-геометрия`). Он загружается **при инициализации

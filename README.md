@@ -48,7 +48,7 @@ web:80.
 ### 1. Клонирование репозитория
 
 ```bash
-git clone https://gitlab.com/trav1s/survival_map.git
+git clone https://github.com/develop4alive/survival_map
 cd survival_map
 ```
 

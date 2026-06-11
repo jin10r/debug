@@ -9,7 +9,7 @@ Telegram Mini App — интерактивная карта событий Од�
   fuzzy-сопоставление (`rapidfuzz`) против справочника гео-объектов (postgres/data/streets.csv). Без NER/нейросетей,
   CPU-only. Детали алгоритма — [docs/parser.md](docs/parser.md).
 - **Карта** — PWA на нативном MapLibre GL JS, offline-first. Детали —
-  [docs/web.md](docs/web.md), правила — [web/CLAUDE.md](web/CLAUDE.md).
+  [docs/web.md](docs/web.md)
 
 ## Архитектура
 

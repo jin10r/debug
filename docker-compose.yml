@@ -58,9 +58,8 @@ services:
       context: .
       dockerfile: Dockerfile.parser
     container_name: parser
-    environment:
-      # Только credentials/per-deployment URL — всё остальное в core/settings.py.
-      JWT_SECRET: ${JWT_SECRET}
+    # Без env: JWT_SECRET автогенерируется в core/settings.py, остальное —
+    # hardcoded defaults; парсер аутентифицируется через session.session.
     volumes:
       - ./parser/session.session:/app/parser/session.session:rw
       - events_media:/media/events:rw
@@ -137,8 +136,8 @@ services:
     stop_grace_period: 30s
     environment:
       # Только credentials/per-deployment URL — всё остальное в core/settings.py.
+      # JWT_SECRET не передаём — он автогенерируется в core/settings.py.
       BOT_TOKEN: ${BOT_TOKEN}
-      JWT_SECRET: ${JWT_SECRET}
       WEBAPP_URL: ${WEBAPP_URL:-}
       REDIRECT_URL: ${REDIRECT_URL:-}
       # Optional override: dev-режим без валидации Telegram InitData (default True).

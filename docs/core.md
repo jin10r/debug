@@ -110,8 +110,10 @@ flowchart LR
   затем сверка `hash` через `hmac.compare_digest` (constant-time). Проверка
   свежести `auth_date` (24 ч). Обёрнуто в circuit breaker (`pybreaker`).
 - **JWT** — HS256, access TTL 15 мин / refresh 24 ч (`core/settings.py JWTConfig`).
-  `JWT_SECRET` обязателен и валидируется на старте (≥32 символов, отказ на
-  дефолтных значениях).
+  Секрет автогенерируется эфемерно в памяти при старте (`_resolve_jwt_secret`),
+  если `JWT_SECRET` не задан в env; рестарт → новый секрет → ранее выданные токены
+  инвалидируются. `JWT_SECRET` в env — опциональный override для стабильного/общего
+  (multi-replica) секрета (≥32 символов).
 - **Redis** (`RedisManager`, `core/middlewares/auth.py`) — session/nonce store;
   при недоступности — in-memory fallback (деградация, не отказ). Это **не** тот
   же кэш, что `core/utils/cache.py` (in-memory TTL+LRU кэш событий).
@@ -119,8 +121,9 @@ flowchart LR
 ## Конфигурация
 
 `core/settings.py` — всё, кроме секретов, захардкожено в `@dataclass`. Из env
-читаются только: `BOT_TOKEN`, `JWT_SECRET`, `CHANNEL_ID`, `WEBAPP_URL`,
-`REDIRECT_URL`, `TELEGRAM_VALIDATION_ENABLED`. Параметры пула Бога/redis/матчера
+читаются только: `BOT_TOKEN`, `WEBAPP_URL`, `REDIRECT_URL`,
+`TELEGRAM_VALIDATION_ENABLED` (`JWT_SECRET` — опциональный override автогенерации).
+Параметры пула Бога/redis/матчера
 правятся прямо в `settings.py`.
 
 ## Health / observability

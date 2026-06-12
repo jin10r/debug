@@ -166,7 +166,7 @@ function showLegendPopup() {
                     <td style="${iconCellStyle}">
                         <img src="/assets/images/bus.png" style="${imgStyle}" alt="Bus">
                     </td>
-                    <td style="${rowStyle}"><strong>Бус</strong> — автобусы, спринтеры, H1–H5</td>
+                    <td style="${rowStyle}"><strong>Бус</strong> — бус, спринтеры, H1–H5</td>
                 </tr>
                 <tr>
                     <td style="${iconCellStyle}">
@@ -182,10 +182,13 @@ function showLegendPopup() {
                     <td style="${iconCellStyle}">
                         <img src="/assets/images/pig.png" style="${imgStyle}" alt="Pig">
                     </td>
-                    <td style="${rowStyle}"><strong>Остальное</strong> — события без явного слоя</td>
+                    <td style="${rowStyle}"><strong>Остальное</strong> — события без явного типа</td>
                 </tr>
             </tbody>
         </table>
+        <p style="margin: 0 0 16px 0; color: var(--tg-hint-color, #888); font-size: 13px; line-height: 1.4; text-align: center;">
+            Тип события определяется автоматически по ключевым словам в тексте сообщения
+        </p>
         <div style="padding-top: 16px; border-top: 1px solid var(--tg-hint-color, #e0e0e0);">
             <p style="margin: 0 0 10px 0; color: var(--tg-text-color, #000); font-size: 14px; line-height: 1.5;">
                 <strong style="color: #dc3545;">● Красный круг</strong> — точное место (перекресток либо объект)

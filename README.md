@@ -37,9 +37,19 @@ web:80.
 
 ### 0. Требования
 
-- Docker + Docker Compose v2
-- Telegram-аккаунт для чтения канала (парсер работает под **пользовательской**
-  сессией, не под ботом) и бот от [@BotFather](https://t.me/BotFather) для Mini App
+Хост — Linux или macOS с `bash` (Windows — через WSL2). Нужны:
+
+- **Docker** + **Docker Compose v2** — рантайм всего стека.
+- **Git** — клонирование репозитория.
+- **Python 3.10+** с `pip` и `venv` на хосте — только для одноразовой генерации
+  Telegram-сессии (шаг 2); в рантайме приложения не используется.
+- **Telegram-аккаунт, подписанный на целевой канал.** Парсер читает канал под
+  **пользовательской** сессией (не под ботом); без подписки Telegram не отдаст
+  сообщения — и событий на карте не будет.
+- **Бот от [@BotFather](https://t.me/BotFather)** (`BOT_TOKEN`) — **обязателен**: в
+  сервисе `core` работает aiogram-бот, без валидного токена `core` не стартует.
+- **Только для production Mini App:** публичный домен с **HTTPS** — Telegram
+  открывает WebApp лишь по `https://` (см. раздел 5, вариант B).
 
 > **sudo.** Если ваш пользователь не в группе `docker`, команды `docker …` ниже
 > запускайте с `sudo` (`sudo docker compose …`). Либо один раз добавьте себя в
@@ -95,24 +105,31 @@ cd survival_map
 `api_id`/`api_hash` зашиваются внутрь `session.session` — в рантайме они больше
 не нужны. Файл в `.gitignore` (`*.session`), в репозиторий не попадает.
 
+> **Важно.** Авторизованный аккаунт должен быть **подписан на целевой канал**
+> (`CHANNEL_ID` в [core/settings.py](core/settings.py)). Без подписки Telegram не
+> отдаст историю и новые сообщения — парсер не увидит события. Подпишитесь этим
+> аккаунтом на канал до запуска стека.
+
 ### 3. Конфигурация `.env`
 
 ```bash
 cp env.example .env
 ```
 
-**Перед запуском обязательно заполните параметры с «Обяз. = да» реальными
-значениями** — иначе приложение не стартует (`JWT_SECRET` валидируется на старте:
-≥32 символов, не плейсхолдер) или не пройдёт авторизация Telegram (`BOT_TOKEN`).
-`env.example` содержит только секреты и per-deployment URL; остальное захардкожено
-дефолтами в [core/settings.py](core/settings.py):
+**Минимум для старта — вписать реальный `BOT_TOKEN`** (без валидного токена `core`
+не поднимется). `env.example` содержит только секреты и per-deployment URL;
+остальное захардкожено дефолтами в [core/settings.py](core/settings.py):
 
 | Переменная                    | Обяз. | Описание                                            |
 |-------------------------------|-------|-----------------------------------------------------|
-| `BOT_TOKEN`                   | да    | токен бота от @BotFather (для Mini App)             |
-| `JWT_SECRET`                  | да    | ≥32 символов: `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
-| `WEBAPP_URL` / `REDIRECT_URL` | нет   | публичные HTTPS-URL для Telegram WebApp             |
-| `TELEGRAM_VALIDATION_ENABLED` | нет   | по умолч. `True`; `False` — только для dev          |
+| `BOT_TOKEN`                   | да    | токен бота от @BotFather; без него `core` (aiogram-бот) не стартует |
+| `WEBAPP_URL`                  | для prod | публичный HTTPS-URL приложения; бот вставляет его в кнопку «Открыть приложение» и он же задаётся в @BotFather. Для локальной проверки не нужен |
+| `TELEGRAM_VALIDATION_ENABLED` | нет   | `True` (дефолт) — доступ только из Telegram (Mini App); `False` — открытый доступ для локальной проверки. **Пустым не оставлять** |
+| `REDIRECT_URL`                | нет   | куда отправлять не-Telegram трафик при включённой валидации |
+| `JWT_SECRET`                  | нет   | автогенерируется в памяти при старте; задать только для стабильного/общего секрета (≥32 символов) |
+
+Как именно открыть приложение (локально в браузере или как Telegram Mini App) —
+см. раздел 5 ниже.
 
 ### 4. Запуск
 
@@ -122,15 +139,49 @@ docker compose up -d --build
 
 Фронтенд собирается внутри `Dockerfile.web` (node-builder → `nginx:alpine`),
 отдельный `npm run build` не нужен. Порядок готовности:
-`postgres → parser/core → web`. Приложение доступно на `http://<host>:80/`.
+`postgres → parser/core → web`. Стек слушает `http://<host>:80/`, но как открыть
+само приложение — см. раздел 5 (по умолчанию доступ только из Telegram).
 
-Проверка:
+Проверка, что стек поднялся:
 
 ```bash
 docker compose ps                       # все сервисы healthy
 curl -fsS http://localhost/health/ready # 200 OK
 docker compose logs -f parser           # «Telegram client started», обработка сообщений
 ```
+
+### 5. Открытие приложения: локально (dev) или как Mini App (prod)
+
+Стек поднимается одинаково, но «увидеть карту» можно двумя путями. По умолчанию
+API и WebSocket пускают **только трафик из Telegram** — в обычном браузере карта
+будет пустой/редиректнет.
+
+#### Вариант A — локальная проверка в браузере (dev)
+
+1. В `.env`: `TELEGRAM_VALIDATION_ENABLED=False`.
+2. `docker compose up -d --build` (или `docker compose restart core`, если стек уже запущен).
+3. Откройте <http://localhost/> на той же машине — карта с событиями.
+
+> ⚠️ В этом режиме авторизация выключена — это **только для локальной отладки**.
+> Не выставляйте такой стек в интернет.
+
+#### Вариант B — публичный Telegram Mini App (production)
+
+Telegram открывает WebApp только по HTTPS, а контейнер `web` отдаёт HTTP на `:80` —
+поэтому перед ним нужен HTTPS-фронт.
+
+1. **Поднимите HTTPS к `web:80`.** Без своего домена/проброса портов проще всего —
+   [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
+   (`cloudflared`, бесплатно, выдаёт адрес `https://…`). Классика со своим доменом —
+   reverse-proxy с авто-TLS ([Caddy](https://caddyserver.com/) или nginx + certbot),
+   проксирующий на `web:80`.
+2. В `.env`: `TELEGRAM_VALIDATION_ENABLED=True` (дефолт) и `WEBAPP_URL=https://<ваш-домен>`.
+3. Перезапустите: `docker compose up -d --build`.
+4. В [@BotFather](https://t.me/BotFather): `/mybots` → ваш бот → **Bot Settings →
+   Configure Mini App** → укажите URL `https://<ваш-домен>` (по желанию — тот же URL
+   на **Menu Button**).
+5. Откройте бота в Telegram, отправьте `/start` → кнопка «🌐 Открыть приложение»
+   запустит карту. `initData` проверяется по `BOT_TOKEN`.
 
 ### Остановка
 

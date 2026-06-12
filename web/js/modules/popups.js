@@ -166,17 +166,17 @@ function showLegendPopup() {
                     <td style="${iconCellStyle}">
                         <img src="/assets/images/bus.png" style="${imgStyle}" alt="Bus">
                     </td>
-                    <td style="${rowStyle}"><strong>Бус</strong> — бус, спринтеры, H1–H5</td>
+                    <td style="${rowStyle}"><strong>Бус</strong> — бус, вито, спринтер, сталкер...</td>
                 </tr>
                 <tr>
                     <td style="${iconCellStyle}">
                         <img src="/assets/images/cops.png" style="${imgStyle}" alt="Cops">
                     </td>
-                    <td style="${rowStyle}"><strong>Менты</strong> — полиция, патруль, мигалка</td>
+                    <td style="${rowStyle}"><strong>Менты</strong> — менты, патруль, люстра, мусра...</td>
                 </tr>
                 <tr>
                     <td style="${iconCellStyle} font-size: 28px; line-height: 32px;">⛔</td>
-                    <td style="${rowStyle}"><strong>Трафик</strong> — ДТП, пробки, блокпосты</td>
+                    <td style="${rowStyle}"><strong>Трафик</strong> — ДТП, пробка, блокпост, авария...</td>
                 </tr>
                 <tr>
                     <td style="${iconCellStyle}">
@@ -191,7 +191,7 @@ function showLegendPopup() {
         </p>
         <div style="padding-top: 16px; border-top: 1px solid var(--tg-hint-color, #e0e0e0);">
             <p style="margin: 0 0 10px 0; color: var(--tg-text-color, #000); font-size: 14px; line-height: 1.5;">
-                <strong style="color: #dc3545;">● Красный круг</strong> — точное место (перекресток либо объект)
+                <strong style="color: #dc3545;">● Красный круг/контур</strong> — точное место (перекресток либо объект)
             </p>
             <p style="margin: 0; color: var(--tg-text-color, #000); font-size: 14px; line-height: 1.5;">
                 <strong style="color: #007bff;">● Синяя линия</strong> — улица (без пересечений)

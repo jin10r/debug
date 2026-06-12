@@ -60,7 +60,6 @@ services:
     container_name: parser
     environment:
       # Только credentials/per-deployment URL — всё остальное в core/settings.py.
-      CHANNEL_ID: ${CHANNEL_ID}
       JWT_SECRET: ${JWT_SECRET}
     volumes:
       - ./parser/session.session:/app/parser/session.session:rw
@@ -139,7 +138,6 @@ services:
     environment:
       # Только credentials/per-deployment URL — всё остальное в core/settings.py.
       BOT_TOKEN: ${BOT_TOKEN}
-      CHANNEL_ID: ${CHANNEL_ID}
       JWT_SECRET: ${JWT_SECRET}
       WEBAPP_URL: ${WEBAPP_URL:-}
       REDIRECT_URL: ${REDIRECT_URL:-}

@@ -100,8 +100,10 @@ class AppConfig:
 
 @dataclass
 class BotConfig:
+    # channel_id захардкожен (как DB/Redis-параметры): per-deployment
+    # идентификатор канала мониторинга меняется правкой settings.py, не env.
     token: str
-    channel_id: str
+    channel_id: str = "-1002050105527"
     webapp_url: Optional[str] = None
     redirect_url: Optional[str] = None
 
@@ -272,49 +274,6 @@ def _get_required_secret(env: Env) -> str:
     return secret
 
 
-def _get_required_channel_id(env: Env) -> str:
-    """
-    Получить ID канала из переменных окружения.
-    
-    Требует обязательной установки CHANNEL_ID.
-    Проверяет формат Telegram channel ID (должен начинаться с -100).
-    
-    Raises:
-        ValueError: Если CHANNEL_ID не установлен или имеет неверный формат
-    """
-    channel_id = env.str("CHANNEL_ID", None)
-    
-    if channel_id is None:
-        # Provide helpful error message for Docker environment
-        logger.error("CHANNEL_ID is not set!")
-        
-        # Try to diagnose the issue by checking other env variables
-        try:
-            bot_token = env.str("BOT_TOKEN", "NOT_SET")
-            jwt_secret = env.str("JWT_SECRET", "NOT_SET")
-            
-            logger.error(f"Environment diagnosis: BOT_TOKEN present = {bot_token != 'NOT_SET'}, JWT_SECRET present = {jwt_secret != 'NOT_SET'}")
-        except Exception as e:
-            logger.error(f"Error checking environment: {e}")
-        
-        raise ValueError(
-            "CHANNEL_ID is not set! "
-            "This is a required setting for the Telegram channel parser. "
-            "Check that CHANNEL_ID is properly configured in your Docker environment. "
-            "For Docker: ensure CHANNEL_ID is in docker-compose.yml app service environment variables."
-        )
-    
-    # Проверка формата Telegram channel ID (должен начинаться с -100)
-    if not channel_id.startswith("-100"):
-        logger.warning(f"CHANNEL_ID has invalid format: {channel_id}")
-        raise ValueError(
-            f"CHANNEL_ID has invalid format! "
-            f"Telegram channel IDs should start with '-100'. Current value: {channel_id}"
-        )
-    
-    return channel_id
-
-
 def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> Settings:
     """Load settings — env читается ТОЛЬКО для credentials/per-deployment URL.
 
@@ -322,7 +281,8 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
     изменить калибровку матчера / параметры БД / прокси и т.п., правится
     `core/settings.py` напрямую (не env).
 
-    Keep-list env: BOT_TOKEN, CHANNEL_ID, WEBAPP_URL, REDIRECT_URL, JWT_SECRET.
+    Keep-list env: BOT_TOKEN, WEBAPP_URL, REDIRECT_URL, JWT_SECRET.
+    CHANNEL_ID захардкожен в BotConfig (не env).
     """
     env = Env()
     env.read_env(env_path)
@@ -342,7 +302,6 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
             db=DatabaseConfig(),
             bot=BotConfig(
                 token=env.str("BOT_TOKEN", ""),
-                channel_id=_get_required_channel_id(env),
                 webapp_url=env.str("WEBAPP_URL", None),
                 redirect_url=env.str("REDIRECT_URL", None),
             ),

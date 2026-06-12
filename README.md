@@ -98,16 +98,19 @@ cd survival_map
 ### 3. Конфигурация `.env`
 
 ```bash
-cp .env.example .env
+cp env.example .env
 ```
 
-Заполните (`.env.example` содержит только секреты и per-deployment URL; остальное захардкожено дефолтными значениями в [core/settings.py](core/settings.py)):
+**Перед запуском обязательно заполните параметры с «Обяз. = да» реальными
+значениями** — иначе приложение не стартует (`JWT_SECRET` валидируется на старте:
+≥32 символов, не плейсхолдер) или не пройдёт авторизация Telegram (`BOT_TOKEN`).
+`env.example` содержит только секреты и per-deployment URL; остальное захардкожено
+дефолтами в [core/settings.py](core/settings.py):
 
 | Переменная                    | Обяз. | Описание                                            |
 |-------------------------------|-------|-----------------------------------------------------|
 | `BOT_TOKEN`                   | да    | токен бота от @BotFather (для Mini App)             |
 | `JWT_SECRET`                  | да    | ≥32 символов: `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
-| `CHANNEL_ID`                  | да    | ID канала для мониторинга, формат `-100…`           |
 | `WEBAPP_URL` / `REDIRECT_URL` | нет   | публичные HTTPS-URL для Telegram WebApp             |
 | `TELEGRAM_VALIDATION_ENABLED` | нет   | по умолч. `True`; `False` — только для dev          |
 

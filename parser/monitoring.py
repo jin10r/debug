@@ -228,7 +228,9 @@ class ParserBot:
 
         # Хендлер целевого канала: только кладёт сообщение в очередь —
         # быстро, не блокирует апдейт-цикл pyrogram, ничего не теряет.
-        target_filter = filters.chat(int(self.channel_id)) & (filters.text | filters.caption)
+        target_filter = filters.chat(int(self.channel_id)) & (
+            filters.text | filters.caption | filters.photo
+        )
 
         @self.app.on_message(target_filter)
         async def handle_message(client: Client, message: Message):
@@ -343,6 +345,17 @@ class ParserBot:
         """
         if str(message.chat.id) != str(self.channel_id):
             logger.debug(f"Skipping message from wrong channel: {message.chat.id}")
+            return
+
+        # Спецификация: обрабатываем сообщения с текстом, подписью ИЛИ фото.
+        # Live-хендлер фильтрует на входе, но бэкфилл (_load_chat_history) кладёт
+        # в очередь ВСЕ сообщения истории без фильтра — этот guard делает оба
+        # пути единообразными: сообщения без text/caption/photo (видео/GIF/файл/
+        # стикер/сервисные) пропускаются. Голое фото проходит → ниже получит
+        # description 'без описания' (message_processor) и сохранённое фото
+        # (if message.photo).
+        if not (message.text or message.caption or message.photo):
+            logger.debug(f"Message {message.id}: no text/caption/photo, skipped")
             return
 
         start_time = datetime.now(timezone.utc)

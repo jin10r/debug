@@ -142,6 +142,17 @@ async def _run_pg_notify_listener(app: web.Application):
 async def on_startup(app: web.Application):
     """Actions to perform on application startup."""
     logger.info("--- ON_STARTUP CALLED ---")
+
+    # Предохранитель: при выключенной валидации /api/* и /ws принимают любого
+    # клиента (jwt_auth_middleware и _ws_authenticate уходят в dev-bypass).
+    # Это режим только для локальной разработки — громко предупреждаем, чтобы
+    # случайно не уехало в прод.
+    if not getattr(settings.app, 'telegram_validation_enabled', True):
+        logger.warning(
+            "⚠️  TELEGRAM_VALIDATION_ENABLED=False — валидация Telegram initData/JWT "
+            "ОТКЛЮЧЕНА: /api/* и /ws принимают ЛЮБОГО клиента. Только для локальной "
+            "разработки — НЕ включать в production."
+        )
     db_request: Request = app['db']
     bot: Bot = app['bot']
     dp: Dispatcher = app['dp']

@@ -29,17 +29,13 @@ class Token:
     text: str
     start: int
     stop: int
-    # True, если токену непосредственно предшествует '#' (тег вида #Name/##Name).
-    # Авторы канала так помечают улицы — это high-confidence сигнал для матчера
-    # (см. StreetMatcher: bonus к score + обход multiword-penalty).
-    is_anchored: bool = False
 
 
 def tokenize(text: str) -> List[Token]:
     """Список Token'ов: максимальные алфавитно-цифровые run'ы.
 
-    Помечает `is_anchored` у токенов, перед которыми (без пробела) стоит '#'
-    — хэштег-тег улицы. Сам '#' словом не становится (не алфавитно-цифровой).
+    Символ '#' словом не становится (не алфавитно-цифровой) и к моменту
+    токенизации уже удалён в preprocess_light — теги не влияют на токены.
 
     Склеивает пары [DIGIT, "я"] в один токен "Nя" (порядковое числительное
     с раздельным суффиксом: "5 я", "7-я" → "5я", "7я"), чтобы sliding-window
@@ -49,8 +45,7 @@ def tokenize(text: str) -> List[Token]:
     if not text:
         return []
     raw = [
-        Token(text=m.group(0), start=m.start(), stop=m.end(),
-              is_anchored=(m.start() > 0 and text[m.start() - 1] == '#'))
+        Token(text=m.group(0), start=m.start(), stop=m.end())
         for m in _WORD_RE.finditer(text)
     ]
     out: List[Token] = []
@@ -62,7 +57,7 @@ def tokenize(text: str) -> List[Token]:
                 and raw[i + 1].text.lower() == 'я'):
             next_t = raw[i + 1]
             out.append(Token(text=t.text + 'я', start=t.start,
-                             stop=next_t.stop, is_anchored=t.is_anchored))
+                             stop=next_t.stop))
             i += 2
         else:
             out.append(t)

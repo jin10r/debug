@@ -30,6 +30,11 @@ _TIME_RE = re.compile(r'\b([01]?\d|2[0-3])[:.][0-5]\d\b')
 # из-за чего аббревиатура блокпоста не совпадала с layer-keyword «бп» (traffic).
 # Схлопываем до старта токенизации.
 _BP_SLASH_RE = re.compile(r'\bб\s*[/\\]\s*п\b', re.IGNORECASE)
+# Хэштег-теги (#Name, ##keyword): авторы канала помечают ими слова, но тег —
+# НЕ доверенный якорь: тегированное слово не обязательно название объекта.
+# Символ '#' удаляется здесь, до токенизации/матчинга — само слово остаётся
+# обычным фуззи-кандидатом, но никакого «доверия тегу» больше нет.
+_HASH_RE = re.compile(r'#')
 _TAG_RE = re.compile(r'<[^>]+>')
 _NON_ALNUM_RE = re.compile(r'[^a-zA-Zа-яА-ЯёЁ0-9]')
 _SPACES_RE = re.compile(r'\s+')
@@ -106,9 +111,10 @@ def strip_emoji(text: str) -> str:
 
 
 def preprocess_light(text: str) -> str:
-    """Мягкая очистка: снять HTML, удалить таймстампы, нормализовать укр. буквы.
+    """Мягкая очистка: снять HTML, удалить таймстампы, теги '#', нормализовать укр. буквы.
 
     СОХРАНЯЕТ регистр и пунктуацию — результат уходит на фронтенд как description.
+    Символ '#' удаляется (тег — не доверенный якорь), но слово после него остаётся.
     Токенайзер (word_tokenizer.tokenize) сам режет по не-буквенным символам.
     """
     if not text:
@@ -118,6 +124,7 @@ def preprocess_light(text: str) -> str:
     text = _TAG_RE.sub(' ', text)
     text = _TIME_RE.sub(' ', text)
     text = _BP_SLASH_RE.sub('бп', text)
+    text = _HASH_RE.sub(' ', text)
     text = text.translate(_UA_TABLE)
     for pattern, repl in _UA_SUFFIX_FIXES:
         text = pattern.sub(repl, text)

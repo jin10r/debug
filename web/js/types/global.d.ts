@@ -134,13 +134,7 @@ declare global {
         bootstrapUI: () => void;
         getAuthHeaders: () => Record<string, string>;
         updateOnlineStatus: (isOnline: boolean) => void;
-        
-        // ==================== EVENT TRACKING ====================
-        
-        eventTracker: {
-            checkForNewEvents(events: Array<{ id: string | number }>): Array<{ id: string | number }>;
-        };
-        
+
         // ==================== MAP INSTANCES ====================
         
         currentMapInstance: L.Map | null;

@@ -168,13 +168,6 @@ export interface AsyncStorage {
 }
 
 /**
- * Event tracker interface
- */
-export interface EventTracker {
-    checkForNewEvents(events: Array<{ id: string | number }>): Array<{ id: string | number }>;
-}
-
-/**
  * Global window interface extension
  */
 declare global {
@@ -267,10 +260,7 @@ declare global {
         initializeWebSocket: () => void;
         bootstrapUI: () => void;
         getAuthHeaders: () => Record<string, string>;
-        
-        // Event tracking
-        eventTracker: EventTracker;
-        
+
         // Map instances
         currentMapInstance: any; // L.Map from leaflet
         markerClusterGroup: any; // L.MarkerClusterGroup

@@ -2,45 +2,6 @@
 // Оптимизированная версия - использует функции из common.js
 
 /**
- * Трекер новых событий
- */
-class EventTracker {
-    constructor() {
-        this.knownEventIds = new Set();
-        this.isFirstLoad = true;
-    }
-
-    checkForNewEvents(events) {
-        if (this.isFirstLoad) {
-            events.forEach(event => {
-                if (event.id) this.knownEventIds.add(event.id);
-            });
-            this.isFirstLoad = false;
-            return [];
-        }
-
-        const newEvents = [];
-        events.forEach(event => {
-            if (event.id && !this.knownEventIds.has(event.id)) {
-                newEvents.push(event);
-                this.knownEventIds.add(event.id);
-            }
-        });
-
-        return newEvents;
-    }
-
-    cleanup(currentEventIds) {
-        const currentIds = new Set(currentEventIds);
-        this.knownEventIds = new Set(
-            [...this.knownEventIds].filter(id => currentIds.has(id))
-        );
-    }
-}
-
-const eventTracker = new EventTracker();
-
-/**
  * Обрабатывает новые события: показывает уведомление и вибрацию
  */
 function handleNewEvents(events) {
@@ -74,6 +35,5 @@ function handleNewEvents(events) {
 }
 
 // Экспортируем глобально
-window.eventTracker = eventTracker;
 window.handleNewEvents = handleNewEvents;
 

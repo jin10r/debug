@@ -104,17 +104,31 @@ window.createPolyline = function(map, coords, properties) {
     return [polyline, marker];
 };
 
+// Общий стиль заливки для (мульти)полигонов событий.
+const _POLYGON_STYLE = { color: 'red', weight: 2, fillColor: '#f03', fillOpacity: 0.2 };
+
 window.createPolygon = function(map, coords, properties) {
-    const latLngs = coords[0].map(c => L.latLng(c[1], c[0]));
-    const polygon = L.polygon(latLngs, {
-        color: 'red',
-        weight: 2,
-        fillColor: '#f03',
-        fillOpacity: 0.2
-    });
+    // GeoJSON Polygon: coords = [ outerRing, hole1, ... ]. Передаём ВСЕ кольца
+    // (поддержка дыр), а не только внешнее (было coords[0] — дыры терялись).
+    const latLngs = coords.map(ring => ring.map(c => L.latLng(c[1], c[0])));
+    const polygon = L.polygon(latLngs, _POLYGON_STYLE);
     polygon.bindPopup(window.createPopupContent(properties));
 
-    const marker = window.createMarker(map, L.latLngBounds(latLngs).getCenter(), properties);
+    const marker = window.createMarker(map, polygon.getBounds().getCenter(), properties);
+    return [polygon, marker];
+};
+
+window.createMultiPolygon = function(map, coords, properties) {
+    // GeoJSON MultiPolygon: coords = [ polygon, ... ], где polygon = [ ring, ... ].
+    // L.polygon принимает массив полигонов (каждый — массив колец) → рисуем как
+    // единый мультиполигон, сохраняя дыры. Один маркер в центре общих границ.
+    const latLngs = coords.map(polygon =>
+        polygon.map(ring => ring.map(c => L.latLng(c[1], c[0])))
+    );
+    const polygon = L.polygon(latLngs, _POLYGON_STYLE);
+    polygon.bindPopup(window.createPopupContent(properties));
+
+    const marker = window.createMarker(map, polygon.getBounds().getCenter(), properties);
     return [polygon, marker];
 };
 

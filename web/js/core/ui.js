@@ -531,6 +531,9 @@ function addRenderedEvent(id, feature, map) {
         case 'Polygon':
             elements = window.createPolygon(map, feature.geometry.coordinates, feature.properties);
             break;
+        case 'MultiPolygon':
+            elements = window.createMultiPolygon(map, feature.geometry.coordinates, feature.properties);
+            break;
         default:
             console.warn('[renderFromCache] Unsupported geometry type:', feature.geometry.type);
             return;

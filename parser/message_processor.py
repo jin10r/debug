@@ -36,6 +36,83 @@ except Exception:
 logger = logging.getLogger(__name__)
 
 
+# Общий хвост INSERT-CTE: bump версии events_meta, pg_notify('events_new') и
+# возврат id/layer/strategy вставленной строки. Используется обеими ветками
+# вставки (готовый WKT и process_candidates) — payload уведомления описан в
+# одном месте. Все три побочных эффекта пропускаются при ON CONFLICT (дубль)
+# через EXISTS/FROM inserted. `_force_notify` форсирует выполнение notify_call.
+_EVENT_INSERT_TAIL = """
+    meta_upd AS (
+        UPDATE events_meta
+        SET version = version + 1,
+            updated_at = now(),
+            max_event_id = (SELECT id FROM inserted)
+        WHERE id = 1 AND EXISTS (SELECT 1 FROM inserted)
+        RETURNING 1
+    ),
+    notify_call AS (
+        SELECT pg_notify(
+            'events_new',
+            jsonb_build_object(
+                'type', 'Feature',
+                'geometry', ST_AsGeoJSON(i.geom)::jsonb,
+                'properties', jsonb_build_object(
+                    'id', i.id,
+                    'layer', i.layer,
+                    'strategy', i.strategy,
+                    'description', i.description,
+                    'photo_url', i.photo_url,
+                    'matches', i.matches,
+                    'time', to_char(i.event_time AT TIME ZONE 'UTC',
+                                    'YYYY-MM-DD"T"HH24:MI:SS"+00:00"')
+                )
+            )::text
+        )
+        FROM inserted i
+    )
+    SELECT i.id, i.layer, i.strategy
+    FROM inserted i,
+         (SELECT count(*) FROM notify_call) _force_notify
+"""
+
+# Ветка с готовым WKT (random / пустой / длинный / нет матчей улиц):
+# strategy и geom известны в Python, matches всегда '[]'.
+_INSERT_EVENT_SIMPLE = """
+    WITH inserted AS (
+        INSERT INTO events
+            (message_id, event_time, description, photo_url,
+             layer, strategy, geom, matches)
+        VALUES ($1, $2, $3, $4, $5, $6, ST_GeomFromText($7, 4326), '[]'::jsonb)
+        ON CONFLICT (message_id) DO NOTHING
+        RETURNING id, event_time, geom, layer, strategy, description,
+                  photo_url, matches
+    ),
+""" + _EVENT_INSERT_TAIL
+
+# Матч-ветка: geom/strategy/matches приходят из process_candidates ВНУТРИ того
+# же statement — один roundtrip вместо двух (был отдельный SELECT + INSERT).
+_INSERT_EVENT_FROM_CANDIDATES = """
+    WITH pc AS (
+        SELECT result_geom, result_strategy, result_matches
+        FROM process_candidates(
+            $6::int[], $7::double precision[], $8::float, $9::text[]
+        )
+    ),
+    inserted AS (
+        INSERT INTO events
+            (message_id, event_time, description, photo_url,
+             layer, strategy, geom, matches)
+        SELECT $1, $2, $3, $4, $5,
+               pc.result_strategy, pc.result_geom, pc.result_matches
+        FROM pc
+        WHERE pc.result_geom IS NOT NULL
+        ON CONFLICT (message_id) DO NOTHING
+        RETURNING id, event_time, geom, layer, strategy, description,
+                  photo_url, matches
+    ),
+""" + _EVENT_INSERT_TAIL
+
+
 class MessageProcessor:
     """Процессор сообщений Telegram: предобработка, классификация, сохранение."""
 
@@ -164,9 +241,8 @@ class MessageProcessor:
         tokens = tokenize(preserved)
         lemmas = self.morph.lemmatize_tokens(tokens)
 
-        # Определение слоя — на готовых леммах.
-        # tokens передаётся для хэштег-override (##блокпост бьёт soft-keyword cops).
-        layer = self.layer_classifier.classify(lemmas, tokens=tokens)
+        # Определение слоя — на готовых леммах (теги '#' уже убраны в preprocess).
+        layer = self.layer_classifier.classify(lemmas)
 
         # Пустой или слишком длинный текст — поиск улиц пропускается.
         max_text_length = (
@@ -176,19 +252,22 @@ class MessageProcessor:
         if not preserved or len(preserved) > max_text_length:
             if not preserved:
                 description = 'без описания'
-                logger.info(f"Message {message_id}: empty text → random point")
+                logger.debug(f"Message {message_id}: empty text → random point")
             else:
                 description = 'слишком длинное сообщение не является релевантной локацией'
                 logger.warning(
                     f"Message {message_id}: text too long ({len(preserved)}) → random point"
                 )
-            return await self._insert_event(
-                message_id=message_id, event_time=event_time, description=description,
-                photo_path=photo_path, layer=layer, strategy='random',
-                geom_wkt=self._generate_random_point_in_question_overlay(),
+            return self._enrich(
+                await self._insert_event(
+                    message_id=message_id, event_time=event_time, description=description,
+                    photo_path=photo_path, layer=layer, strategy='random',
+                    geom_wkt=self._generate_random_point_in_question_overlay(),
+                ),
+                tokens=tokens, street_ids=[],
             )
 
-        logger.info(f"Message {message_id}: street search (tokens={len(tokens)})")
+        logger.debug(f"Message {message_id}: street search (tokens={len(tokens)})")
         entities = self.matcher.find_streets(tokens=tokens, lemmas=lemmas)
 
         street_ids: list = []
@@ -202,11 +281,14 @@ class MessageProcessor:
 
         # Улиц не нашлось — случайная точка.
         if not street_ids:
-            logger.info(f"Message {message_id}: no street matches → random point")
-            return await self._insert_event(
-                message_id=message_id, event_time=event_time, description=preserved,
-                photo_path=photo_path, layer=layer, strategy='random',
-                geom_wkt=self._generate_random_point_in_question_overlay(),
+            logger.debug(f"Message {message_id}: no street matches → random point")
+            return self._enrich(
+                await self._insert_event(
+                    message_id=message_id, event_time=event_time, description=preserved,
+                    photo_path=photo_path, layer=layer, strategy='random',
+                    geom_wkt=self._generate_random_point_in_question_overlay(),
+                ),
+                tokens=tokens, street_ids=street_ids,
             )
 
         # Улицы найдены — геометрия и стратегия через process_candidates.
@@ -215,115 +297,87 @@ class MessageProcessor:
             settings.similarity.pseudo_intersection_radius_meters
             if settings and settings.similarity else 150.0
         )
-        logger.info(
+        logger.debug(
             f"Message {message_id}: {len(street_ids)} streets matched: {street_ids} "
             f"(pseudo_radius={pseudo_radius}m)"
         )
-        async with self.db_pool.acquire() as conn:
-            scores_array = [float(s) for s in street_scores]
-            pc_rows = await conn.fetch(
-                """
-                SELECT result_strategy,
-                       result_matches,
-                       ST_AsText(result_geom) AS geom_wkt
-                FROM process_candidates($1::int[], $2::double precision[], $3::float, $4::text[])
-                """,
-                street_ids, scores_array, pseudo_radius, street_texts,
-            )
-            if not pc_rows or pc_rows[0]['geom_wkt'] is None:
-                logger.warning(f"Message {message_id}: process_candidates returned no geometry")
-                return None
-
-            pc = pc_rows[0]
-            return await self._insert_event(
+        # process_candidates вычисляется ВНУТРИ INSERT-CTE — один roundtrip.
+        return self._enrich(
+            await self._insert_event_from_candidates(
                 message_id=message_id, event_time=event_time, description=preserved,
-                photo_path=photo_path, layer=layer, strategy=pc['result_strategy'],
-                geom_wkt=pc['geom_wkt'], matches=pc['result_matches'], conn=conn,
-            )
+                photo_path=photo_path, layer=layer,
+                street_ids=street_ids, street_scores=street_scores,
+                street_texts=street_texts, pseudo_radius=pseudo_radius,
+            ),
+            tokens=tokens, street_ids=street_ids,
+        )
+
+    @staticmethod
+    def _enrich(
+        result: Optional[Dict[str, Any]], *, tokens: list, street_ids: list
+    ) -> Optional[Dict[str, Any]]:
+        """Дополнить ненулевой результат метой обработки для итогового лога monitoring."""
+        if result is not None:
+            result['tokens'] = len(tokens)
+            result['streets_matched'] = len(street_ids)
+            result['street_ids'] = street_ids
+        return result
 
     async def _insert_event(
         self, *, message_id: int, event_time: datetime, description: str,
         photo_path: Optional[str], layer: str, strategy: str, geom_wkt: str,
-        matches: Optional[Any] = None, conn: Optional[asyncpg.Connection] = None,
     ) -> Optional[Dict[str, Any]]:
-        """Идемпотентно вставить событие, обновить мету, оповестить WebSocket.
+        """Вставить событие с готовой WKT-геометрией (random/пустой/нет матчей).
 
-        Объединяет три ранее дублировавшихся блока INSERT. Вставка с
-        ON CONFLICT (message_id) DO NOTHING: при повторе RETURNING пуст — это
-        дубль, возвращается None (не ошибка). Центроид геометрии вычисляется в
-        RETURNING и используется как точка для pg_notify('events_new').
+        strategy и geom известны в Python; matches всегда пуст. Делегирует
+        общий INSERT-CTE (_INSERT_EVENT_SIMPLE) в _run_insert.
         """
-        matches_json = matches if matches is not None else '[]'
+        return await self._run_insert(
+            _INSERT_EVENT_SIMPLE,
+            (message_id, event_time, description, photo_path, layer, strategy, geom_wkt),
+            message_id=message_id,
+        )
 
-        async def _run(c: asyncpg.Connection) -> Optional[Dict[str, Any]]:
-            # Один roundtrip вместо 3: INSERT events + UPDATE events_meta +
-            # pg_notify в одном CTE-statement. PostgreSQL гарантирует
-            # transactional atomicity. Все три побочных эффекта (meta-update,
-            # notify) пропускаются если ON CONFLICT (дубль) — guard через
-            # EXISTS (SELECT 1 FROM inserted).
-            row = await c.fetchrow(
-                """
-                WITH inserted AS (
-                    INSERT INTO events
-                        (message_id, event_time, description, photo_url,
-                         layer, strategy, geom, matches)
-                    VALUES ($1, $2, $3, $4, $5, $6, ST_GeomFromText($7, 4326), $8::jsonb)
-                    ON CONFLICT (message_id) DO NOTHING
-                    RETURNING id, event_time, geom, layer, strategy, description,
-                              photo_url, matches
-                ),
-                meta_upd AS (
-                    UPDATE events_meta
-                    SET version = version + 1,
-                        updated_at = now(),
-                        max_event_id = (SELECT id FROM inserted)
-                    WHERE id = 1 AND EXISTS (SELECT 1 FROM inserted)
-                    RETURNING 1
-                ),
-                notify_call AS (
-                    SELECT pg_notify(
-                        'events_new',
-                        jsonb_build_object(
-                            'type', 'Feature',
-                            'geometry', ST_AsGeoJSON(i.geom)::jsonb,
-                            'properties', jsonb_build_object(
-                                'id', i.id,
-                                'layer', i.layer,
-                                'strategy', i.strategy,
-                                'description', i.description,
-                                'photo_url', i.photo_url,
-                                'matches', i.matches,
-                                'time', to_char(i.event_time AT TIME ZONE 'UTC',
-                                                'YYYY-MM-DD"T"HH24:MI:SS"+00:00"')
-                            )
-                        )::text
-                    )
-                    FROM inserted i
-                )
-                SELECT i.id,
-                       ST_AsGeoJSON(i.geom)::text AS geom_json,
-                       ST_X(ST_Centroid(i.geom)) AS lng,
-                       ST_Y(ST_Centroid(i.geom)) AS lat
-                FROM inserted i,
-                     (SELECT count(*) FROM notify_call) _force_notify
-                """,
-                message_id, event_time, description, photo_path,
-                layer, strategy, geom_wkt, matches_json,
-            )
-            if row is None:
-                logger.info(f"Message {message_id}: duplicate, skipped")
-                return None
+    async def _insert_event_from_candidates(
+        self, *, message_id: int, event_time: datetime, description: str,
+        photo_path: Optional[str], layer: str, street_ids: list,
+        street_scores: list, street_texts: list, pseudo_radius: float,
+    ) -> Optional[Dict[str, Any]]:
+        """Вставить событие, посчитав геометрию через process_candidates в том же
+        запросе — один roundtrip к БД (раньше было SELECT + отдельный INSERT)."""
+        scores_array = [float(s) for s in street_scores]
+        return await self._run_insert(
+            _INSERT_EVENT_FROM_CANDIDATES,
+            (message_id, event_time, description, photo_path, layer,
+             street_ids, scores_array, pseudo_radius, street_texts),
+            message_id=message_id,
+        )
 
-            logger.info(
-                f"Message {message_id}: event {row['id']} saved "
-                f"(layer={layer}, strategy={strategy})"
-            )
-            return {'event_id': row['id'], 'layer': layer, 'strategy': strategy}
+    async def _run_insert(
+        self, sql: str, params: tuple, *, message_id: int,
+    ) -> Optional[Dict[str, Any]]:
+        """Выполнить INSERT-CTE (одним roundtrip'ом: INSERT + meta + pg_notify).
 
-        if conn is not None:
-            return await _run(conn)
+        Вставка идемпотентна (ON CONFLICT (message_id) DO NOTHING): при повторе
+        RETURNING пуст → fetchrow вернёт None → это дубль или пустая геометрия,
+        возвращаем None (не ошибка). layer/strategy читаются из вставленной
+        строки — корректны для обеих веток (в т.ч. когда strategy пришла из
+        process_candidates).
+        """
         async with self.db_pool.acquire() as c:
-            return await _run(c)
+            row = await c.fetchrow(sql, *params)
+        if row is None:
+            logger.debug(f"Message {message_id}: duplicate or no geometry, skipped")
+            return None
+        logger.debug(
+            f"Message {message_id}: event {row['id']} saved "
+            f"(layer={row['layer']}, strategy={row['strategy']})"
+        )
+        return {
+            'event_id': row['id'],
+            'layer': row['layer'],
+            'strategy': row['strategy'],
+        }
 
     def _generate_random_point_in_question_overlay(self) -> str:
         """Сгенерировать случайную точку в круге question_overlay (WKT POINT)."""

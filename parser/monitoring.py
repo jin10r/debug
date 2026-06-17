@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
 
+import asyncpg
 from pyrogram import Client, filters
 from pyrogram.types import Message
 
@@ -50,6 +51,23 @@ logger = logging.getLogger(__name__)
 # сразу при получении (см. ParserBot._to_kiev).
 KIEV_TZ = ZoneInfo('Europe/Kiev')
 
+# Transient-ошибки БД/сети: их стоит дольше ретраить (всплеск нагрузки, рестарт
+# postgres, network blip). Прочие (ошибки данных и т.п.) — permanent, сдаёмся
+# быстро и логируем для recovery через бэкфилл.
+_TRANSIENT_ERRORS = (
+    asyncpg.PostgresConnectionError,
+    asyncpg.exceptions.TooManyConnectionsError,
+    asyncpg.exceptions.CannotConnectNowError,
+    asyncpg.InterfaceError,        # "connection is closed" / pool недоступен
+    ConnectionError,
+    OSError,
+    asyncio.TimeoutError,
+)
+
+# Конкурентность воркеров капается, чтобы N коннектов не исчерпали asyncpg pool
+# (pool_max_size=20): часть зарезервирована под listen-коннекты и core.
+_MAX_WORKER_CONCURRENCY = 8
+
 
 class ParserBot:
     """Бот для парсинга Telegram каналов."""
@@ -75,11 +93,18 @@ class ParserBot:
         self.events_media_dir = settings.parser.events_media_dir
 
         # Очередь обработки: pyrogram-хендлер только кладёт сообщение в очередь,
-        # единственный воркер разбирает её последовательно — без гонок и потерь.
+        # пул воркеров разбирает её конкурентно (CPU одного сообщения
+        # перекрывается с DB-I/O другого). Конкурентность безопасна: вставки
+        # идемпотентны (ON CONFLICT), порядок не важен, asyncpg-pool потокобезопасен.
         self._message_queue: asyncio.Queue = asyncio.Queue(
             maxsize=settings.parser.message_queue_maxsize
         )
-        self._worker_task: Optional[asyncio.Task] = None
+        self._worker_concurrency = max(
+            1, min(_MAX_WORKER_CONCURRENCY, settings.parser.worker_concurrency)
+        )
+        self._worker_tasks: list[asyncio.Task] = []
+        self._worker_seq = 0  # монотонный id воркеров (для логов и respawn)
+        self._shutdown_started = False  # идемпотентность shutdown()
 
     async def initialize(self) -> bool:
         """Инициализация компонентов: БД → процессор → Telegram-клиент."""
@@ -216,13 +241,13 @@ class ParserBot:
 
         self._running = True
 
-        # Обработчики сигналов
+        # Обработчики сигналов: только ЗАПРАШИВАЮТ остановку (sync, без задачи).
+        # Реальный shutdown() выполняется ровно один раз в main()/finally после
+        # выхода из heartbeat-цикла — иначе asyncio.run при завершении main мог
+        # бы оборвать ещё идущий graceful-drain, запущенный из обработчика.
         loop = asyncio.get_event_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(
-                sig,
-                lambda: asyncio.create_task(self.shutdown())
-            )
+            loop.add_signal_handler(sig, self._request_stop)
 
         logger.info("🚀 Starting parser bot...")
 
@@ -234,7 +259,13 @@ class ParserBot:
 
         @self.app.on_message(target_filter)
         async def handle_message(client: Client, message: Message):
-            """Live-сообщение целевого канала → в очередь обработки."""
+            """Live-сообщение целевого канала → в очередь обработки.
+
+            При shutdown (_running=False) новые сообщения не принимаем — очередь
+            должна слиться, а пропущенные подберёт бэкфилл на следующем старте.
+            """
+            if not self._running:
+                return
             await self._message_queue.put(message)
 
         # Клиент уже запущен в initialize(), проверяем состояние
@@ -245,8 +276,10 @@ class ParserBot:
 
             logger.info("✅ Telegram client already running")
 
-            # Воркер очереди стартует до бэкфилла — сразу разбирает сообщения.
-            self._worker_task = asyncio.create_task(self._message_worker())
+            # Пул воркеров стартует до бэкфилла — сразу разбирает очередь.
+            for _ in range(self._worker_concurrency):
+                self._spawn_worker()
+            logger.info(f"Started {self._worker_concurrency} queue worker(s)")
 
             # Бэкфилл истории наполняет ту же очередь; пересечение с live
             # снимается дедупликацией по message_id (ON CONFLICT в БД).
@@ -288,40 +321,100 @@ class ParserBot:
         except OSError:
             pass
 
-    async def _message_worker(self):
-        """Единственный воркер очереди — последовательная обработка сообщений.
+    def _spawn_worker(self) -> asyncio.Task:
+        """Создать задачу-воркер и навесить супервизор (respawn при падении)."""
+        worker_id = self._worker_seq
+        self._worker_seq += 1
+        task = asyncio.create_task(self._message_worker(worker_id))
+        task.add_done_callback(self._supervise_worker)
+        self._worker_tasks.append(task)
+        return task
 
-        Последовательность исключает гонки на пуле БД и сохраняет порядок;
-        очередь буферизует всплески, поэтому сообщения не теряются.
-        Завершается отменой задачи (CancelledError) при shutdown.
+    def _supervise_worker(self, task: asyncio.Task) -> None:
+        """Done-callback воркера: при НЕОЖИДАННОМ завершении (не shutdown) —
+        critical-лог и respawn, чтобы конвейер не вставал молча.
+
+        Воркер спроектирован так, что не умирает из-за ошибок обработки
+        (см. _message_worker), поэтому это защита от непредвиденного.
         """
-        logger.info("Message queue worker started")
+        if not self._running:
+            return  # ожидаемая отмена при shutdown
+        try:
+            exc = task.exception()
+        except asyncio.CancelledError:
+            return
+        logger.critical(
+            f"Queue worker died unexpectedly ({exc!r}) — respawning",
+            extra={'extra_data': {'error_type': type(exc).__name__ if exc else None}},
+        )
+        self._spawn_worker()
+
+    async def _message_worker(self, worker_id: int):
+        """Воркер очереди — обрабатывает сообщения из общей очереди.
+
+        Несколько воркеров работают конкурентно; порядок не важен, вставки
+        идемпотентны. Воркер НЕ умирает из-за ошибки обработки одного сообщения
+        (страховочный except) — завершается только отменой (CancelledError) при
+        shutdown. task_done() в finally обязателен для корректного queue.join().
+        """
+        logger.info(f"Message queue worker {worker_id} started")
         while True:
             message = await self._message_queue.get()
             try:
                 await self._process_with_retry(message)
+            except Exception as e:
+                # _process_with_retry сам гасит ошибки обработки; это последний
+                # рубеж, чтобы воркер пережил даже непредвиденный сбой.
+                # CancelledError — BaseException, сюда не попадает: пробросится
+                # дальше после finally (корректное завершение при shutdown).
+                self._errors += 1
+                logger.error(f"Worker {worker_id}: unhandled error: {e}")
             finally:
                 self._message_queue.task_done()
 
-    async def _process_with_retry(self, message: Message, attempts: int = 3):
-        """Обработать сообщение с ретраями (повторы идемпотентны — ON CONFLICT)."""
-        for attempt in range(1, attempts + 1):
+    async def _process_with_retry(self, message: Message):
+        """Обработать сообщение с ретраями (повторы идемпотентны — ON CONFLICT).
+
+        Transient-ошибки (БД/сеть) ретраятся дольше с capped backoff; permanent
+        (данные и пр.) — быстро сдаёмся. Финальный отказ логируется структурно
+        с message_id — de-facto dead-letter лог для recovery через бэкфилл.
+        """
+        transient_attempts = 8   # пережить рестарт postgres / всплеск нагрузки
+        permanent_attempts = 3
+        max_backoff = 30
+        attempt = 0
+        while True:
+            attempt += 1
             try:
                 await self._process_message(message)
                 return
             except Exception as e:
-                if attempt < attempts:
-                    delay = 2 ** attempt
+                transient = isinstance(e, _TRANSIENT_ERRORS)
+                limit = transient_attempts if transient else permanent_attempts
+                if attempt < limit:
+                    delay = min(2 ** attempt, max_backoff)
                     logger.warning(
-                        f"Message {message.id}: attempt {attempt}/{attempts} "
-                        f"failed ({e}); retry in {delay}s"
+                        f"Message {message.id}: attempt {attempt}/{limit} failed "
+                        f"({type(e).__name__}: {e}); retry in {delay}s "
+                        f"[{'transient' if transient else 'permanent'}]"
                     )
                     await asyncio.sleep(delay)
                 else:
                     self._errors += 1
                     logger.error(
-                        f"Message {message.id}: giving up after {attempts} attempts: {e}"
+                        f"message_processing_failed message_id={message.id} "
+                        f"after {attempt} attempts: {type(e).__name__}: {e}",
+                        extra={'extra_data': {
+                            'event': 'message_processing_failed',
+                            'message_id': getattr(message, 'id', None),
+                            'attempts': attempt,
+                            'transient': transient,
+                            'error_type': type(e).__name__,
+                            'error': str(e),
+                            'text_preview': (self._extract_text(message) or '')[:120],
+                        }},
                     )
+                    return
 
     @staticmethod
     def _extract_text(message) -> str:
@@ -378,7 +471,10 @@ class ParserBot:
             elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
             logger.info(
                 f"✅ Message {message_id} processed in {elapsed:.2f}s: "
-                f"event_id={result['event_id']}, layer={result['layer']}"
+                f"event_id={result['event_id']}, layer={result['layer']}, "
+                f"strategy={result.get('strategy', '?')}, "
+                f"streets={result.get('streets_matched', 0)}, "
+                f"tokens={result.get('tokens', 0)}"
             )
         else:
             # None = дубликат (ON CONFLICT) либо пустая геометрия — не ошибка.
@@ -535,20 +631,59 @@ class ParserBot:
             except asyncio.CancelledError:
                 raise
 
-    async def shutdown(self):
-        """Корректное завершение работы."""
-        if not self._running:
+    def _request_stop(self):
+        """Запросить остановку (обработчик SIGTERM/SIGINT).
+
+        Только выставляет флаг: heartbeat-loop в start() это заметит, выйдет, и
+        main() выполнит единственный shutdown() в finally. Хендлер сообщений при
+        _running=False перестаёт принимать новые сообщения.
+        """
+        logger.info("Stop signal received — requesting graceful shutdown")
+        self._running = False
+
+    async def shutdown(self, drain_timeout: float = 20.0):
+        """Корректное завершение: сначала слить очередь, потом гасить сервисы.
+
+        Порядок важен:
+          1. _running=False — хендлер перестаёт принимать live-сообщения,
+             heartbeat-loop в start() завершается.
+          2. Дренаж очереди (queue.join с таймаутом) — воркеры и Telegram-клиент
+             ещё живы, поэтому буфер дообрабатывается, в т.ч. скачивание фото.
+          3. Отмена воркеров и listener'а, остановка клиента, закрытие БД.
+        Недослитое (при таймауте) восстановимо бэкфиллом на следующем старте.
+
+        Идемпотентно по _shutdown_started (а не по _running): сигнал уже мог
+        выставить _running=False, но teardown должен пройти ровно один раз.
+        """
+        if self._shutdown_started:
             return
+        self._shutdown_started = True
 
         logger.info("Shutting down parser...")
         self._running = False
 
-        # Останавливаем воркер очереди и слушатель events_cleaned.
-        for task in (self._worker_task, self._cleanup_listener_task):
-            if task and not task.done():
-                task.cancel()
+        # 2. Дренаж очереди в пределах grace-period.
+        if self._worker_tasks and not self._message_queue.empty():
+            pending = self._message_queue.qsize()
+            logger.info(f"Draining message queue ({pending} buffered)...")
+            try:
+                await asyncio.wait_for(self._message_queue.join(), timeout=drain_timeout)
+                logger.info("Message queue drained")
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"Queue drain timed out, {self._message_queue.qsize()} message(s) "
+                    "left unprocessed (recoverable via backfill on restart)"
+                )
 
-        # Останавливаем Telegram клиента
+        # 3a. Останавливаем воркеры и слушатель events_cleaned.
+        tasks = [t for t in (*self._worker_tasks, self._cleanup_listener_task)
+                 if t and not t.done()]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+        # 3b. Останавливаем Telegram клиента
         if self.app:
             try:
                 await self.app.stop()
@@ -556,11 +691,11 @@ class ParserBot:
             except Exception as e:
                 logger.error(f"Error stopping Telegram client: {e}")
 
-        # Закрываем процессор
+        # 3c. Закрываем процессор
         if self.processor:
             await self.processor.close()
 
-        # Закрываем БД
+        # 3d. Закрываем БД
         if self.db:
             await self.db.close()
 

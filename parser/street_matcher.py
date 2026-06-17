@@ -269,7 +269,7 @@ class StreetMatcher:
         source_stats = {}
         for r in results:
             source_stats[r['source']] = source_stats.get(r['source'], 0) + 1
-        logger.info(
+        logger.debug(
             f"[Street] Found {len(results)} (sources={source_stats}): "
             f"{[(r['matched_name'], round(r['score'], 2), r['source']) for r in results]}"
         )

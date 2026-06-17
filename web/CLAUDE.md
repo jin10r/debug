@@ -3,10 +3,12 @@
 The frontend (`web/`) is a standalone PWA microservice: a Telegram Mini App map
 of events. Vanilla TypeScript, no UI framework. Webpack compiles `js/**` entry
 points to `dist/js/**`; nginx serves the static result. State lives in a single
-zustand store (`js/core/store.ts`); the map is **MapLibre GL JS** (native —
-Leaflet has been removed entirely). Vector tiles from OpenFreeMap positron with
-a custom Telegram palette and all labels hidden. GeoJSON sources power all
-feature rendering; `renderFromCache` calls `source.setData()` on every update.
+zustand store (`js/core/store.ts`); the map framework is **Leaflet** (`L.map`),
+with a **MapLibre GL vector-tile basemap** mounted as a Leaflet layer via
+`maplibre-gl-leaflet` (`L.maplibreGL`) — OpenFreeMap positron tiles with a custom
+Telegram palette and labels hidden. Events render as **per-feature Leaflet layers**
+(markers/circles/polylines/polygons), not GeoJSON `setData` sources; `renderFromCache`
+(`js/core/ui.js`) does an incremental id-keyed diff over those layers.
 
 These 8 rules are the architectural contract. Any frontend change must keep all
 of them true.
@@ -61,23 +63,30 @@ and disappear from the map. TTL keeps the local cache from growing unbounded.
 
 ## 7. Optimised for Telegram WebView
 
-Target slow Telegram WebView, not just desktop browsers. Render incrementally:
-MapLibre GeoJSON sources (`events-points` with `cluster: true`, `events-geo`)
-are created once at boot, then `renderFromCache` calls `source.setData()` with
-the full filtered FeatureCollection on every update — no per-object diffing,
-no layer recreation. No timing-based hacks (`setTimeout`-forced renders) —
-rendering must be driven reactively by store changes. Keep the main thread
-responsive; defer heavy work with `requestAnimationFrame`. The MapLibre basemap
-style is re-themed via `setPaintProperty` (day/night) — never `setStyle`, never
-recreated, so GeoJSON layers on top stay untouched.
+Target slow Telegram WebView, not just desktop browsers. The map framework is
+**Leaflet**; the basemap is a MapLibre GL vector-tile layer mounted via
+`maplibre-gl-leaflet` (libs loaded in `map.html`). Events render as per-feature
+Leaflet layers built by `window.create{Circle,Polyline,Polygon,MultiPolygon}`
+(`js/core/map.js`), grouped into three layer groups created once at boot.
 
-**Layer map:**
-| Source | Layers | Purpose |
-|--------|--------|---------|
-| `events-points` | `clusters`, `cluster-count`, `unclustered-points` | Markers + cluster circles |
-| `events-geo` | `geo-polygon-fill`, `geo-polygon-line`, `geo-line`, `geo-accuracy-circle` | Geometry + accuracy circles |
-| `overlay-question` | `overlay-question-layer` | Question overlay image |
-| `overlay-ad` | `overlay-ad-layer` | Banner ad image |
+Render incrementally: `renderFromCache` (`js/core/ui.js`) keeps an id→layers map
+(`renderedById`) and **diffs** the filtered feature set — adds new ids, removes
+dropped ids, re-creates only changed features, skips unchanged — instead of
+rebuilding everything. Rendering is driven reactively by store changes via
+`event_manager.ts` (one `renderFromCache` per `requestAnimationFrame`); no
+timing-based hacks (`setTimeout`-forced renders). Keep the main thread
+responsive; defer heavy work with `requestAnimationFrame`.
+
+**Layer groups (Leaflet):**
+| Group | Holds | Fed by |
+|-------|-------|--------|
+| `markerClusterGroup` | event markers + cluster circles (`chunkedLoading`) | non-random Point markers |
+| `geometryLayerGroup` | accuracy circles (200 m), polylines, polygons, multipolygons | LineString / Polygon / MultiPolygon + точные Point-круги |
+| `randomMarkersGroup` | unclustered markers | events with `strategy === 'random'` |
+
+`addRenderedEvent`'s geometry `switch` must cover every type the backend can emit
+(`Point`/`LineString`/`Polygon`/`MultiPolygon`) — an unhandled type silently drops
+the event.
 
 ## 8. Lightweight final image
 

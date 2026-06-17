@@ -101,7 +101,7 @@ class AppConfig:
 
 @dataclass
 class BotConfig:
-    # channel_id захардкожен (как DB/Redis-параметры): per-deployment
+    # channel_id захардкожен (как DB-параметры): per-deployment
     # идентификатор канала мониторинга меняется правкой settings.py, не env.
     token: str
     channel_id: str = "-1002050105527"
@@ -121,16 +121,6 @@ class JWTConfig:
     access_token_ttl: int = 900  # 15 minutes
     refresh_token_ttl: int = 86400  # 24 hours
     algorithm: str = "HS256"
-
-
-@dataclass
-class RedisConfig:
-    """Redis — внутренний кэш в изолированной docker-сети (нет ports: блока).
-    Креды захардкожены: внешнего доступа нет, env-переопределение не нужно."""
-    host: str = "redis"
-    port: int = 6379
-    db: int = 0
-    password: str = "redis"
 
 
 @dataclass
@@ -180,10 +170,21 @@ class ParserConfig:
 
     # Сколько сообщений тянуть из истории канала при старте парсера.
     # Высокое значение увеличивает startup latency, низкое — пропускает старые.
-    history_limit: int = 60
+    # Это же значение — механизм recovery после краша: бэкфилл переобрабатывает
+    # последние history_limit сообщений (дедуп ON CONFLICT делает это безопасным),
+    # поэтому оно должно с запасом перекрывать окно простоя × rate сообщений.
+    history_limit: int = 200
 
     # Размер asyncio.Queue для входящих сообщений (производитель-потребитель).
-    message_queue_maxsize: int = 100
+    # Запас под всплески (бэкфилл больших историй + live-пики); put() блокирует
+    # при заполнении (backpressure, без потерь), пул воркеров сливает очередь.
+    message_queue_maxsize: int = 500
+
+    # Число конкурентных воркеров очереди. Перекрывает CPU одного сообщения с
+    # DB-I/O другого на всплесках. Безопасно: вставки идемпотентны (ON CONFLICT),
+    # порядок не важен, asyncpg-pool конкурентно-безопасен, в CPU-секциях нет
+    # await. Кап ≤8 в monitoring.py, чтобы не исчерпать pool (pool_max_size=20).
+    worker_concurrency: int = 3
 
     # Каталог хранения медиафайлов (фотографии событий). Монтируется через
     # volume в docker-compose, путь синхронизирован с разделом volumes.
@@ -228,7 +229,6 @@ class Settings:
     db: DatabaseConfig
     bot: BotConfig
     jwt: Optional[JWTConfig] = None
-    redis: RedisConfig = field(default_factory=RedisConfig)
     similarity: SimilarityConfig = field(default_factory=SimilarityConfig)
     layers: LayerConfig = field(default_factory=LayerConfig)
     parser: ParserConfig = field(default_factory=ParserConfig)
@@ -311,10 +311,13 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
                 redirect_url=env.str("REDIRECT_URL", None),
             ),
             jwt=jwt_config,
-            redis=RedisConfig(),
             similarity=SimilarityConfig(),
             layers=LayerConfig(),
-            parser=ParserConfig(),
+            parser=ParserConfig(
+                socks5_host=env.str("PROXY_HOST", None),
+                proxy_port=env.int("PROXY_PORT", 1080),
+                proxy_scheme=env.str("PROXY_SCHEME", "socks5"),
+            ),
             question_overlay=QuestionOverlayConfig(),
         )
     except Exception as e:

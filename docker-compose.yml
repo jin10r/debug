@@ -58,8 +58,16 @@ services:
       context: .
       dockerfile: Dockerfile.parser
     container_name: parser
-    # Без env: JWT_SECRET автогенерируется в core/settings.py, остальное —
-    # hardcoded defaults; парсер аутентифицируется через session.session.
+    # Время на graceful drain очереди при SIGTERM (см. ParserBot.shutdown,
+    # drain_timeout=20s) до SIGKILL — буфер не теряется на деплое/рестарте.
+    stop_grace_period: 30s
+    environment:
+      PROXY_HOST: ${PROXY_HOST:-}
+      PROXY_PORT: ${PROXY_PORT:-1080}
+      PROXY_SCHEME: ${PROXY_SCHEME:-socks5}
+    dns:
+      - 9.9.9.9
+      - 1.1.1.1
     volumes:
       - ./parser/session.session:/app/parser/session.session:rw
       - events_media:/media/events:rw
@@ -81,11 +89,14 @@ services:
     deploy:
       resources:
         limits:
+          # Память right-sized: DAWG pymorphy3 (~15-20MB) + LRU-кэши + pyrogram
+          # укладываются в <300MB (было 1024/512 — переотведено). CPU оставлен
+          # 1.0: потолок CPU-работы упирается в GIL одного процесса.
           cpus: '1.0'
-          memory: 1024M
+          memory: 512M
         reservations:
           cpus: '0.5'
-          memory: 512M
+          memory: 256M
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -93,34 +104,6 @@ services:
     read_only: false
     tmpfs:
       - /tmp:noexec,nosuid,size=100m
-    restart: unless-stopped
-    logging: *default-logging
-
-  # =============================================================================
-  # Redis - кэш и очереди (опционально)
-  # =============================================================================
-  redis:
-    image: redis:7-alpine
-    container_name: redis
-    # Захардкоженный пароль: redis-контейнер изолирован (нет ports: блока,
-    # только internal-network). Синхронизирован с core/settings.py RedisConfig.
-    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru --requirepass redis
-    volumes:
-      - redis_data:/data
-    networks:
-      - backend
-    expose:
-      - "6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "-a", "redis", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-    deploy:
-      resources:
-        limits:
-          cpus: '0.25'
-          memory: 256M
     restart: unless-stopped
     logging: *default-logging
 
@@ -142,12 +125,16 @@ services:
       REDIRECT_URL: ${REDIRECT_URL:-}
       # Optional override: dev-режим без валидации Telegram InitData (default True).
       TELEGRAM_VALIDATION_ENABLED: ${TELEGRAM_VALIDATION_ENABLED:-True}
+      PROXY_HOST: ${PROXY_HOST:-}
+      PROXY_PORT: ${PROXY_PORT:-1080}
+      PROXY_SCHEME: ${PROXY_SCHEME:-socks5}
+    dns:
+      - 9.9.9.9
+      - 1.1.1.1
     volumes:
       - events_media:/media/events:ro
     depends_on:
       postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
     networks:
       - frontend
@@ -243,6 +230,4 @@ volumes:
   postgres_data:
     driver: local
   events_media:
-    driver: local
-  redis_data:
     driver: local

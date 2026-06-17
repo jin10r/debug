@@ -13,14 +13,13 @@ Telegram Mini App — интерактивная карта событий Од�
 
 ## Архитектура
 
-Пять Docker-сервисов (`docker-compose.yml`):
+Четыре Docker-сервиса (`docker-compose.yml`):
 
 | Сервис     | Назначение                                                        | Публичный порт |
 |------------|-------------------------------------------------------------------|----------------|
 | `postgres` | PostgreSQL + PostGIS: объекты (справочник) и события с геометрией      | —              |
 | `parser`   | kurigram-клиент: канал → матчер → запись событий + `pg_notify`     | —              |
 | `core`     | aiohttp: REST + WebSocket, JWT-валидация Telegram, `LISTEN events` | —              |
-| `redis`    | кэш                                                               | —              |
 | `web`      | reverse-proxy + статика фронтенда (собирается в образе)            | **80**         |
 
 Поток данных:
@@ -187,7 +186,7 @@ Telegram открывает WebApp только по HTTPS, а контейне�
 
 ```bash
 docker compose down        # все сервисы завершаются корректно (exit 0)
-docker compose down -v     # + удалить тома (БД, медиа, redis)
+docker compose down -v     # + удалить тома (БД, медиа)
 ```
 
 ## Структура репозитория
@@ -197,7 +196,7 @@ core/        backend сервиса `core` (aiohttp app, API, БД-адапте�
 parser/      сервис `parser` (kurigram + sliding-window матчер)
 postgres/    init-скрипты схемы и данные (streets.csv, stopwords.csv)
 web/         фронтенд сервиса `web` (TypeScript + MapLibre GL, webpack)
-docs/        по одному файлу на микросервис (core, parser, web, postgres, redis)
+docs/        по одному файлу на микросервис (core, parser, web, postgres)
 ```
 
 ## Документация
@@ -208,7 +207,6 @@ docs/        по одному файлу на микросервис (core, par
 - [docs/parser.md](docs/parser.md) — алгоритм парсера (sliding-window, тиры матча)
 - [docs/web.md](docs/web.md) — фронтенд + nginx (PWA, MapLibre, reverse-proxy)
 - [docs/postgres.md](docs/postgres.md) — схема PostGIS, справочник, TTL событий
-- [docs/redis.md](docs/redis.md) — кэш / session-store
 
 Поддержать разработчиков монетой здесь:
  https://bastyon.com/keep_alive_odessa?ref=PHQHKADhBPxxSwjiggV6G2BxSvy6TY1Lgb

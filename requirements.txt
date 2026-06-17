@@ -15,9 +15,8 @@ pybreaker~=1.3
 pydantic~=2.0          # core/models.py, core/api/events.py — раньше тянулся только
                        # транзитивно через aiogram; теперь объявлен явно.
 
-# Authentication & session management
+# Authentication & token signing
 pyjwt~=2.8
-redis~=5.0
 # cryptography нужен pyjwt только для RSA/EC-алгоритмов. Текущий JWT — HS256
 # (core/settings.py), прямых импортов нет → кандидат на удаление. Оставлен
 # закреплённым на случай переключения на RS256; убрать, если не планируется.

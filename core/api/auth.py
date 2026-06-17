@@ -2,7 +2,6 @@
 import logging
 from aiohttp import web
 from core.settings import settings
-from core.middlewares.auth import RedisManager
 from core.middlewares.auth import generate_jwt_tokens, verify_jwt_token
 from core.utils.telegram_validation import validate_telegram_webapp_data
 
@@ -155,15 +154,15 @@ async def refresh_token_handler(request: web.Request) -> web.Response:
         )
 
 
-async def init_redis(app: web.Application):
-    """Initialize cache connection on app startup"""
+async def init_cache(app: web.Application):
+    """Initialize in-memory cache on app startup"""
     cache = app.get('cache')
     if cache:
         await cache.connect()
 
 
-async def close_redis(app: web.Application):
-    """Close cache connection on app shutdown"""
+async def close_cache(app: web.Application):
+    """Close in-memory cache on app shutdown"""
     cache = app.get('cache')
     if cache:
         await cache.close()

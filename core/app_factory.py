@@ -7,6 +7,7 @@ import asyncpg
 from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
 import aiohttp_cors
 
 from core.settings import settings
@@ -18,10 +19,9 @@ from core.middlewares.ratelimit import RateLimiter
 from core.utils.metrics import setup_metrics_routes, set_application_info, metrics_middleware
 from core.utils.logging_config import setup_logging, logging_middleware
 from core.api.routes import setup_routes
-from core.api.auth import init_redis
+from core.api.auth import init_cache
 from core.api.websocket import WebSocketManager
 from core.middlewares.jwt_auth import jwt_auth_middleware
-from core.middlewares.auth import check_redis_required_connection
 from core.middlewares.csrf import csrf_middleware
 
 logger = logging.getLogger(__name__)
@@ -148,19 +148,12 @@ async def on_startup(app: web.Application):
 
     logger.info("--- Starting Sequential Initialization ---")
 
-    logger.info("Step 0/4: Checking Redis availability...")
-    try:
-        await check_redis_required_connection()
-    except RuntimeError as e:
-        logger.critical(f"Redis check failed: {e}")
-        raise
+    logger.info("Step 1/3: Initializing in-memory cache...")
+    await init_cache(app)
 
-    logger.info("Step 1/4: Initializing Redis connection...")
-    await init_redis(app)
+    logger.info("Step 2/3: Database schema initialization is handled by init.sql.")
 
-    logger.info("Step 2/4: Database schema initialization is handled by init.sql.")
-
-    logger.info("Step 3/4: Starting background tasks...")
+    logger.info("Step 3/3: Starting background tasks...")
 
     shutdown_event = asyncio.Event()
     app['shutdown_event'] = shutdown_event
@@ -172,7 +165,7 @@ async def on_startup(app: web.Application):
     logger.info("PostgreSQL LISTEN для WebSocket-событий включён")
     app['pg_notify_task'] = asyncio.create_task(_run_pg_notify_listener(app))
 
-    logger.info("Step 4/4: Background tasks started.")
+    logger.info("Background tasks started.")
     logger.info("--- Initialization Complete ---")
 
 
@@ -279,7 +272,13 @@ async def create_app():
     await cache_manager.connect()
     logger.info("In-memory cache initialized")
 
-    bot = Bot(token=settings.bot.token, default=DefaultBotProperties())
+    _proxy_host = settings.parser.socks5_host or settings.parser.proxy_host
+    _bot_session = None
+    if _proxy_host:
+        _proxy_url = f"{settings.parser.proxy_scheme}://{_proxy_host}:{settings.parser.proxy_port}"
+        _bot_session = AiohttpSession(proxy=_proxy_url)
+
+    bot = Bot(token=settings.bot.token, default=DefaultBotProperties(), session=_bot_session)
     dp = Dispatcher()
     dp.update.middleware(DbMiddleware(db_request))
     dp.include_router(basic_router)

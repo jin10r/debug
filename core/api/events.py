@@ -197,7 +197,7 @@ async def get_events_handler(request: web.Request):
 
 
 async def get_streets_handler(request: web.Request):
-    """Handles requests with Redis caching."""
+    """Handles requests with in-memory caching."""
     cache: CacheManager = request.app.get('cache')
     
     # Check cache first

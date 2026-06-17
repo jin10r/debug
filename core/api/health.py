@@ -68,7 +68,6 @@ async def health_ready_handler(request: web.Request):
     Readiness probe - checks if app is ready to serve traffic
     Validates all critical dependencies:
     - PostgreSQL connection
-    - Redis connection (optional, warns if down)
     - Bot initialization
     
     Returns:
@@ -82,7 +81,6 @@ async def health_ready_handler(request: web.Request):
     
     checks = {
         'database': {'status': 'unknown', 'message': ''},
-        'redis': {'status': 'unknown', 'message': ''},
         'bot': {'status': 'unknown', 'message': ''},
         'overall': 'healthy'
     }
@@ -95,20 +93,6 @@ async def health_ready_handler(request: web.Request):
     else:
         checks['database'] = {'status': 'unhealthy', 'message': db_msg}
         checks['overall'] = 'unhealthy'
-    
-    # Check Redis via RedisManager (auth/session store). Optional — degraded,
-    # не unhealthy, если недоступен. In-memory кэш событий (app['cache']) — отдельно.
-    try:
-        from core.middlewares.auth import RedisManager
-        redis = await RedisManager().get_redis()
-        if redis is not None:
-            await redis.ping()
-            checks['redis'] = {'status': 'healthy', 'message': 'Connected'}
-        else:
-            checks['redis'] = {'status': 'degraded', 'message': 'Not connected'}
-    except Exception as e:
-        checks['redis'] = {'status': 'degraded', 'message': f'Error: {str(e)}'}
-        logger.warning(f"Redis health check failed: {e}")
     
     # Check Telegram Bot (basic check)
     try:

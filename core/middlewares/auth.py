@@ -1,8 +1,8 @@
 """
-Telegram WebApp authentication helpers: JWT token issue/verify + Redis manager.
+Telegram WebApp authentication helpers: JWT token issue/verify.
 
 HTTP-эндпоинты аутентификации живут в core/api/auth.py — этот модуль содержит
-только переиспользуемые примитивы (генерация/верификация JWT, Redis-менеджер).
+только переиспользуемые примитивы (генерация/верификация JWT).
 """
 
 from typing import Optional, Dict, Tuple, Any
@@ -13,68 +13,7 @@ import jwt
 
 from core.settings import settings
 
-try:
-    from redis.asyncio import Redis
-    REDIS_AVAILABLE = True
-except ImportError:
-    REDIS_AVAILABLE = False
-
 logger = logging.getLogger(__name__)
-
-
-class RedisManager:
-    """Redis connection manager for session and nonce storage"""
-    _instance = None
-    _redis = None
-
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
-
-    async def get_redis(self):
-        if not REDIS_AVAILABLE or self._redis is None:
-            return None
-        return self._redis
-
-    async def connect(self):
-        if not REDIS_AVAILABLE:
-            logger.warning("Redis not available, using in-memory fallback")
-            return None
-        try:
-            self._redis = Redis.from_url(
-                f"redis://{settings.redis.host}:{settings.redis.port}/{settings.redis.db}",
-                password=settings.redis.password,
-                decode_responses=True
-            )
-            await self._redis.ping()
-            logger.info("Redis connection established")
-            return self._redis
-        except Exception as e:
-            logger.error(f"Redis connection failed: {e}")
-            return None
-
-    async def disconnect(self):
-        if self._redis:
-            await self._redis.close()
-            self._redis = None
-
-
-async def check_redis_required_connection() -> bool:
-    """Проверить доступность Redis. Raises RuntimeError если недоступен."""
-    redis = await RedisManager().get_redis()
-    if redis is None:
-        await RedisManager().connect()
-        redis = await RedisManager().get_redis()
-
-    if redis is None:
-        raise RuntimeError("Redis is mandatory but not available")
-
-    try:
-        await redis.ping()
-        return True
-    except Exception as e:
-        raise RuntimeError(f"Redis ping failed: {e}")
 
 
 def generate_jwt_tokens(user_data: Dict[str, Any]) -> Tuple[str, str]:

@@ -15,7 +15,6 @@ WebSocket. Наружу не публикуется — всё проксиру�
 | `asyncpg` | PostgreSQL-пул + `LISTEN/NOTIFY` |
 | `aiogram` | Telegram-бот (Mini App entry), `pydantic`-модели |
 | `pyjwt` (HS256) | access/refresh-токены сессии |
-| `redis.asyncio` | session/nonce store (с in-memory fallback) |
 | `prometheus-client` | метрики `/metrics` |
 | `pybreaker` | circuit breaker вокруг Telegram-валидации |
 
@@ -40,7 +39,7 @@ core/
 │   ├── metrics.py          # prometheus metrics middleware + /metrics
 │   ├── csrf.py             # CSRF-защита мутаций
 │   ├── jwt_auth.py         # проверка access-токена на защищённых маршрутах
-│   ├── auth.py             # JWT issue/verify + RedisManager (session/nonce)
+│   ├── auth.py             # JWT issue/verify
 │   ├── ratelimit.py        # fixed-window rate limiter (per ip+path)
 │   └── dbmiddleware.py     # инъекция db-адаптера в request
 ├── db/
@@ -50,7 +49,7 @@ core/
 │   ├── db_streets.py       # газеттир улиц
 │   └── db_spatial.py       # PostGIS-запросы
 └── utils/
-    ├── cache.py            # in-memory TTL+LRU кэш событий (не Redis)
+    ├── cache.py            # in-memory TTL+LRU кэш событий
     ├── telegram_validation.py  # HMAC-SHA256 валидация initData
     └── metrics.py          # prometheus-метрики
 ```
@@ -71,7 +70,7 @@ core/
 | Метод | Путь | Назначение |
 |-------|------|-----------|
 | GET | `/health`, `/health/live` | liveness |
-| GET | `/health/ready` | readiness (актуальный probe БД/redis/bot) |
+| GET | `/health/ready` | readiness (актуальный probe БД/bot) |
 | GET | `/health/detailed` | метрики пула/кэша |
 | GET/POST | `/api/validation-config` | конфиг валидации для фронта |
 | POST | `/api/validate-init` | HMAC-проверка Telegram initData → JWT |
@@ -114,21 +113,20 @@ flowchart LR
   если `JWT_SECRET` не задан в env; рестарт → новый секрет → ранее выданные токены
   инвалидируются. `JWT_SECRET` в env — опциональный override для стабильного/общего
   (multi-replica) секрета (≥32 символов).
-- **Redis** (`RedisManager`, `core/middlewares/auth.py`) — session/nonce store;
-  при недоступности — in-memory fallback (деградация, не отказ). Это **не** тот
-  же кэш, что `core/utils/cache.py` (in-memory TTL+LRU кэш событий).
+- **Состояние аутентификации** — stateless: JWT проверяется по подписи, кэш
+  верификации — in-memory (`_jwt_token_cache` в `core/middlewares/auth.py`).
+  Внешний session/nonce store не используется (core — один процесс).
 
 ## Конфигурация
 
 `core/settings.py` — всё, кроме секретов, захардкожено в `@dataclass`. Из env
 читаются только: `BOT_TOKEN`, `WEBAPP_URL`, `REDIRECT_URL`,
 `TELEGRAM_VALIDATION_ENABLED` (`JWT_SECRET` — опциональный override автогенерации).
-Параметры пула Бога/redis/матчера
-правятся прямо в `settings.py`.
+Параметры пула БД/матчера правятся прямо в `settings.py`.
 
 ## Health / observability
 
 - `/health/ready` — без кэша (LB не пошлёт трафик на падающую БД), проверяет
-  PostgreSQL (обязателен), Redis (degraded при отказе), bot.
+  PostgreSQL (обязателен), bot.
 - `/health` (liveness) — TTL-кэш probe БД 5 с.
 - `/metrics` — prometheus (`set_application_info(version='2.0.0')`).

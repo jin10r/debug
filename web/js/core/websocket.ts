@@ -26,6 +26,12 @@ export class WebSocketManager {
     private readonly reconnectMultiplier = 1.5;
     private reconnectTimer: number | null = null;
 
+    // Self-heal lifecycle: слушатели visibility/online/Telegram-activated
+    // навешиваются один раз; intentionallyClosed гасит авто-reconnect после
+    // явного disconnect() (logout) — чтобы resume-события его не оживляли.
+    private lifecycleBound = false;
+    private intentionallyClosed = false;
+
     // Heartbeat — ping every 25 s, expect pong within 15 s
     private readonly PING_INTERVAL_MS = 25_000;
     private readonly PONG_TIMEOUT_MS  = 15_000;
@@ -53,6 +59,8 @@ export class WebSocketManager {
     // ------------------------------------------------------------------ connect
 
     connect(): void {
+        this.bindLifecycle();
+        this.intentionallyClosed = false;
         if (this.isConnected || this.ws?.readyState === WebSocket.CONNECTING) {
             console.log('[WS] Already connecting/connected, skipping');
             return;
@@ -108,10 +116,14 @@ export class WebSocketManager {
         this.receivingSnapshot = true;
         this.snapshotBuffer = [];
         if (this.snapshotTimer !== null) window.clearTimeout(this.snapshotTimer);
-        this.snapshotTimer = window.setTimeout(
-            () => this.finishSnapshot(),
-            this.SNAPSHOT_TIMEOUT_MS
-        );
+        this.snapshotTimer = window.setTimeout(() => {
+            console.warn(
+                `[WS] Snapshot timeout (${this.SNAPSHOT_TIMEOUT_MS}ms) — ` +
+                `flushing ${this.snapshotBuffer.length} buffered event(s) ` +
+                `without events_snapshot_end`
+            );
+            this.finishSnapshot();
+        }, this.SNAPSHOT_TIMEOUT_MS);
 
         this.sendMessage({ type: 'get_events', since_timestamp: since });
     }
@@ -231,16 +243,60 @@ export class WebSocketManager {
         if (this.reconnectTimer !== null) return;
 
         this.reconnectAttempts++;
-        const delay = Math.min(
+        const base = Math.min(
             this.baseReconnectDelay * Math.pow(this.reconnectMultiplier, this.reconnectAttempts - 1),
             30_000
         );
+        // Jitter ±20% — чтобы множество клиентов не ломились на reconnect синхронно.
+        const delay = Math.round(base * (0.8 + Math.random() * 0.4));
 
         console.log(`[WS] Reconnect in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
         this.reconnectTimer = window.setTimeout(() => {
             this.reconnectTimer = null;
             this.connect();
         }, delay);
+    }
+
+    // ------------------------------------------------------- self-heal lifecycle
+
+    /**
+     * Немедленный reconnect по «событию пробуждения» (вкладка снова видима,
+     * сеть вернулась, Telegram-приложение активировано). Сбрасывает бюджет
+     * попыток и отменяет отложенный backoff — пользователь ждёт здесь и сейчас.
+     */
+    private reconnectNow(reason: string): void {
+        if (this.intentionallyClosed) return;
+        if (this.isConnected || this.ws?.readyState === WebSocket.CONNECTING) return;
+        console.log(`[WS] Reconnect now (${reason})`);
+        if (this.reconnectTimer !== null) {
+            window.clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
+        this.reconnectAttempts = 0; // свежий бюджет на явном resume/online
+        this.connect();
+    }
+
+    /** Навесить слушатели жизненного цикла один раз (idempotent). */
+    private bindLifecycle(): void {
+        if (this.lifecycleBound) return;
+        this.lifecycleBound = true;
+
+        // Возврат во вкладку — мобильный WebView часто рвёт сокет в фоне.
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') {
+                this.reconnectNow('visibilitychange');
+            }
+        });
+
+        // Сеть вернулась (Wi-Fi↔mobile, туннель и т.п.).
+        window.addEventListener('online', () => this.reconnectNow('online'));
+        window.addEventListener('offline', () => console.warn('[WS] Network offline'));
+
+        // Telegram Mini App снова на переднем плане.
+        const tg: any = window.Telegram?.WebApp;
+        if (tg && typeof tg.onEvent === 'function') {
+            tg.onEvent('activated', () => this.reconnectNow('tg:activated'));
+        }
     }
 
     // --------------------------------------------------------------- heartbeat
@@ -310,6 +366,7 @@ export class WebSocketManager {
     // ---------------------------------------------------------------- disconnect
 
     disconnect(): void {
+        this.intentionallyClosed = true;
         this.stopHeartbeat();
         if (this.reconnectTimer !== null) {
             window.clearTimeout(this.reconnectTimer);

@@ -6,6 +6,9 @@ from typing import Dict, Set, Optional
 from datetime import datetime, timezone
 from aiohttp import web, WSMsgType
 from core.db.dbconnect import Request
+from core.settings import settings
+from core.middlewares.auth import verify_jwt_token
+from core.utils.telegram_validation import validate_telegram_webapp_data
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +178,27 @@ class WebSocketManager:
         logger.info(f"events_cleaned broadcasted: {success}/{len(self.connections)} clients")
 
 
+def _ws_authenticate(data: dict) -> bool:
+    """Проверить учётные данные из auth-сообщения WebSocket.
+
+    `/ws` исключён из jwt_auth_middleware (см. core/middlewares/jwt_auth.py),
+    поэтому проверка ДОЛЖНА выполняться здесь — иначе сокет открыт для всех.
+    Принимаем JWT access-токен (token) ИЛИ Telegram initData (init_data),
+    как их шлёт клиент (web/js/core/websocket.ts sendAuth). Dev-bypass, когда
+    валидация выключена глобально.
+    """
+    if not getattr(settings.app, 'telegram_validation_enabled', True):
+        return True  # dev mode: валидация отключена
+    token = data.get('token')
+    if token:
+        return verify_jwt_token(token, 'access') is not None
+    init_data = data.get('init_data')
+    if init_data:
+        is_valid, _ = validate_telegram_webapp_data(init_data, settings.bot.token)
+        return is_valid
+    return False
+
+
 async def websocket_handler(request: web.Request):
     """WebSocket endpoint for real-time event updates."""
     ws = web.WebSocketResponse(heartbeat=120)
@@ -205,12 +229,18 @@ async def websocket_handler(request: web.Request):
                         }))
 
                     elif message_type == 'auth':
-                        # Minimal auth acknowledgement — JWT validation happens at HTTP level.
-                        # The token is already verified by jwt_auth_middleware for the upgrade
-                        # request. Here we just mark the WS session as authorised.
-                        authenticated = True
-                        logger.info("WebSocket client authenticated")
-                        await ws.send_str(json.dumps({'type': 'auth_ok'}))
+                        # /ws исключён из jwt_auth_middleware → проверяем здесь.
+                        if _ws_authenticate(data):
+                            authenticated = True
+                            logger.info("WebSocket client authenticated")
+                            await ws.send_str(json.dumps({'type': 'auth_ok'}))
+                        else:
+                            logger.warning("WebSocket auth failed — closing connection")
+                            await ws.send_str(json.dumps(
+                                {'type': 'error', 'message': 'authentication failed'}
+                            ))
+                            await ws.close(code=1008, message=b'auth failed')  # policy violation
+                            break
 
                     elif message_type == 'get_events':
                         if not authenticated:

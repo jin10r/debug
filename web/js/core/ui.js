@@ -436,7 +436,7 @@ function initializeAdSquares(map) {
     console.log('[initializeAdSquares] Banner URL:', fullUrl);
     console.log('[initializeAdSquares] Current host:', window.location.host);
 
-    const popupContent = `<h3>Исходный код приложения доступен на <a href="https://github.com/develop4alive/survival_map" target="_blank">GitHub</h3><br>поблагодарить разработчика можно на <a href="https://bastyon.com/keep_alive_odessa?ref=PHQHKADhBPxxSwjiggV6G2BxSvy6TY1Lgb" target="_blank">bastyon</a>`;
+    const popupContent = `<h3>Исходный код приложения доступен на <a href="https://github.com/develop4alive/survival_map" target="_blank">GitHub</a></h3><br>поблагодарить разработчика можно на <a href="https://bastyon.com/keep_alive_odessa?ref=PHQHKADhBPxxSwjiggV6G2BxSvy6TY1Lgb" target="_blank">bastyon</a>`;
 
     if (!window.adSquares.ad1) {
         console.log('[initializeAdSquares] Creating image overlay...');

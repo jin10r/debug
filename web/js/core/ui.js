@@ -247,14 +247,14 @@ function initializeControls(map) {
         currentX = startX;
         isSwiping = true;
         controlsSlider.style.transition = 'none';
-    });
+    }, { passive: true });
 
     controlsContainer.addEventListener('touchmove', e => {
         if (!isSwiping) return;
         currentX = e.touches[0].clientX;
         deltaX = currentX - startX;
         controlsSlider.style.transform = `translateX(calc(-${activePanel * stepPercent}% + ${deltaX}px))`;
-    });
+    }, { passive: true });
 
     controlsContainer.addEventListener('touchend', () => {
         if (!isSwiping) return;
@@ -270,7 +270,7 @@ function initializeControls(map) {
 
         isSwiping = false;
         deltaX = 0;
-    });
+    }, { passive: true });
 
     // Индикаторы
     indicators.forEach((el, idx) => {

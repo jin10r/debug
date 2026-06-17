@@ -212,6 +212,9 @@ body.dark-theme {
     display: flex;
     width: 200%; /* 2 слайда */
     transition: transform 0.3s ease-in-out;
+    /* Подсказка браузеру держать слой на GPU — свайп панелей пишет transform
+       на каждом touchmove; без неё возможны дёрганья на слабом WebView. */
+    will-change: transform;
 }
 
 .controlPanel {

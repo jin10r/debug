@@ -14,7 +14,8 @@ CREATE OR REPLACE FUNCTION process_candidates(
     p_street_ids           INT[]   DEFAULT NULL,
     p_street_scores        FLOAT[] DEFAULT NULL,
     p_pseudo_radius_meters FLOAT   DEFAULT 150.0,
-    p_matched_parts        TEXT[]  DEFAULT NULL
+    p_matched_parts        TEXT[]  DEFAULT NULL,
+    p_geom_min_score       FLOAT   DEFAULT 0.85
 )
 RETURNS TABLE(
     result_geom     GEOMETRY,
@@ -95,12 +96,23 @@ BEGIN
         ) sub
         ORDER BY geom_hash, id
     ),
+    -- Только матчи с score >= p_geom_min_score участвуют в ГЕОМЕТРИИ пересечений:
+    -- слабые (ложные) вторичные матчи не искажают intersection/polygon. На matches
+    -- JSON и fallback «лучший по score» (приоритет-3) это НЕ влияет — там все id.
+    strong_geoms AS (
+        SELECT ug.id, ug.geom, ug.geom_m
+        FROM unique_geoms ug
+        WHERE EXISTS (
+            SELECT 1 FROM unnest(p_street_ids, v_scores) AS u(id, score)
+            WHERE u.id = ug.id AND u.score >= p_geom_min_score
+        )
+    ),
     -- Истинные пересечения: ST_Intersection вычисляется один раз через LATERAL.
     -- ST_PointOnSurface возвращает точку для любого типа результата (POINT/LINE/POLY).
     intersections AS (
         SELECT ST_PointOnSurface(isect.g) AS point
-        FROM unique_geoms a
-        CROSS JOIN unique_geoms b
+        FROM strong_geoms a
+        CROSS JOIN strong_geoms b
         CROSS JOIN LATERAL (SELECT ST_Intersection(a.geom, b.geom) AS g) isect
         WHERE a.id < b.id
           AND ST_IsValid(a.geom) AND ST_IsValid(b.geom)
@@ -114,8 +126,8 @@ BEGIN
                    ST_ClosestPoint(a.geom, b.geom),
                    ST_ClosestPoint(b.geom, a.geom)
                )) AS point
-        FROM unique_geoms a
-        CROSS JOIN unique_geoms b
+        FROM strong_geoms a
+        CROSS JOIN strong_geoms b
         WHERE a.id < b.id
           AND ST_IsValid(a.geom) AND ST_IsValid(b.geom)
           AND NOT ST_Intersects(a.geom, b.geom)

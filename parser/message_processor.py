@@ -95,7 +95,7 @@ _INSERT_EVENT_FROM_CANDIDATES = """
     WITH pc AS (
         SELECT result_geom, result_strategy, result_matches
         FROM process_candidates(
-            $6::int[], $7::double precision[], $8::float, $9::text[]
+            $6::int[], $7::double precision[], $8::float, $9::text[], $10::float
         )
     ),
     inserted AS (
@@ -297,6 +297,10 @@ class MessageProcessor:
             settings.similarity.pseudo_intersection_radius_meters
             if settings and settings.similarity else 150.0
         )
+        geom_min_score = (
+            settings.similarity.geometry_min_score
+            if settings and settings.similarity else 0.85
+        )
         logger.debug(
             f"Message {message_id}: {len(street_ids)} streets matched: {street_ids} "
             f"(pseudo_radius={pseudo_radius}m)"
@@ -308,6 +312,7 @@ class MessageProcessor:
                 photo_path=photo_path, layer=layer,
                 street_ids=street_ids, street_scores=street_scores,
                 street_texts=street_texts, pseudo_radius=pseudo_radius,
+                geom_min_score=geom_min_score,
             ),
             tokens=tokens, street_ids=street_ids,
         )
@@ -342,6 +347,7 @@ class MessageProcessor:
         self, *, message_id: int, event_time: datetime, description: str,
         photo_path: Optional[str], layer: str, street_ids: list,
         street_scores: list, street_texts: list, pseudo_radius: float,
+        geom_min_score: float,
     ) -> Optional[Dict[str, Any]]:
         """Вставить событие, посчитав геометрию через process_candidates в том же
         запросе — один roundtrip к БД (раньше было SELECT + отдельный INSERT)."""
@@ -349,7 +355,7 @@ class MessageProcessor:
         return await self._run_insert(
             _INSERT_EVENT_FROM_CANDIDATES,
             (message_id, event_time, description, photo_path, layer,
-             street_ids, scores_array, pseudo_radius, street_texts),
+             street_ids, scores_array, pseudo_radius, street_texts, geom_min_score),
             message_id=message_id,
         )
 

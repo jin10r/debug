@@ -18,6 +18,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.postgres
+      network: host
     container_name: postgres
     environment:
       # Захардкожено: postgres-контейнер изолирован от внешнего мира (нет
@@ -57,6 +58,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.parser
+      network: host
     container_name: parser
     # Время на graceful drain очереди при SIGTERM (см. ParserBot.shutdown,
     # drain_timeout=20s) до SIGKILL — буфер не теряется на деплое/рестарте.
@@ -115,6 +117,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.core
+      network: host
     container_name: core
     stop_grace_period: 30s
     environment:
@@ -171,6 +174,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.web
+      network: host
     container_name: web
     stop_grace_period: 30s
     ports:

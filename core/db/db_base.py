@@ -6,6 +6,7 @@ Separates low-level database operations from business logic.
 import asyncio
 import asyncpg
 import logging
+from contextlib import asynccontextmanager
 from typing import List, Dict, Any, Optional
 
 try:
@@ -145,12 +146,19 @@ class Database:
         async with self.pool.acquire() as conn:
             await conn.executemany(query, args_list)
 
+    @asynccontextmanager
     async def transaction(self):
-        """Get a transaction context manager."""
+        """Async context manager yielding a connection INSIDE a real transaction.
+
+        Usage: `async with db.transaction() as conn: await conn.execute(...)`.
+        Commits on success, rolls back on exception. (Раньше возвращал просто
+        pool.acquire() — это autocommit без отката, что вводило в заблуждение.)
+        """
         if not self.pool:
             raise RuntimeError("Database pool is not initialized")
-        
-        return self.pool.acquire()
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                yield conn
 
     @property
     def is_connected(self) -> bool:

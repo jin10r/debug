@@ -7,6 +7,7 @@ HTTP-эндпоинты аутентификации живут в core/api/auth
 
 from typing import Optional, Dict, Tuple, Any
 from collections import OrderedDict
+import hashlib
 import logging
 import time
 import jwt
@@ -60,7 +61,9 @@ def generate_jwt_tokens(user_data: Dict[str, Any]) -> Tuple[str, str]:
 # без сортировки на горячем пути. Кэшируются только валидные токены.
 _jwt_token_cache: "OrderedDict[str, dict]" = OrderedDict()
 _JWT_CACHE_MAX_SIZE = 10000
-_JWT_CACHE_TTL = 60  # секунд
+# Короткий TTL: access-токен живёт 15 мин, кэш лишь разгружает CPU. Маленькое
+# окно ограничивает время, пока отозванный/просроченный токен ещё «валиден» из кэша.
+_JWT_CACHE_TTL = 10  # секунд
 
 
 def verify_jwt_token(token: str, token_type: str = 'access') -> Optional[Dict]:
@@ -77,8 +80,9 @@ def verify_jwt_token(token: str, token_type: str = 'access') -> Optional[Dict]:
     Returns:
         Payload токена или None если токен невалиден
     """
-    # Проверка кэша
-    cache_key = f"{token}:{token_type}"
+    # Ключ кэша — sha256(token), а не сырой JWT: токены не лежат открытым текстом
+    # ключами в памяти процесса (меньше риск при дампе/свопе).
+    cache_key = hashlib.sha256(token.encode()).hexdigest() + f":{token_type}"
 
     if cache_key in _jwt_token_cache:
         cached_result = _jwt_token_cache[cache_key]

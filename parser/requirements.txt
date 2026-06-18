@@ -1,19 +1,19 @@
 # Telegram client (kurigram — поддерживаемый форк pyrogram)
 kurigram==2.2.9
-tgcrypto>=1.2.0
+tgcrypto~=1.2
 
 # Database
-asyncpg>=0.29.0          # PostgreSQL client
+asyncpg~=0.29           # PostgreSQL client (пин согласован с корневым requirements.txt)
 
 # Морфология (токенизация — собственный regex-разбивщик parser/word_tokenizer.py)
 mawo-pymorphy3==1.0.4    # Russian morphological analyzer with DAWG (~15-20 MB RAM)
 
 # Фуззи-матч против alias-индекса
-rapidfuzz>=3.0.0         # Fast fuzzy string matching (C implementation, SIMD)
+rapidfuzz~=3.0          # Fast fuzzy string matching (C implementation, SIMD)
 
 # Configuration (через core.settings)
-environs>=11.0.0
+environs~=11.0
 
 # Timezone data — stdlib zoneinfo использует этот пакет как источник данных
 # о часовых поясах (базовый образ python:3.11-slim системную базу не содержит).
-tzdata>=2024.1
+tzdata~=2024.1

@@ -44,10 +44,6 @@ class Request:
         logger.info("Skipping database table initialization. This is now handled by init.sql.")
         pass
 
-    async def load_initial_data(self) -> None:
-        """Load initial street data from CSV."""
-        return await self.streets.load_initial_data()
-
     async def get_streets_intersection(self, street_id1: int, street_id2: int) -> Optional[Dict[str, Any]]:
         """Calculate intersection of two streets using PostGIS."""
         return await self.spatial.get_streets_intersection(street_id1, street_id2)
@@ -63,10 +59,6 @@ class Request:
     async def get_max_distance_in_polygon(self, polygon_wkt: str) -> Optional[float]:
         """Calculate maximum distance in polygon."""
         return await self.spatial.get_max_distance_in_polygon(polygon_wkt)
-
-    async def get_all_streets(self) -> List[Dict]:
-        """Get all streets from the database."""
-        return await self.streets.get_all_streets()
 
     async def get_streets_count(self) -> int:
         """Get the total count of streets."""

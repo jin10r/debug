@@ -1,0 +1,41 @@
+# CI: бэкенд-тесты (pytest) + фронтенд (typecheck + build).
+# Артефакты не публикуем — это проверочный пайплайн на push/MR.
+stages:
+  - test
+
+# ── Backend: pytest по ключевой логике ───────────────────────────────────────
+backend-tests:
+  stage: test
+  image: python:3.11
+  variables:
+    PIP_CACHE_DIR: "$CI_PROJECT_DIR/.pip-cache"
+  cache:
+    key: pip-$CI_COMMIT_REF_SLUG
+    paths:
+      - .pip-cache/
+  before_script:
+    - python -V
+    - pip install -r requirements.txt -r parser/requirements.txt -r requirements-dev.txt
+  script:
+    - pytest -q
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+
+# ── Frontend: строгая проверка типов и сборка ────────────────────────────────
+frontend-build:
+  stage: test
+  image: node:20-alpine
+  cache:
+    key: npm-$CI_COMMIT_REF_SLUG
+    paths:
+      - web/node_modules/
+  before_script:
+    - cd web
+    - npm ci --no-audit --no-fund
+  script:
+    - npm run typecheck   # tsc --noEmit (нужны @types/* из devDependencies)
+    - npm run build       # webpack production
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'

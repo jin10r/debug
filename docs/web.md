@@ -2,9 +2,9 @@
 
 Сервис `web` (контейнер из `Dockerfile.web`) = nginx, который раздаёт
 скомпилированный фронтенд и проксирует API/WebSocket на сервис `core`.
-Фронтенд — vanilla TypeScript PWA Telegram Mini App: карта `MapLibre GL JS`
-(native), state — единый `zustand` store, события из WebSocket агрегируются
-client-side.
+Фронтенд — vanilla TypeScript PWA Telegram Mini App: карта на **Leaflet**
+(базовый слой — вектор `MapLibre GL` через `maplibre-gl-leaflet`), state — единый
+`zustand` store, события из WebSocket агрегируются client-side.
 
 См. также `web/CLAUDE.md` — 8 архитектурных правил-инвариантов, и `nginx.conf`
 — reverse-proxy/CSP/кэш-политики.
@@ -13,11 +13,12 @@ client-side.
 
 | Компонент | Назначение |
 |-----------|-----------|
-| `maplibre-gl` 4.x | Native vector map (OpenFreeMap positron tiles) |
+| `leaflet` 1.9.x | Карта + per-feature слои (markers/circles/polylines/polygons) |
+| `leaflet.markercluster` 1.5.x | Кластеризация маркеров событий (chunkedLoading) |
+| `maplibre-gl` + `maplibre-gl-leaflet` | Вектор-баземап (OpenFreeMap positron) как Leaflet-слой |
 | `zustand` 5.x | Reactive store с persistence subscription |
-| `@nazka/map-gl-js-spiderfy` 2.x | Cluster expansion при клике |
 | webpack 5 | Bundle js/* → dist/js/* (production mode) |
-| `@telegram-apps/sdk-react` indirect | Через `window.Telegram.WebApp` global |
+| Telegram WebApp SDK | Через `window.Telegram.WebApp` global (telegram.org/js) |
 | nginx:alpine | Static serving |
 
 ## Архитектура модулей
@@ -58,8 +59,8 @@ web/
 5. **Haptic feedback on every notification** — через `window.hapticFeedback()`
    (теперь с CSS `hapticPulse` fallback)
 6. **Event TTL 60 минут** — anchored к `serverNow()` (не device clock)
-7. **Optimised for Telegram WebView** — `source.setData()` per-update,
-   no layer recreation, rAF-driven render
+7. **Optimised for Telegram WebView** — Leaflet per-feature слои +
+   инкрементный diff в `renderFromCache` (add/remove/update по id), rAF-driven
 8. **Lightweight final image** — multi-stage build, node только в builder
 
 ## Pipeline загрузки (Mermaid)
@@ -78,7 +79,7 @@ flowchart TD
     G -->|401| I[refresh → fail<br/>→ redirect /index.html]
     H --> J[zustand store init]
     J --> K[LocalCache.loadEvents<br/>← localStorage]
-    K --> L[bootstrapUI / initializeMap<br/>MapLibre GeoJSON sources]
+    K --> L[bootstrapUI / initializeMap<br/>Leaflet + layer groups]
     L --> M[WebSocketManager.connect<br/>JWT auth]
     M --> N{phase}
     N -->|batch silent| O[onSnapshot<br/>→ store.addEvents]
@@ -86,7 +87,7 @@ flowchart TD
     P --> Q[showNotification<br/>+ hapticFeedback<br/>+ CSS hapticPulse]
     O --> R[store.subscribe<br/>→ rAF schedule]
     P --> R
-    R --> S[renderFromCache<br/>source.setData FeatureCollection]
+    R --> S[renderFromCache<br/>per-feature diff add/remove/update]
     T[setInterval 30s] --> U[store.pruneExpired<br/>60min TTL anchor=serverNow]
     U --> R
     style E fill:#cfe9c8
@@ -199,8 +200,8 @@ CSS `hapticPulse` срабатывает на всех — это visual fallbac
 2. **Service worker cache**: после rebuild клиент должен переоткрыть
    WebApp / unregister SW. `__BUILD_ID__` помогает, но не всегда mobile
    подтягивает новый SW моментально
-3. **MapLibre on slow Telegram WebView**: heavy при медленной сети.
-   Используется `source.setData(full FeatureCollection)` per-update —
-   нет per-object diffing. Это компромисс простоты vs cherrypick.
+3. **Leaflet on slow Telegram WebView**: per-feature слои + markercluster
+   (chunkedLoading). `renderFromCache` делает инкрементный diff по id
+   (add/remove/update), без полной перерисовки.
 4. **localStorage limits**: ~5 MB per-origin в большинстве WebView.
    При 60-min TTL и средних события рост контролируется

@@ -42,3 +42,31 @@ def test_remaining_count_decrements():
     r = rl.RateLimiter(default_limit=5, window_seconds=60)
     _, limit, remaining, _ = r.check("a", "/x")
     assert limit == 5 and remaining == 4
+
+
+class _FakeReq:
+    def __init__(self, headers=None, remote=None):
+        self.headers = headers or {}
+        self.remote = remote
+
+
+def test_client_ip_prefers_x_real_ip():
+    r = rl.RateLimiter()
+    req = _FakeReq(
+        headers={"X-Real-IP": "9.9.9.9", "X-Forwarded-For": "1.2.3.4, 9.9.9.9"},
+        remote="10.0.0.1",
+    )
+    assert r._get_client_ip(req) == "9.9.9.9"
+
+
+def test_client_ip_xff_uses_rightmost_not_spoofable_leftmost():
+    r = rl.RateLimiter()
+    # attacker-supplied leftmost "1.2.3.4" must be ignored; trust proxy-appended rightmost
+    req = _FakeReq(headers={"X-Forwarded-For": "1.2.3.4, 9.9.9.9"}, remote="10.0.0.1")
+    assert r._get_client_ip(req) == "9.9.9.9"
+
+
+def test_client_ip_falls_back_to_remote():
+    r = rl.RateLimiter()
+    assert r._get_client_ip(_FakeReq(headers={}, remote="10.0.0.1")) == "10.0.0.1"
+    assert r._get_client_ip(_FakeReq(headers={}, remote=None)) == "127.0.0.1"

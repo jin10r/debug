@@ -71,10 +71,23 @@ class RateLimiter:
         self._last_cleanup = now
 
     def _get_client_ip(self, request: web.Request) -> str:
+        """Best-effort real client IP, resistant to header spoofing.
+
+        Our nginx sets `X-Real-IP` authoritatively (`proxy_set_header` OVERWRITES,
+        so the client can't forge it) → prefer it. `X-Forwarded-For` is APPENDED
+        (`$proxy_add_x_forwarded_for`): the client controls the LEFTMOST entry, so
+        only the RIGHTMOST hop (added by our proxy) is trustworthy — never take
+        `[0]`. Falls back to the TCP peer.
+        """
+        real_ip = request.headers.get('X-Real-IP')
+        if real_ip:
+            return real_ip.strip()
         forwarded = request.headers.get('X-Forwarded-For')
         if forwarded:
-            return forwarded.split(',')[0].strip()
-        return request.headers.get('X-Real-IP') or request.remote or '127.0.0.1'
+            parts = [p.strip() for p in forwarded.split(',') if p.strip()]
+            if parts:
+                return parts[-1]  # rightmost = appended by trusted proxy, not client
+        return request.remote or '127.0.0.1'
 
     # ------------------------------------------------------------------
     # Public API

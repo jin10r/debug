@@ -26,7 +26,7 @@ from .morphology import Morphology
 from .phonetic_index import PhoneticIndex
 from .street_matcher import StreetMatcher
 from .word_tokenizer import tokenize
-from .text_preprocessor import preprocess_light, strip_tail
+from .text_preprocessor import preprocess_light, strip_tail, is_promotional
 
 try:
     from .settings import settings
@@ -237,6 +237,13 @@ class MessageProcessor:
         stripped = strip_tail(raw_text)
         preserved = self._sanitize_text(preprocess_light(stripped)) or ''
 
+        # Relevance-гейт: реклама/спам (ссылки, telegram-хендлы, призывы к
+        # подписке) НЕ ставится на карту — skip без вставки события. Проверяем
+        # после strip_tail, чтобы подписной футер реальных репортов не ловился.
+        if is_promotional(preserved):
+            logger.info(f"Message {message_id}: promotional/spam → skipped (not placed)")
+            return None
+
         # Токенизация + лемматизация для матчера/классификатора (один проход).
         tokens = tokenize(preserved)
         lemmas = self.morph.lemmatize_tokens(tokens)
@@ -281,6 +288,16 @@ class MessageProcessor:
 
         # Улиц не нашлось — случайная точка.
         if not street_ids:
+            # Coverage-feedback: проперные токены без матча — кандидаты в пропуски
+            # газеттира (напр. "Маяковского" — улицы нет в данных). Системный
+            # сигнал для ревизии данных, не хардкод.
+            proper = [t.text for t in tokens
+                      if t.text[:1].isupper() and len(t.text) >= 5 and not t.text.isdigit()]
+            if proper:
+                logger.info(
+                    f"Message {message_id}: no street match; "
+                    f"proper tokens for gazetteer review: {proper}"
+                )
             logger.debug(f"Message {message_id}: no street matches → random point")
             return self._enrich(
                 await self._insert_event(

@@ -146,6 +146,12 @@ class SimilarityConfig:
     # Включение lemma fuzzy fallback (tier-3 в _link_span).
     lemma_fallback_enabled: bool = True
 
+    # Порог fuzz.ratio для surface-орфо-корректора (Tier 2 в _link_span, 0-1).
+    # Высокий — это ИСПРАВЛЕНИЕ опечаток (DL 1-2), а не семантический матч:
+    # отсекает "среди"/"Средняя" (разные слова), пропускает "чепаевская"/
+    # "чапаевская". Падежи ловит стем-индекс (Tier 1), не fuzzy.
+    surface_typo_threshold: float = 0.90
+
     # Sliding-window: максимальный размер окна (токенов) при генерации кандидатов.
     # Окно 1..max_sliding_window охватывает улицы из 1, 2 или 3 слов.
     max_sliding_window: int = 3

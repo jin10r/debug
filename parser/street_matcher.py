@@ -1,12 +1,15 @@
-"""StreetMatcher — sliding-window span linker.
+"""StreetMatcher — sliding-window span linker (морфологический распознаватель).
 
 Генерирует кандидаты скользящим окном по ВСЕМ токенам (1..max_sliding_window)
-и линкует каждый кандидат к street_id через три тира:
+и линкует каждый к street_id через два тира:
 
-  Tier 1 [Surface fuzzy] — rapidfuzz по сырому тексту vs. алиасы в индексе (0.85).
-  Tier 2 [Lemma exact]   — точное совпадение кортежа лемм → O(1) lookup.
-  Tier 3 [Lemma fuzzy]   — rapidfuzz над лемматизированными фразами газеттира (0.82).
+  Tier 1 [Stem exact] — точное совпадение кортежа Snowball-стемов → O(1) lookup.
+      Это ядро: стем инвариантен к падежу и OOV-устойчив (Гаванной≡Гаванная),
+      а обычные слова (среди/металлик) дают другой стем → не матчатся.
+  Tier 2 [Surface typo] — rapidfuzz по сырым алиасам ТОЛЬКО как корректор
+      опечаток (высокий cutoff + length-guard), а не семантический матч.
 
+Падежи и согласование теперь свойство стем-индекса, а не настройка порога.
 Кандидатам с локационным предлогом ("на/по/в") добавляется небольшой score-бонус.
 """
 
@@ -18,7 +21,7 @@ from rapidfuzz import fuzz
 from rapidfuzz import process as rf_process
 
 from .morphology import Lemma, Morphology
-from .phonetic_index import PhoneticEntry, PhoneticIndex
+from .phonetic_index import PhoneticIndex
 from .word_tokenizer import Token
 
 try:
@@ -28,8 +31,11 @@ except Exception:
 
 logger = logging.getLogger(__name__)
 
-# Candidate: (surface_text, lemma_tuple, start_i, end_i, size, is_gap, is_anchored)
+# Candidate: (surface_text, stem_tuple, start_i, end_i, size, is_gap, is_anchored)
 Candidate = Tuple[str, Tuple[str, ...], int, int, int, bool, bool]
+
+# Score точного стем-распознавания (Tier 1). Выше любого typo-матча.
+_STEM_MATCH_SCORE = 0.97
 
 # Локационные предлоги: наличие одного из них перед кандидатом → is_anchored=True
 _LOC_PREPS: frozenset = frozenset({
@@ -128,14 +134,14 @@ class StreetMatcher:
     def _candidates_sliding_window(
         self,
         clean_tokens: List[Token],
-        clean_lemmas: List[Lemma],
+        clean_stems: List[str],
         max_window: Optional[int] = None,
     ) -> List[Candidate]:
         """Скользящее окно по всем токенам: кандидаты размером 1..max_window.
 
-        Заменяет NER-gate: улицы в косвенных падежах находятся без NER.
-        Кандидату выставляется is_anchored=True, если перед ним стоит
-        локационный предлог — это повышает score при дедупликации.
+        Заменяет NER-gate: улицы в косвенных падежах находятся без NER —
+        распознавание живёт в стем-индексе самого матча. Кандидату выставляется
+        is_anchored=True, если перед ним стоит локационный предлог.
         """
         if max_window is None:
             max_window = (
@@ -154,10 +160,10 @@ class StreetMatcher:
                     continue
                 seen.add((start_i, end_i))
                 slice_t = clean_tokens[start_i:end_i + 1]
-                slice_l = clean_lemmas[start_i:end_i + 1]
+                slice_s = clean_stems[start_i:end_i + 1]
                 surface_text = ' '.join(t.text.lower() for t in slice_t)
-                lemma_tuple = tuple(l.normal_form for l in slice_l if l.normal_form)
-                out.append((surface_text, lemma_tuple, start_i, end_i,
+                stem_tuple = tuple(s for s in slice_s if s)
+                out.append((surface_text, stem_tuple, start_i, end_i,
                              end_i - start_i + 1, False, is_anchored))
         return out
 
@@ -166,86 +172,72 @@ class StreetMatcher:
     def _link_span(
         self,
         surface: str,
-        lemmas: Tuple[str, ...],
+        stems: Tuple[str, ...],
         span: Tuple[int, int],
     ) -> Optional[Dict]:
-        """Линковать одного кандидата к street_id. Три тира.
+        """Линковать одного кандидата к street_id. Два тира.
 
-        Tier 1: surface fuzzy (rapidfuzz, порог 0.85) — ловит опечатки.
-        Tier 2: exact lemma tuple (O(1) lookup) — ловит падежи.
-        Tier 3: lemma fuzzy (rapidfuzz, порог 0.82) — ловит POS-расхождения.
+        Tier 1: exact stem tuple (O(1) lookup) — распознаёт падежи и OOV-пропера.
+        Tier 2: surface typo (rapidfuzz, высокий cutoff + length-guard) — только
+                опечатки орфографии, НЕ семантический матч.
         """
         if not surface:
             return None
 
-        surface_thresh = (
-            settings.similarity.phonetic_match_threshold * 100
-            if settings and settings.similarity else 85.0
-        )
-        fuzzy_thresh = (
-            settings.similarity.entity_similarity_threshold * 100
-            if settings and settings.similarity else 75.0
-        )
+        # Tier 1: точный кортеж стемов — ядро распознавания. При промахе для
+        # многословных — порядок-независимый матч (Tier 1b: "Застава 2"≡"2 застава").
+        if stems:
+            hit = self._index.query_stem_tuple(stems)
+            source = 'stem_exact'
+            if not hit and len(stems) >= 2:
+                hit = self._index.query_stem_tuple_sorted(stems)
+                source = 'stem_reorder'
+            if hit:
+                # Если стем указывает на >1 РАЗНОЙ улицы — это over-stem коллизия
+                # (Гаваи/Гаванная→"гава"): выбираем по поверхностной близости
+                # запроса к алиасу. Для одиночной улицы — прямо (без потери recall).
+                if len({e.street_id for e in hit}) > 1:
+                    best = max(hit, key=lambda e: fuzz.ratio(surface, e.variant_text))
+                else:
+                    best = hit[0]
+                return {
+                    'street_id': best.street_id,
+                    'score': _STEM_MATCH_SCORE,
+                    'matched_name': best.canonical_name,
+                    'text': surface,
+                    'source': source,
+                    '_span': span,
+                }
 
-        # Tier 1: surface fuzzy — rapidfuzz по сырому тексту против алиасов в индексе.
-        # Ловит опечатки в 1-2 буквы без фонетики (чепаевская→чапаевская = 90%).
+        # Tier 2: орфо-корректор по surface. fuzz.ratio (а не token_sort) +
+        # length-guard: опечатка близка по длине, поэтому "среди"/"Средняя"
+        # (разные слова) и "Маяковского"/"Маловского" сюда не проходят, а
+        # "чепаевская"/"чапаевская" (DL=1) — да.
+        typo_thresh = (
+            settings.similarity.surface_typo_threshold * 100
+            if settings and settings.similarity
+            and getattr(settings.similarity, 'surface_typo_threshold', None) is not None
+            else 90.0
+        )
         s_phrases, s_meta = self._index.surface_phrases()
-        if s_phrases:
+        if s_phrases and len(surface) >= 5:
             s_match = rf_process.extractOne(
                 surface,
                 s_phrases,
-                scorer=fuzz.token_sort_ratio,
-                score_cutoff=surface_thresh,
+                scorer=fuzz.ratio,
+                score_cutoff=typo_thresh,
             )
             if s_match:
-                _, score, idx = s_match
-                entry = s_meta[idx]
-                return {
-                    'street_id': entry.street_id,
-                    'score': score / 100.0,
-                    'matched_name': entry.canonical_name,
-                    'text': surface,
-                    'source': 'surface_fuzzy',
-                    '_span': span,
-                }
-
-        # Tier 2: exact lemma tuple
-        if lemmas:
-            tier_a = self._index.query_lemma_tuple(lemmas)
-            if tier_a:
-                return {
-                    'street_id': tier_a[0].street_id,
-                    'score': 0.90,
-                    'matched_name': tier_a[0].canonical_name,
-                    'text': surface,
-                    'source': 'lemma_exact',
-                    '_span': span,
-                }
-
-        # Tier 3: fuzzy lemma
-        lemma_on = (
-            settings.similarity.lemma_fallback_enabled
-            if settings and settings.similarity else True
-        )
-        if lemmas and lemma_on:
-            phrases, phrase_meta = self._index.lemma_phrases()
-            if phrases:
-                lemma_text = ' '.join(lemmas)
-                match = rf_process.extractOne(
-                    lemma_text,
-                    phrases,
-                    scorer=fuzz.token_sort_ratio,
-                    score_cutoff=fuzzy_thresh,
-                )
-                if match:
-                    _, score, idx = match
-                    entry: PhoneticEntry = phrase_meta[idx]
+                cand, score, idx = s_match
+                # length-guard: опечатка не меняет длину больше чем на ~20%.
+                if abs(len(cand) - len(surface)) <= max(2, int(0.2 * len(surface))):
+                    entry = s_meta[idx]
                     return {
                         'street_id': entry.street_id,
                         'score': score / 100.0,
                         'matched_name': entry.canonical_name,
                         'text': surface,
-                        'source': 'lemma_fuzzy',
+                        'source': 'surface_typo',
                         '_span': span,
                     }
 
@@ -254,16 +246,25 @@ class StreetMatcher:
     # ------------------------------------------------------------------ finalize
 
     def _finalize(self, best_by_street: Dict[int, Dict]) -> List[Dict]:
-        """Dedup по street_id уже выполнен; sort + top-K + очистка служебных полей."""
+        """Dedup по street_id выполнен; max-span резолюция + sort + top-K + очистка."""
         top_k = (
             settings.similarity.max_entities
             if settings and settings.similarity else 3
         )
-        results = sorted(
-            best_by_street.values(),
-            key=lambda x: x['score'],
-            reverse=True,
-        )[:top_k]
+        # Max-span резолюция: отбрасываем матч, чей токен-спан СТРОГО вложен в
+        # другой матч (более длинный) — "Южная" внутри "Южная дорога", "Малая"
+        # внутри "Малая Арнаутская". Идём от длинных спанов к коротким.
+        kept: List[Dict] = []
+        for r in sorted(best_by_street.values(),
+                        key=lambda x: (x['_span'][1] - x['_span'][0], x['score']),
+                        reverse=True):
+            s, e = r['_span']
+            if any(ks <= s and e <= ke and (ke - ks) > (e - s)
+                   for k in kept for (ks, ke) in (k['_span'],)):
+                continue
+            kept.append(r)
+
+        results = sorted(kept, key=lambda x: x['score'], reverse=True)[:top_k]
         for r in results:
             r.pop('_span', None)
         source_stats = {}
@@ -292,11 +293,14 @@ class StreetMatcher:
         if not tokens or not lemmas:
             return []
 
-        clean_tokens, clean_lemmas = self._strip_noise(tokens, lemmas)
+        # lemmas участвуют только в parallel-фильтрации пунктуации; матч идёт
+        # по стемам токенов (см. ниже), поэтому clean_lemmas далее не нужен.
+        clean_tokens, _clean_lemmas = self._strip_noise(tokens, lemmas)
         if not clean_tokens:
             return []
 
-        candidates = self._candidates_sliding_window(clean_tokens, clean_lemmas)
+        clean_stems = self._morph.stem_tokens(clean_tokens)
+        candidates = self._candidates_sliding_window(clean_tokens, clean_stems)
         if not candidates:
             return []
 
@@ -306,10 +310,10 @@ class StreetMatcher:
         )
 
         best_by_street: Dict[int, Dict] = {}
-        for surface, lemma_tuple, start_i, end_i, _size, _gap, is_anchored in candidates:
+        for surface, stem_tuple, start_i, end_i, _size, _gap, is_anchored in candidates:
             if surface in self._stopwords:
                 continue
-            result = self._link_span(surface, lemma_tuple, (start_i, end_i))
+            result = self._link_span(surface, stem_tuple, (start_i, end_i))
             if result is None:
                 continue
             if is_anchored:

@@ -1,8 +1,8 @@
-# Dockerfile.parser — Parser service (mawo-pymorphy3 + rapidfuzz, CPU-only)
+# Dockerfile.parser — Parser service (snowballstemmer + mawo-pymorphy3 + rapidfuzz, CPU-only)
 # Multi-stage build для минимизации размера образа
 
 # =============================================================================
-# Stage 1: Builder (установка зависимостей + smoke-test rapidfuzz/pymorphy3)
+# Stage 1: Builder (установка зависимостей + smoke-test stemmer/pymorphy3/rapidfuzz)
 # =============================================================================
 FROM python:3.11.10-slim-bookworm AS builder
 
@@ -22,7 +22,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     find /root/.local -type f -name "*.md" -delete
 
 ENV PATH="/root/.local/bin:$PATH"
-RUN python -c "from rapidfuzz import fuzz; from mawo_pymorphy3 import MorphAnalyzer; print('✅ deps OK')"
+RUN python -c "from rapidfuzz import fuzz; from mawo_pymorphy3 import MorphAnalyzer; import snowballstemmer; snowballstemmer.stemmer('russian'); print('✅ deps OK')"
 
 # =============================================================================
 # Stage 2: Runtime (минимальный образ)

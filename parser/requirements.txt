@@ -6,7 +6,11 @@ tgcrypto~=1.2
 asyncpg~=0.29           # PostgreSQL client (пин согласован с корневым requirements.txt)
 
 # Морфология (токенизация — собственный regex-разбивщик parser/word_tokenizer.py)
-mawo-pymorphy3==1.0.4    # Russian morphological analyzer with DAWG (~15-20 MB RAM)
+mawo-pymorphy3==1.0.4    # Russian morphological analyzer (слои + порядковые; DAWG ~15-20 MB)
+
+# Стемминг улиц — OOV-устойчивый Snowball-стем (имена улиц несловарны, pymorphy
+# на них врёт). Ядро распознавания: стем-кортеж как ключ. Чистый Python, ~50 КБ.
+snowballstemmer~=2.2
 
 # Фуззи-матч против alias-индекса
 rapidfuzz~=3.0          # Fast fuzzy string matching (C implementation, SIMD)

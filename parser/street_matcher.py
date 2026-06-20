@@ -229,8 +229,13 @@ class StreetMatcher:
             )
             if s_match:
                 cand, score, idx = s_match
-                # length-guard: опечатка не меняет длину больше чем на ~20%.
-                if abs(len(cand) - len(surface)) <= max(2, int(0.2 * len(surface))):
+                # Guard'ы опечатки (а не «другого слова»):
+                #  • первый символ совпадает — опечатки почти не меняют первую
+                #    букву; убивает "арнаутская"→"б арнаутская" (Малая/Большая),
+                #    сохраняя "семминарская"→"семинарская", "10фонтана"→"10 фонтана";
+                #  • длина меняется не более чем на ~20%.
+                if (surface[0] == cand[0]
+                        and abs(len(cand) - len(surface)) <= max(2, int(0.2 * len(surface)))):
                     entry = s_meta[idx]
                     return {
                         'street_id': entry.street_id,

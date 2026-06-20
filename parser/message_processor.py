@@ -237,13 +237,6 @@ class MessageProcessor:
         stripped = strip_tail(raw_text)
         preserved = self._sanitize_text(preprocess_light(stripped)) or ''
 
-        # Relevance-гейт: реклама/спам (ссылки, telegram-хендлы, призывы к
-        # подписке) НЕ ставится на карту — skip без вставки события. Проверяем
-        # после strip_tail, чтобы подписной футер реальных репортов не ловился.
-        if is_promotional(preserved):
-            logger.info(f"Message {message_id}: promotional/spam → skipped (not placed)")
-            return None
-
         # Токенизация + лемматизация для матчера/классификатора (один проход).
         tokens = tokenize(preserved)
         lemmas = self.morph.lemmatize_tokens(tokens)
@@ -251,15 +244,22 @@ class MessageProcessor:
         # Определение слоя — на готовых леммах (теги '#' уже убраны в preprocess).
         layer = self.layer_classifier.classify(lemmas)
 
-        # Пустой или слишком длинный текст — поиск улиц пропускается.
+        # Реклама/спам, пустой или слишком длинный текст → улицы НЕ ищем, но
+        # событие ВСЁ РАВНО создаётся со strategy=random (случайная точка на
+        # карте). Ни одно сообщение не игнорируется — реклама/нерелевантные
+        # локации/фото без описания всё равно доходят до фронтенда.
         max_text_length = (
             settings.similarity.max_text_length
             if settings and settings.similarity else 380
         )
-        if not preserved or len(preserved) > max_text_length:
+        promotional = is_promotional(preserved)
+        if promotional or not preserved or len(preserved) > max_text_length:
             if not preserved:
                 description = 'без описания'
                 logger.debug(f"Message {message_id}: empty text → random point")
+            elif promotional:
+                description = preserved  # рекламу показываем как есть, точка random
+                logger.info(f"Message {message_id}: promotional → random point")
             else:
                 description = 'слишком длинное сообщение не является релевантной локацией'
                 logger.warning(

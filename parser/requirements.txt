@@ -15,6 +15,9 @@ snowballstemmer~=2.2
 # Фуззи-матч против alias-индекса
 rapidfuzz~=3.0          # Fast fuzzy string matching (C implementation, SIMD)
 
+# HTTP client (model_client.py — Tier-2 LLM upgrade)
+aiohttp~=3.9
+
 # Configuration (через core.settings)
 environs~=11.0
 

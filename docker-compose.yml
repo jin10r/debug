@@ -110,6 +110,54 @@ services:
     logging: *default-logging
 
   # =============================================================================
+  # Model - LLM geo-resolution service (Tier-2 upgrade)
+  # =============================================================================
+  model:
+    image: survival_model:latest
+    build:
+      context: .
+      dockerfile: model/Dockerfile.model
+      network: host
+    container_name: model
+    stop_grace_period: 30s
+    environment:
+      MODEL_PATH: /app/models
+      MODEL_N_CTX: '8192'
+      MODEL_N_THREADS: '4'
+      TOTAL_TIMEOUT_S: '30'
+      DB_DSN: postgresql://postgres:postgres@postgres:5432/postgres
+    volumes:
+      - model_models:/app/models:rw
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend
+      - db
+    expose:
+      - "8082"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8082/health')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 120s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: 1G
+        reservations:
+          cpus: '1.0'
+          memory: 512M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+    logging: *default-logging
+
+  # =============================================================================
   # Core - API сервер (опционально)
   # =============================================================================
   core:
@@ -234,4 +282,6 @@ volumes:
   postgres_data:
     driver: local
   events_media:
+    driver: local
+  model_models:
     driver: local

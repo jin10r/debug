@@ -1,7 +1,7 @@
 """Morphology — централизованная работа с mawo_pymorphy3.
 
 Один MorphAnalyzer на процесс (DAWG-словарь ~15-20 МБ RAM, инициализация
-неэкономная). Используется street_matcher для лемматизации alias-индекса и
+неэкономная). Используется geo_matcher для лемматизации alias-индекса и
 n-грамм, layer_classifier для лемматизации ключевых слов и токенов сообщения.
 
 `Lemma` dataclass — единая единица между токенизацией и финальной
@@ -84,14 +84,16 @@ class Morphology:
 
     # Размер LRU-кэша лемматизации. Слова с message-частотой ~15 уник./сообщ.
     # → ~150 сообщений/sec при ширине стрима → кэш-hit ~80% на повторах
-    # топонимов и common-words. ~10K записей × ~100 bytes = ~1MB RAM.
-    _LEMMA_CACHE_MAX = 10000
+    # топонимов и common-words. Увеличено до 20K для high-throughput сценариев.
+    # ~20K записей × ~100 bytes = ~2MB RAM.
+    _LEMMA_CACHE_MAX = 20000
     # Фраз обычно меньше (~1000 алиасов × несколько вариантов), но lemma_for_phrase
     # вызывается в _build_alias_index при каждом reindex_all → выигрыш ощутим.
     _PHRASE_CACHE_MAX = 2000
     # Кэш стемминга — отдельный от лемм (Snowball дешевле pymorphy, но кэш
     # снимает повторную работу на потоке однотипных топонимов).
-    _STEM_CACHE_MAX = 10000
+    # Увеличено до 20K для улучшения hit-rate при высокой нагрузке.
+    _STEM_CACHE_MAX = 20000
 
     def __init__(self) -> None:
         self._morph = pymorphy3.MorphAnalyzer()
@@ -190,7 +192,7 @@ class Morphology:
     def lemma_for_phrase(self, text: str) -> str:
         """Single-shot лемматизация фразы (split → лемма каждого → join).
 
-        Используется street_matcher для канонизации alias-имени в индексе,
+        Используется geo_matcher для канонизации alias-имени в индексе,
         когда отдельная токенизация избыточна (alias уже чистый, без пунктуации).
 
         Phrase-level LRU cache (2000): reindex_all обрабатывает ~1000 алиасов;

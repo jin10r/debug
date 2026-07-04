@@ -6,7 +6,7 @@
   → Morphology.lemmatize_tokens (леммы с POS)
   → LayerClassifier.classify (lemmas) (определение слоя)
   → если текст пустой/длинный — strategy='random'
-  → StreetMatcher.find_streets (tokens + lemmas → sliding-window T1/T2/T3)
+  → GeoMatcher.find_geo (tokens + lemmas → sliding-window T1/T2)
   → process_candidates SQL → INSERT.
 
 Вставка идемпотентна по message_id (ON CONFLICT DO NOTHING) — повторная
@@ -24,7 +24,8 @@ import asyncpg
 from .layer_classifier import LayerClassifier
 from .morphology import Morphology
 from .phonetic_index import PhoneticIndex
-from .street_matcher import StreetMatcher
+from .geo_matcher import GeoMatcher
+from .semantic_resolver import SemanticResolver
 from .word_tokenizer import tokenize
 from .text_preprocessor import preprocess_light, strip_tail, is_promotional
 
@@ -34,7 +35,6 @@ except Exception:
     settings = None
 
 logger = logging.getLogger(__name__)
-
 
 # Общий хвост INSERT-CTE: bump версии events_meta, pg_notify('events_new') и
 # возврат id/layer/strategy вставленной строки. Используется обеими ветками
@@ -83,7 +83,7 @@ _INSERT_EVENT_SIMPLE = """
             (message_id, event_time, description, photo_url,
              layer, strategy, geom, matches)
         VALUES ($1, $2, $3, $4, $5, $6, ST_GeomFromText($7, 4326), '[]'::jsonb)
-        ON CONFLICT (message_id) DO NOTHING
+        ON CONFLICT (message_id, event_time) DO NOTHING
         RETURNING id, event_time, geom, layer, strategy, description,
                   photo_url, matches
     ),
@@ -91,11 +91,12 @@ _INSERT_EVENT_SIMPLE = """
 
 # Матч-ветка: geom/strategy/matches приходят из process_candidates ВНУТРИ того
 # же statement — один roundtrip вместо двух (был отдельный SELECT + INSERT).
+# p_strategy=$9: 'single_match', 'intersection', 'midpoint' или NULL (fallback).
 _INSERT_EVENT_FROM_CANDIDATES = """
     WITH pc AS (
         SELECT result_geom, result_strategy, result_matches
         FROM process_candidates(
-            $6::int[], $7::double precision[], $8::float, $9::text[], $10::float
+            $6::int[], $7::double precision[], $8::text[], $9::varchar
         )
     ),
     inserted AS (
@@ -106,7 +107,7 @@ _INSERT_EVENT_FROM_CANDIDATES = """
                pc.result_strategy, pc.result_geom, pc.result_matches
         FROM pc
         WHERE pc.result_geom IS NOT NULL
-        ON CONFLICT (message_id) DO NOTHING
+        ON CONFLICT (message_id, event_time) DO NOTHING
         RETURNING id, event_time, geom, layer, strategy, description,
                   photo_url, matches
     ),
@@ -120,8 +121,10 @@ class MessageProcessor:
         self.db_pool = db_pool
         # Один MorphAnalyzer на процесс — переиспользуется индексом, матчером и классификатором
         self.morph = Morphology()
+
         self.index = PhoneticIndex(self.morph)
-        self.matcher = StreetMatcher(self.morph, self.index)
+        self.matcher = GeoMatcher(self.morph, self.index)
+        self.resolver = SemanticResolver(self.morph, self.index)
         self.layer_classifier = LayerClassifier(self.morph)
         self._listen_conn: Optional[asyncpg.Connection] = None
 
@@ -131,23 +134,27 @@ class MessageProcessor:
             sim = settings.similarity if settings and settings.similarity else None
             if sim:
                 logger.info(
-                    f"Using street matcher settings: "
+                    f"Using geo matcher settings: "
                     f"phonetic_threshold={sim.phonetic_match_threshold}, "
                     f"lemma_threshold={sim.entity_similarity_threshold}, "
                     f"pseudo_radius={sim.pseudo_intersection_radius_meters}m, "
                     f"max_entities={sim.max_entities}"
                 )
 
-            # 1. StreetMatcher + PhoneticIndex — критично, без них парсер не работает.
-            # matcher.initialize() сам грузит streets из БД и строит surface+lemma индекс
+            # GeoMatcher + PhoneticIndex — критично, без них парсер не работает.
+            # matcher.initialize() сам грузит geo из БД и строит surface+lemma индекс
             # (off-loaded в thread, т.к. лемматизация всех алиасов — это секунды CPU).
-            logger.info("Initializing StreetMatcher + PhoneticIndex...")
+            logger.info("Initializing GeoMatcher + PhoneticIndex...")
             success = await self.matcher.initialize(self.db_pool)
             if not success:
-                logger.error("StreetMatcher initialization failed")
+                logger.error("GeoMatcher initialization failed")
                 return False
 
-            # 2. Подписка на уведомления от PostgreSQL
+            # SemanticResolver — загружает стоп-слова, инициализирует модель (если enabled).
+            logger.info("Initializing SemanticResolver...")
+            await self.resolver.initialize(self.db_pool)
+
+            # Подписка на уведомления от PostgreSQL
             logger.info("Setting up PostgreSQL notifications...")
             await self._setup_pg_notify()
 
@@ -159,21 +166,21 @@ class MessageProcessor:
             return False
 
     async def _setup_pg_notify(self):
-        """Настроить уведомление от PostgreSQL при изменении улиц."""
+        """Настроить уведомление от PostgreSQL при изменении geo объектов."""
         try:
             self._listen_conn = await self.db_pool.acquire()
             await self._listen_conn.add_listener(
-                "streets_updated",
-                self._on_streets_updated
+                "geo_updated",
+                self._on_geo_updated
             )
-            logger.info("Subscribed to streets_updated channel")
+            logger.info("Subscribed to geo_updated channel")
         except Exception as e:
             logger.error(f"Failed to setup pg_notify: {e}")
 
-    async def _on_streets_updated(self, conn: asyncpg.Connection, pid: int,
-                                  channel: str, payload: str):
-        """Callback pg_notify streets_updated → переиндексация alias-индекса."""
-        logger.info("🔄 streets_updated received, reindexing...")
+    async def _on_geo_updated(self, conn: asyncpg.Connection, pid: int,
+                               channel: str, payload: str):
+        """Callback pg_notify geo_updated → переиндексация alias-индекса."""
+        logger.info("🔄 geo_updated received, reindexing...")
 
         async def _reindex(func, *args):
             try:
@@ -197,17 +204,16 @@ class MessageProcessor:
                 pass
 
         try:
-            street_id = json_lib.loads(payload).get('street_id')
+            geo_id = json_lib.loads(payload).get('geo_id')
         except Exception as e:
-            logger.error(f"Failed to parse streets_updated payload: {e}")
-            street_id = None
+            logger.error(f"Failed to parse geo_updated payload: {e}")
+            geo_id = None
 
-        if street_id:
+        if geo_id:
             task = asyncio.create_task(
-                _reindex(self.matcher.reindex_street, self.db_pool, street_id)
+                _reindex(self.matcher.reindex_geo, self.db_pool, geo_id)
             )
         else:
-            # Без street_id — переиндексируем все улицы.
             task = asyncio.create_task(
                 _reindex(self.matcher.reindex_all, self.db_pool)
             )
@@ -271,78 +277,85 @@ class MessageProcessor:
                     photo_path=photo_path, layer=layer, strategy='random',
                     geom_wkt=self._generate_random_point_in_question_overlay(),
                 ),
-                tokens=tokens, street_ids=[],
+                tokens=tokens, geo_ids=[],
             )
 
-        logger.debug(f"Message {message_id}: street search (tokens={len(tokens)})")
-        entities = self.matcher.find_streets(tokens=tokens, lemmas=lemmas)
+        logger.debug(f"Message {message_id}: geo search (tokens={len(tokens)})")
+        entities = await self.matcher.find_geo(tokens=tokens, lemmas=lemmas)
 
-        street_ids: list = []
-        street_scores: list = []
-        street_texts: list = []
+        geo_ids: list = []
+        geo_scores: list = []
+        geo_texts: list = []
         for ent in entities:
-            if ent['street_id'] not in street_ids:
-                street_ids.append(ent['street_id'])
-                street_scores.append(ent['score'])
-                street_texts.append(ent['text'])
+            if ent['geo_id'] not in geo_ids:
+                geo_ids.append(ent['geo_id'])
+                geo_scores.append(ent['score'])
+                geo_texts.append(ent['text'])
 
-        # Улиц не нашлось — случайная точка.
-        if not street_ids:
-            # Coverage-feedback: проперные токены без матча — кандидаты в пропуски
-            # газеттира (напр. "Маяковского" — улицы нет в данных). Системный
-            # сигнал для ревизии данных, не хардкод.
+        # Объектов не нашлось — случайная точка.
+        if not geo_ids:
             proper = [t.text for t in tokens
                       if t.text[:1].isupper() and len(t.text) >= 5 and not t.text.isdigit()]
             if proper:
                 logger.info(
-                    f"Message {message_id}: no street match; "
+                    f"Message {message_id}: no geo match; "
                     f"proper tokens for gazetteer review: {proper}"
                 )
-            logger.debug(f"Message {message_id}: no street matches → random point")
+            logger.debug(f"Message {message_id}: no geo matches → random point")
             return self._enrich(
                 await self._insert_event(
                     message_id=message_id, event_time=event_time, description=preserved,
                     photo_path=photo_path, layer=layer, strategy='random',
                     geom_wkt=self._generate_random_point_in_question_overlay(),
                 ),
-                tokens=tokens, street_ids=street_ids,
+                tokens=tokens, geo_ids=geo_ids,
             )
 
-        # Улицы найдены — геометрия и стратегия через process_candidates.
-        # Радиус псевдо-пересечения настраиваемый через PSEUDO_INTERSECTION_RADIUS_METERS.
-        pseudo_radius = (
-            settings.similarity.pseudo_intersection_radius_meters
-            if settings and settings.similarity else 150.0
-        )
-        geom_min_score = (
-            settings.similarity.geometry_min_score
-            if settings and settings.similarity else 0.85
-        )
+        # SemanticResolver: определяет стратегию для 2+ кандидатов.
+        strategy: Optional[str] = None
+        if len(geo_ids) > 1:
+            resolved = await self.resolver.resolve(
+                text=preserved,
+                tokens=tokens,
+                lemmas=lemmas,
+                candidates=entities,
+            )
+            if resolved is not None:
+                strategy = resolved.get('strategy')
+                resolved_ids = resolved.get('geo_ids')
+                if resolved_ids is not None:
+                    # Пересортировать geo_ids/scores/texts по решению модели
+                    id_set = set(resolved_ids)
+                    geo_ids = [gid for gid in geo_ids if gid in id_set]
+                    geo_scores = [s for gid, s in zip(geo_ids, geo_scores) if gid in id_set]
+                    geo_texts = [t for gid, t in zip(geo_ids, geo_texts) if gid in id_set]
+                logger.info(
+                    f"Message {message_id}: resolver → {strategy}, "
+                    f"geo_ids={geo_ids}"
+                )
+
         logger.debug(
-            f"Message {message_id}: {len(street_ids)} streets matched: {street_ids} "
-            f"(pseudo_radius={pseudo_radius}m)"
+            f"Message {message_id}: {len(geo_ids)} geo matched: {geo_ids}"
         )
-        # process_candidates вычисляется ВНУТРИ INSERT-CTE — один roundtrip.
         return self._enrich(
             await self._insert_event_from_candidates(
                 message_id=message_id, event_time=event_time, description=preserved,
                 photo_path=photo_path, layer=layer,
-                street_ids=street_ids, street_scores=street_scores,
-                street_texts=street_texts, pseudo_radius=pseudo_radius,
-                geom_min_score=geom_min_score,
+                geo_ids=geo_ids, geo_scores=geo_scores,
+                geo_texts=geo_texts, strategy=strategy,
             ),
-            tokens=tokens, street_ids=street_ids,
+            tokens=tokens, geo_ids=geo_ids,
         )
 
     @staticmethod
     def _enrich(
-        result: Optional[Dict[str, Any]], *, tokens: list, street_ids: list
+        result: Optional[Dict[str, Any]], *, tokens: list, geo_ids: list
     ) -> Optional[Dict[str, Any]]:
         """Дополнить ненулевой результат метой обработки для итогового лога monitoring."""
         if result is not None:
             result['tokens'] = len(tokens)
-            result['streets_matched'] = len(street_ids)
-            result['street_ids'] = street_ids
+            result['geo_matched'] = len(geo_ids)
+            result['geo_ids'] = geo_ids
         return result
 
     async def _insert_event(
@@ -362,17 +375,18 @@ class MessageProcessor:
 
     async def _insert_event_from_candidates(
         self, *, message_id: int, event_time: datetime, description: str,
-        photo_path: Optional[str], layer: str, street_ids: list,
-        street_scores: list, street_texts: list, pseudo_radius: float,
-        geom_min_score: float,
+        photo_path: Optional[str], layer: str, geo_ids: list,
+        geo_scores: list, geo_texts: list, strategy: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Вставить событие, посчитав геометрию через process_candidates в том же
-        запросе — один roundtrip к БД (раньше было SELECT + отдельный INSERT)."""
-        scores_array = [float(s) for s in street_scores]
+        запросе — один roundtrip к БД (раньше было SELECT + отдельный INSERT).
+        Если strategy указан (от SemanticResolver), передаётся в SQL как p_strategy.
+        """
+        scores_array = [float(s) for s in geo_scores]
         return await self._run_insert(
             _INSERT_EVENT_FROM_CANDIDATES,
             (message_id, event_time, description, photo_path, layer,
-             street_ids, scores_array, pseudo_radius, street_texts, geom_min_score),
+             geo_ids, scores_array, geo_texts, strategy),
             message_id=message_id,
         )
 
@@ -381,7 +395,7 @@ class MessageProcessor:
     ) -> Optional[Dict[str, Any]]:
         """Выполнить INSERT-CTE (одним roundtrip'ом: INSERT + meta + pg_notify).
 
-        Вставка идемпотентна (ON CONFLICT (message_id) DO NOTHING): при повторе
+        Вставка идемпотентна (ON CONFLICT (message_id, event_time) DO NOTHING): при повторе
         RETURNING пуст → fetchrow вернёт None → это дубль или пустая геометрия,
         возвращаем None (не ошибка). layer/strategy читаются из вставленной
         строки — корректны для обеих веток (в т.ч. когда strategy пришла из
@@ -432,8 +446,8 @@ class MessageProcessor:
         if self._listen_conn:
             try:
                 await self._listen_conn.remove_listener(
-                    "streets_updated",
-                    self._on_streets_updated
+                    "geo_updated",
+                    self._on_geo_updated
                 )
                 await self._listen_conn.close()
             except Exception as e:
@@ -441,5 +455,8 @@ class MessageProcessor:
 
         if self.matcher:
             await self.matcher.close()
+
+        if self.resolver:
+            await self.resolver.close()
 
         logger.info("MessageProcessor closed")

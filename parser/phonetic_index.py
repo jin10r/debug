@@ -1,7 +1,7 @@
-"""StreetIndex — индекс улиц: стем-индекс (распознавание) + surface (опечатки).
+"""PhoneticIndex — индекс geo-объектов: стем-индекс (распознавание) + surface (опечатки).
 
 Архитектура (после перехода на морфологический распознаватель):
-  • для каждого алиаса улицы строим:
+  • для каждого алиаса geo-объекта строим:
     - **стем-кортеж** (Snowball по каждому токену) — ключ точного распознавания;
     - **сырую поверхностную форму** — для орфо-корректора (typo, Tier 2).
   • Tier 1 (распознавание) — точный lookup по стем-кортежу: O(1), детерминирован,
@@ -9,9 +9,9 @@
   • Tier 2 (опечатки) — rapidfuzz по сырым алиасам, только как корректор
     орфографии (высокий cutoff + length-guard), НЕ как основной матч.
 
-Стем устойчив к OOV-проперам (имена улиц несловарны), где pymorphy-лемматизация
+Стем устойчив к OOV-проперам (имена объектов несловарны), где pymorphy-лемматизация
 врёт. Класс называется PhoneticIndex для обратной совместимости (используется в
-street_matcher.py и тестах под этим именем).
+geo_matcher.py и тестах под этим именем).
 """
 
 import logging
@@ -32,14 +32,19 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class PhoneticEntry:
-    """Запись индекса: улица + одно из её каноничных названий + строка-вариант."""
+    """Запись индекса: geo-объект + одно из его каноничных названий + строка-вариант.
+
+    Оптимизация памяти: frozen=True позволяет Python оптимизировать хранение
+    и снижает memory footprint по сравнению с обычными dataclass.
+    """
+    __slots__ = ('street_id', 'canonical_name', 'variant_text')
     street_id: int
-    canonical_name: str   # первое значение из streets.names — для UI/логов
+    canonical_name: str   # первое значение из geo.names — для UI/логов
     variant_text: str     # стем-строка или сырой алиас (lowercase, single-space)
 
 
 class PhoneticIndex:
-    """Индекс улиц: стем-кортежи (распознавание) + surface-фразы (опечатки).
+    """Индекс geo-объектов: стем-кортежи (распознавание) + surface-фразы (опечатки).
 
     Полная пересборка через `build(rows)`; точечная замена одной улицы через
     `replace_street(street_id, row)`. Оба метода — sync; вызываются через
@@ -107,9 +112,9 @@ class PhoneticIndex:
     # ---------------------------------------------------------------- build
 
     def build(self, rows) -> int:
-        """Полная пересборка индексов из строк `streets`.
+        """Полная пересборка индексов из строк `geo`.
 
-        rows — iterable of dict-like с ключами 'id' и 'names'. Возвращает
+        rows — iterable of dict-like с ключами 'id' и 'names' (из таблицы geo). Возвращает
         количество surface-фраз.
         """
         new_stem_index: Dict[Tuple[str, ...], List[PhoneticEntry]] = {}
@@ -140,7 +145,7 @@ class PhoneticIndex:
 
         logger.info(
             f"[PhoneticIndex] built: {len(new_surface_phrases)} surface phrases, "
-            f"{len(new_stem_index)} stem tuples from {street_count} streets"
+            f"{len(new_stem_index)} stem tuples from {street_count} objects"
         )
         return len(new_surface_phrases)
 

@@ -46,7 +46,7 @@ core/
 │   ├── db_base.py          # asyncpg-пул
 │   ├── dbconnect.py        # подключение/жизненный цикл
 │   ├── db_events.py        # CRUD событий, снапшоты
-│   ├── db_streets.py       # газеттир улиц
+│   ├── db_geo.py           # газеттир гео-объектов
 │   └── db_spatial.py       # PostGIS-запросы
 └── utils/
     ├── cache.py            # in-memory TTL+LRU кэш событий
@@ -63,7 +63,7 @@ core/
 3. `csrf_middleware` — CSRF-проверка мутирующих запросов
 4. `jwt_auth_middleware` — валидация access-токена (защищённые маршруты)
 5. `rate_limiter.middleware` — fixed-window лимит (60/мин по умолчанию,
-   per-endpoint override для `/api/events`, `/api/streets`; health исключён)
+   per-endpoint override для `/api/events`, `/api/geo`; health исключён)
 
 ## Маршруты
 
@@ -79,7 +79,7 @@ core/
 | GET | `/api/events` | snapshot событий |
 | POST | `/api/events` | инкрементальные обновления |
 | GET | `/api/events/status`, `/api/data_status` | статус данных |
-| GET | `/api/streets` | газеттир |
+| GET | `/api/geo` | газеттир |
 | GET | `/ws` | WebSocket (live-события) |
 | GET | `/metrics` | prometheus |
 

@@ -1,16 +1,18 @@
 -- 02-tables.sql
 -- Минимальная схема без избыточности
+-- Events partitioned by day for high-churn performance
 
--- Справочник улиц с синонимами (names TEXT[])
-CREATE TABLE IF NOT EXISTS streets (
+-- Справочник geo-объектов: улицы, нас.пункты, POI
+CREATE TABLE IF NOT EXISTS geo (
     id SERIAL PRIMARY KEY,
-    names TEXT[] NOT NULL,        -- массив синонимов названий
+    names TEXT[] NOT NULL,
+    type TEXT NOT NULL DEFAULT 'street',
     geom GEOMETRY(Geometry, 4326) NOT NULL,
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_streets_names ON streets USING gin (names);
-CREATE INDEX IF NOT EXISTS idx_streets_geom ON streets USING gist (geom);
+CREATE INDEX IF NOT EXISTS idx_geo_names ON geo USING gin (names);
+CREATE INDEX IF NOT EXISTS idx_geo_geom ON geo USING gist (geom);
 
 -- Стоп-слова
 CREATE TABLE IF NOT EXISTS stopwords (word TEXT PRIMARY KEY);
@@ -21,14 +23,13 @@ CREATE TABLE IF NOT EXISTS layer_keywords (
     keywords TEXT[] NOT NULL
 );
 
--- Основная таблица событий (единственная, без raw_data)
+-- Основная таблица событий (партиционирована по дням)
 -- Инварианты:
---   layer — закрытое множество слоёв (см. parser/layer_classifier.py);
---   description — ограничение 500 символов (parser limit-ит до 380 через
---     MAX_TEXT_LENGTH, БД страхует на случай bypass).
+--   layer — закрытое множество слоёв;
+--   description — ограничение 500 символов.
 CREATE TABLE IF NOT EXISTS events (
-    id SERIAL PRIMARY KEY,
-    message_id BIGINT,                 -- Telegram message id (дедупликация)
+    id SERIAL,
+    message_id BIGINT,
     event_time TIMESTAMPTZ NOT NULL,
     description TEXT NOT NULL CHECK (char_length(description) <= 500),
     photo_url TEXT,
@@ -38,33 +39,61 @@ CREATE TABLE IF NOT EXISTS events (
     strategy VARCHAR(40) NOT NULL CHECK (strategy IN (
         'random',
         'single_match',
-        'single_intersection',
-        'polygon_intersection'
+        'intersection',
+        'midpoint'
     )),
-    geom GEOMETRY
-);
+    geom GEOMETRY,
+    PRIMARY KEY (id, event_time)
+) PARTITION BY RANGE (event_time);
 
-CREATE INDEX IF NOT EXISTS idx_events_time ON events(event_time);
+-- Создаём партиции на текущий день + 2 дня вперёд
+DO $$
+DECLARE
+    start_date DATE := date_trunc('day', NOW())::DATE;
+    part_date DATE;
+    part_name TEXT;
+BEGIN
+    FOR i IN 0..2 LOOP
+        part_date := start_date + i;
+        part_name := 'events_' || to_char(part_date, 'YYYY_MM_DD');
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_class WHERE relname = part_name
+        ) THEN
+            EXECUTE format(
+                'CREATE TABLE %I PARTITION OF events FOR VALUES FROM (%L) TO (%L)',
+                part_name,
+                part_date,
+                part_date + 1
+            );
+        END IF;
+    END LOOP;
+END;
+$$;
+
+-- Индексы на партиционированной таблице (создаются на родителе и наследуются)
+CREATE INDEX IF NOT EXISTS idx_events_time ON events(event_time DESC);
 CREATE INDEX IF NOT EXISTS idx_events_geom ON events USING gist (geom);
 CREATE INDEX IF NOT EXISTS idx_events_layer ON events(layer);
+CREATE INDEX IF NOT EXISTS idx_events_message_id ON events(message_id);
 
--- message_id + уникальный индекс делают вставку события идемпотентной
--- (INSERT ... ON CONFLICT (message_id) DO NOTHING): бэкфилл истории канала и
--- ретраи воркера не создают дублей. ALTER ... IF NOT EXISTS — совместимость с
--- уже существующей таблицей. NULL в message_id допустимы (несколько NULL не
--- конфликтуют) — legacy-строки не ломаются.
-ALTER TABLE events ADD COLUMN IF NOT EXISTS message_id BIGINT;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_events_message_id ON events(message_id);
+-- message_id + event_time = уникальны (partition key обязан входить в unique index).
+-- NULL в unique-индексе не равен NULL, поэтому WHERE не нужен.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_events_message_id_unique ON events(message_id, event_time);
 
--- CHECK strategy сужен до 4 значений, которые реально выдают process_candidates
--- и parser; для уже существующей таблицы пересоздаём ограничение идемпотентно.
+-- CHECK strategy: только стратегии, которые реально выдают process_candidates.
+-- Старые приблизительные стратегии (nearest_point, within_polygon и др.) заменяются
+-- на single_match при миграции.
 ALTER TABLE events DROP CONSTRAINT IF EXISTS events_strategy_check;
+UPDATE events SET strategy = 'single_match'
+WHERE strategy NOT IN ('random', 'single_match', 'intersection', 'midpoint');
 ALTER TABLE events ADD CONSTRAINT events_strategy_check
-    CHECK (strategy IN ('random', 'single_match', 'single_intersection', 'polygon_intersection'));
+    CHECK (strategy IN (
+        'random',
+        'single_match',
+        'intersection',
+        'midpoint'
+    ));
 
--- Идемпотентные ALTER-блоки для уже существующих таблиц (events.layer
--- допустимые значения и events.description длина). На новой БД ограничения
--- уже стоят в CREATE TABLE — DROP+ADD пересоздаёт их под тем же именем.
 ALTER TABLE events DROP CONSTRAINT IF EXISTS events_layer_check;
 ALTER TABLE events ADD CONSTRAINT events_layer_check
     CHECK (layer IN ('pig', 'cops', 'bus', 'traffic'));

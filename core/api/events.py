@@ -196,13 +196,13 @@ async def get_events_handler(request: web.Request):
         return web.json_response({'error': 'Internal server error'}, status=500)
 
 
-async def get_streets_handler(request: web.Request):
+async def get_geo_handler(request: web.Request):
     """Handles requests with in-memory caching."""
     cache: CacheManager = request.app.get('cache')
     
     # Check cache first
     if cache:
-        cached = await cache.get_streets_geojson()
+        cached = await cache.get_geo_geojson()
         if cached:
             return web.Response(
                 text=cached,
@@ -216,11 +216,11 @@ async def get_streets_handler(request: web.Request):
     # Fetch from DB
     db_request = request.app['db']
     try:
-        geojson_data = await db_request.get_all_streets_as_geojson()
+        geojson_data = await db_request.get_all_geo_as_geojson()
         
         # Cache for 1 hour
         if cache:
-            await cache.set_streets_geojson(geojson_data, ttl=3600)
+            await cache.set_geo_geojson(geojson_data, ttl=3600)
         
         return web.Response(
             text=geojson_data,
@@ -231,7 +231,7 @@ async def get_streets_handler(request: web.Request):
             }
         )
     except Exception as e:
-        logger.error(f"Error fetching streets for API: {e}", exc_info=True)
+        logger.error(f"Error fetching geo for API: {e}", exc_info=True)
         return web.json_response({'error': 'Internal server error'}, status=500)
 
 

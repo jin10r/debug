@@ -94,8 +94,8 @@ class DBAdapter:
                     "ALTER TABLE events ADD COLUMN IF NOT EXISTS message_id BIGINT"
                 )
                 await conn.execute(
-                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_events_message_id "
-                    "ON events(message_id)"
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_events_message_id_unique "
+                    "ON events(message_id, event_time)"
                 )
                 # photo_url: фс-путь /app/media/events/<file> → публичный
                 # /media/events/<file>. Старый формат браузером не открывается.

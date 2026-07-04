@@ -6,7 +6,7 @@ Telegram Mini App — интерактивная карта событий Од�
 События живут 60 минут (TTL) и исчезают сами.
 
 - **Извлечение улиц** — sliding-window матчер: морфология (`mawo-pymorphy3`) +
-  fuzzy-сопоставление (`rapidfuzz`) против справочника гео-объектов (postgres/data/streets.csv). Без NER/нейросетей,
+  fuzzy-сопоставление (`rapidfuzz`) против справочника гео-объектов (postgres/data/geo.csv). Без NER/нейросетей,
   CPU-only. Детали алгоритма — [docs/parser.md](docs/parser.md).
 - **Карта** — PWA на нативном MapLibre GL JS, offline-first. Детали —
   [docs/web.md](docs/web.md)
@@ -194,7 +194,7 @@ docker compose down -v     # + удалить тома (БД, медиа)
 ```
 core/        backend сервиса `core` (aiohttp app, API, БД-адаптеры, settings)
 parser/      сервис `parser` (kurigram + sliding-window матчер)
-postgres/    init-скрипты схемы и данные (streets.csv, stopwords.csv)
+postgres/    init-скрипты схемы и данные (geo.csv, stopwords.csv)
 web/         фронтенд сервиса `web` (TypeScript + MapLibre GL, webpack)
 docs/        по одному файлу на микросервис (core, parser, web, postgres)
 ```

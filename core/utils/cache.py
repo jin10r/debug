@@ -181,13 +181,13 @@ class CacheManager:
             key += f":{','.join(sorted(layers))}"
         return await self.setItem(key, data, ttl)
 
-    async def get_streets_geojson(self) -> Optional[str]:
-        """Get cached streets GeoJSON"""
-        return await self.getItem("streets:geojson")
+    async def get_geo_geojson(self) -> Optional[str]:
+        """Get cached geo GeoJSON"""
+        return await self.getItem("geo:geojson")
 
-    async def set_streets_geojson(self, data: str, ttl: int = 3600) -> bool:
-        """Cache streets GeoJSON"""
-        return await self.setItem("streets:geojson", data, ttl)
+    async def set_geo_geojson(self, data: str, ttl: int = 3600) -> bool:
+        """Cache geo GeoJSON"""
+        return await self.setItem("geo:geojson", data, ttl)
 
     async def get_stats(self) -> dict:
         """Get cache statistics including LRU metrics."""

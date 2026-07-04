@@ -40,7 +40,7 @@ class RateLimiter:
         # Per-endpoint overrides: path -> (limit, window_seconds)
         self.endpoint_limits: dict = {
             '/api/events': (120, 60),
-            '/api/streets': (30, 60),
+            '/api/geo': (30, 60),
         }
 
     # ------------------------------------------------------------------

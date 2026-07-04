@@ -137,8 +137,9 @@ class ParserBot:
         return True
 
     async def _init_processor(self) -> bool:
-        """Инициализация процессора сообщений (общий пул БД)."""
+        """Инициализация процессора сообщений."""
         logger.info("Initializing message processor...")
+
         self.processor = MessageProcessor(db_pool=self.db.pool)
         if not await self.processor.initialize():
             logger.error("Failed to initialize message processor")
@@ -191,19 +192,26 @@ class ParserBot:
             return False
 
     async def _load_chat_history(self):
-        """Уложить последние сообщения канала в очередь обработки (бэкфилл)."""
+        """Уложить последние сообщения канала в очередь обработки (бэкфилл).
+
+        Оптимизация: стриминг вместо накопления всего списка в памяти.
+        """
         try:
             logger.info(f"Loading history from channel {self.channel_id}...")
 
             await self._warmup_peer()
 
             count = 0
+            # Используем async for для стриминга - не загружаем всю историю в память
             async for message in self.app.get_chat_history(
                 chat_id=self.channel_id,
                 limit=settings.parser.history_limit,
             ):
                 await self._message_queue.put(message)
                 count += 1
+                # Периодически логируем прогресс для больших историй
+                if count % 50 == 0:
+                    logger.debug(f"History loading progress: {count} messages")
 
             logger.info(f"✅ Chat history queued: {count} messages")
 
@@ -356,21 +364,39 @@ class ParserBot:
         идемпотентны. Воркер НЕ умирает из-за ошибки обработки одного сообщения
         (страховочный except) — завершается только отменой (CancelledError) при
         shutdown. task_done() в finally обязателен для корректного queue.join().
+
+        Оптимизация: батчинг - обрабатывает несколько сообщений за одну итерацию
+        когда очередь заполнена, снижая per-message overhead.
         """
         logger.info(f"Message queue worker {worker_id} started")
+        batch_size = 5  # Обрабатываем до 5 сообщений за раз при наличии
+
         while True:
+            # Собираем батч сообщений для снижения overhead
+            messages = []
             message = await self._message_queue.get()
+            messages.append(message)
+
+            # Если в очереди есть ещё сообщения, берём их батчем
             try:
-                await self._process_with_retry(message)
-            except Exception as e:
-                # _process_with_retry сам гасит ошибки обработки; это последний
-                # рубеж, чтобы воркер пережил даже непредвиденный сбой.
-                # CancelledError — BaseException, сюда не попадает: пробросится
-                # дальше после finally (корректное завершение при shutdown).
-                self._errors += 1
-                logger.error(f"Worker {worker_id}: unhandled error: {e}")
-            finally:
-                self._message_queue.task_done()
+                while len(messages) < batch_size and not self._message_queue.empty():
+                    messages.append(self._message_queue.get_nowait())
+            except asyncio.QueueEmpty:
+                pass
+
+            # Обрабатываем батч
+            for msg in messages:
+                try:
+                    await self._process_with_retry(msg)
+                except Exception as e:
+                    # _process_with_retry сам гасит ошибки обработки; это последний
+                    # рубеж, чтобы воркер пережил даже непредвиденный сбой.
+                    # CancelledError — BaseException, сюда не попадает: пробросится
+                    # дальше после finally (корректное завершение при shutdown).
+                    self._errors += 1
+                    logger.error(f"Worker {worker_id}: unhandled error: {e}")
+                finally:
+                    self._message_queue.task_done()
 
     async def _process_with_retry(self, message: Message):
         """Обработать сообщение с ретраями (повторы идемпотентны — ON CONFLICT).
@@ -458,22 +484,23 @@ class ParserBot:
             'message_id': message_id,
             'text': self._extract_text(message),
             'event_time': self._to_kiev(message.date),
-            'photo': message.photo,
         }
-
-        if message.photo:
-            msg_data['photo_path'] = await self._download_photo(message)
 
         result = await self.processor.process_message(msg_data)
 
         if result:
             self._messages_processed += 1
+            # Фото скачивается асинхронно, не блокируя конвейер.
+            if message.photo:
+                asyncio.create_task(self._deferred_photo_download(
+                    message, message_id, msg_data['event_time'],
+                ))
             elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
             logger.info(
                 f"✅ Message {message_id} processed in {elapsed:.2f}s: "
                 f"event_id={result['event_id']}, layer={result['layer']}, "
                 f"strategy={result.get('strategy', '?')}, "
-                f"streets={result.get('streets_matched', 0)}, "
+                f"geo={result.get('geo_matched', 0)}, "
                 f"tokens={result.get('tokens', 0)}"
             )
         else:
@@ -536,6 +563,31 @@ class ParserBot:
         except Exception as e:
             logger.error(f"Failed to download photo: {e}")
             return None
+
+    async def _deferred_photo_download(
+        self, message: Message, message_id: int, event_time: datetime,
+    ) -> None:
+        """Скачать фото в фоне и прикрепить к уже созданному событию.
+
+        Событие создаётся без photo_url — это убирает download из crit-path
+        конвейера. При бэкфилле исторических сообщений фото не тормозит
+        создание событий, а скачивается асинхронно. Если download упал,
+        событие уже есть в БД (без фото) — не потеряно.
+        """
+        try:
+            photo_url = await self._download_photo(message)
+            if photo_url:
+                await self.db.pool.execute(
+                    "UPDATE events SET photo_url = $1 "
+                    "WHERE message_id = $2 AND event_time = $3 "
+                    "AND photo_url IS NULL",
+                    photo_url, message_id, event_time,
+                )
+                logger.info(f"Message {message_id}: photo attached: {photo_url}")
+            else:
+                logger.debug(f"Message {message_id}: photo download returned None")
+        except Exception as e:
+            logger.warning(f"Message {message_id}: deferred photo download failed: {e}")
 
     async def _run_photo_cleanup_listener(self):
         """Слушать NOTIFY events_cleaned и удалять физические файлы фото.

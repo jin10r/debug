@@ -40,7 +40,7 @@ http_requests_in_progress = Gauge(
 cache_hits_total = Counter(
     'cache_hits_total',
     'Total cache hits',
-    ['cache_type']  # e.g., 'streets', 'events', 'nlp'
+    ['cache_type']  # e.g., 'geo', 'events', 'nlp'
 )
 
 cache_misses_total = Counter(
@@ -219,7 +219,7 @@ def _normalize_endpoint(path: str) -> str:
     # Keep known endpoints as-is
     known_endpoints = {
         '/api/events',
-        '/api/streets',
+        '/api/geo',
         '/api/data_status',
         '/health',
         '/health/ready',

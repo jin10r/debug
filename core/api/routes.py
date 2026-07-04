@@ -6,7 +6,7 @@ from core.api.events import (
     get_events_status_handler,
     post_events_updates_handler,
     get_events_snapshot_handler,
-    get_streets_handler,
+    get_geo_handler,
     get_data_status_handler
 )
 
@@ -52,7 +52,7 @@ def setup_routes(app: web.Application):
     app.router.add_get('/api/events', get_events_snapshot_handler)
     app.router.add_get('/api/events/status', get_events_status_handler)
     app.router.add_post('/api/events/updates', post_events_updates_handler)
-    app.router.add_get('/api/streets', get_streets_handler)
+    app.router.add_get('/api/geo', get_geo_handler)
     app.router.add_get('/api/data_status', get_data_status_handler)
 
     # Configuration API (POST для безопасности — не логируются параметры)

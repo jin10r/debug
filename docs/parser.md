@@ -24,7 +24,7 @@ parser/
 ├── morphology.py          # mawo_pymorphy3 + Lemma dataclass + LRU-кэш
 ├── layer_classifier.py    # cops/bus/traffic/pig по keyword-матчу (hashtag-override)
 ├── phonetic_index.py      # Сборщик surface + lemma индексов при старте
-├── street_matcher.py      # Sliding-window линкер: 3 тира (surface/lemma)
+├── geo_matcher.py      # Sliding-window линкер: 3 тира (surface/lemma)
 └── db_adapter.py          # PostgreSQL pool
 ```
 
@@ -43,16 +43,16 @@ parser/
 10. LayerClassifier.classify(lemmas, tokens) → 'cops'|'bus'|'traffic'|'pig'
     └─ ## -якорные токены проверяются первыми (hashtag-override)
 11. [пусто / >380 симв.] → strategy=random, выход
-12. StreetMatcher.find_streets(tokens, lemmas):
+ 12. GeoMatcher.find_geo(tokens, lemmas):
     _strip_noise (пунктуация)
     _candidates_sliding_window: 1..max_sliding_window(=3) токенов
     для каждого кандидата _link_span:
       Tier 1 [Surface fuzzy] rapidfuzz(surface vs alias-names, порог 0.85)
       Tier 2 [Lemma exact]   O(1) dict lookup по lemma-tuple
       Tier 3 [Lemma fuzzy]   rapidfuzz(lemma_text vs lemma-phrases, порог 0.82)
-    dedup по street_id: max score; is_anchored → +0.05 bonus
+    dedup по geo_id: max score; is_anchored → +0.05 bonus
     top-K = max_entities(=5)
-13. process_candidates SQL (PostGIS): пересечения → geom + strategy
+ 13. process_candidates / geo_execute_scenario SQL (PostGIS): пересечения → geom + strategy
 14. INSERT events ON CONFLICT (message_id) + pg_notify('events_new', feature_json)
 ```
 
@@ -67,7 +67,7 @@ flowchart TD
     E --> F[Morphology.lemmatize_tokens<br/>mawo_pymorphy3 LRU10k<br/>~30-80ms]
     F --> G[LayerClassifier.classify<br/>hashtag-override → keyword ∩ lemmas]
     F -->|lemmas| H
-    E -->|tokens| H[StreetMatcher.find_streets<br/>sliding-window 1..3<br/>Tier1 surface fuzzy 0.85<br/>Tier2 lemma exact<br/>Tier3 lemma fuzzy 0.82<br/>~30-120ms]
+    E -->|tokens| H[GeoMatcher.find_geo<br/>sliding-window 1..3<br/>Tier1 surface fuzzy 0.85<br/>Tier2 lemma exact<br/>Tier3 lemma fuzzy 0.82<br/>~30-120ms]
     H --> I[process_candidates SQL<br/>ST_Intersects + pseudo_radius<br/>~5-50ms]
     G -.layer.-> J
     I -.geom + strategy.-> J[INSERT events ON CONFLICT<br/>+ pg_notify events_new]
@@ -124,8 +124,8 @@ flowchart TD
 
 ## Известные ограничения
 
-1. **Отсутствующие улицы**: Ватутина, Бабеля, Старопортофранковская, Чепаевская
-   и др. не в `streets.csv` → стратегия `random`.
+1. **Отсутствующие объекты**: Ватутина, Бабеля, Старопортофранковская, Чепаевская
+   и др. не в `geo.csv` → стратегия `random`.
 2. **Упрощённые геометрии**: ~132 улицы хранятся как прямой отрезок из 2 точек;
    `ST_Intersects` находит пересечение не для всех реально перекрёстных пар.
 3. **Sliding-window лимит 3**: улицы из 4+ слов не покрываются одним окном.

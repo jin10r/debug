@@ -1,6 +1,6 @@
-"""Регрессионный харнесс морфологического распознавателя улиц.
+"""Регрессионный харнесс морфологического распознавателя гео-объектов.
 
-Строит индекс прямо из `postgres/data/streets.csv` + `stopwords.csv` (без БД) и
+Строит индекс прямо из `postgres/data/geo.csv` + `stopwords.csv` (без БД) и
 проверяет ключевые свойства распознавателя на кейсах из боевого экспорта:
 
   • recall падежей коротких OOV-имён (Гаванной → Гаванная) — то, что ломалось;
@@ -13,6 +13,7 @@
 (mawo_pymorphy3 / rapidfuzz / snowballstemmer) — см. pytest.importorskip.
 """
 
+import asyncio
 import csv
 import sys
 import types
@@ -25,7 +26,7 @@ pytest.importorskip("rapidfuzz")
 pytest.importorskip("snowballstemmer")
 
 ROOT = Path(__file__).resolve().parent.parent
-csv.field_size_limit(10_000_000)  # streets.csv: очень длинные WKT-поля
+csv.field_size_limit(10_000_000)  # geo.csv: очень длинные WKT-поля
 
 # parser/__init__.py тянет asyncpg/kurigram; подменяем пакет стабом с __path__,
 # чтобы относительные импорты сабмодулей резолвились без __init__.
@@ -36,26 +37,26 @@ if "parser" not in sys.modules:
 
 from parser.morphology import Morphology              # noqa: E402
 from parser.phonetic_index import PhoneticIndex       # noqa: E402
-from parser.street_matcher import StreetMatcher        # noqa: E402
+from parser.geo_matcher import GeoMatcher              # noqa: E402
 from parser.word_tokenizer import tokenize             # noqa: E402
 from parser.text_preprocessor import (                  # noqa: E402
     preprocess_light, strip_tail, is_promotional,
 )
 
 
-def _load_streets():
+def _load_geo():
     rows, name2id = [], {}
-    with open(ROOT / "postgres/data/streets.csv", encoding="utf-8") as f:
+    with open(ROOT / "postgres/data/geo.csv", encoding="utf-8") as f:
         rd = csv.reader(f)
         next(rd)
-        sid = 0
+        gid = 0
         for r in rd:
             if not r or not r[0].strip():
                 continue
-            sid += 1
+            gid += 1
             names = r[0].split("|")
-            rows.append({"id": sid, "names": names})
-            name2id.setdefault(names[0], sid)
+            rows.append({"id": gid, "names": names})
+            name2id.setdefault(names[0], gid)
     return rows, name2id
 
 
@@ -74,9 +75,9 @@ def _load_stopwords():
 def matcher():
     morph = Morphology()
     index = PhoneticIndex(morph)
-    rows, name2id = _load_streets()
+    rows, name2id = _load_geo()
     index.build(rows)
-    m = StreetMatcher(morph, index)
+    m = GeoMatcher(morph, index)
     m._initialized = True
     m._stopwords = _load_stopwords()
     m._morph = morph
@@ -84,11 +85,11 @@ def matcher():
     return m
 
 
-def _ids(matcher, text):
+async def _ids(matcher, text):
     pre = preprocess_light(strip_tail(text or ""))
     toks = tokenize(pre)
     lemmas = matcher._morph.lemmatize_tokens(toks)
-    return {e["street_id"] for e in matcher.find_streets(tokens=toks, lemmas=lemmas)}
+    return {e["geo_id"] for e in await matcher.find_geo(tokens=toks, lemmas=lemmas)}
 
 
 # --------------------------------------------------------------- recall (падежи)
@@ -98,73 +99,73 @@ def _ids(matcher, text):
     "Опущенные собрались с Гаванной и поехали по Маяковского",
     "Гаванная блокпост",  # номинатив
 ])
-def test_gavannaya_recall(matcher, text):
+async def test_gavannaya_recall(matcher, text):
     """Косвенный падеж короткого OOV-имени должен находиться (это ломалось)."""
-    assert matcher._name2id["Гаванная"] in _ids(matcher, text)
+    assert matcher._name2id["Гаванная"] in await _ids(matcher, text)
 
 
-def test_oblique_long_name(matcher):
+async def test_oblique_long_name(matcher):
     """Длинное имя в косвенном падеже — Ланжероновскую → Ланжероновская."""
-    assert matcher._name2id["Ланжероновская"] in _ids(
+    assert matcher._name2id["Ланжероновская"] in await _ids(
         matcher, "Не поворачивайте на Ланжероновскую, там перехватчики"
     )
 
 
 # ------------------------------------------------- precision (нет ложных матчей)
 
-def test_no_fp_common_word_sredi(matcher):
+async def test_no_fp_common_word_sredi(matcher):
     """'среди' (предлог) не должно матчиться на улицу Средняя."""
-    assert matcher._name2id["Средняя"] not in _ids(
+    assert matcher._name2id["Средняя"] not in await _ids(
         matcher, "куча перехватчиков среди припаркованных машин"
     )
 
 
-def test_no_fp_metallik(matcher):
+async def test_no_fp_metallik(matcher):
     """'металлик' (цвет авто) не должно матчиться на Металлистов."""
-    assert matcher._name2id["Металлистов"] not in _ids(
+    assert matcher._name2id["Металлистов"] not in await _ids(
         matcher, "темный металлик номер с 866 начинается"
     )
 
 
-def test_no_fp_homograph_mayakovsky(matcher):
+async def test_no_fp_homograph_mayakovsky(matcher):
     """'Маяковского' (нет в данных) не должно снапаться на Маловского."""
-    assert matcher._name2id["Маловского"] not in _ids(
+    assert matcher._name2id["Маловского"] not in await _ids(
         matcher, "собрались и поехали по Маяковского"
     )
 
 
-def test_no_fp_doroga_na(matcher):
+async def test_no_fp_doroga_na(matcher):
     """'дорога на' не должно матчиться на 'Южная дорога'."""
-    assert matcher._name2id["Южная дорога"] not in _ids(
+    assert matcher._name2id["Южная дорога"] not in await _ids(
         matcher, "где гоночка дорога на 7-й, тормозят копи"
     )
 
 
 # ---------------------------------------------------- over-stem collision resolve
 
-def test_stem_collision_resolved(matcher):
+async def test_stem_collision_resolved(matcher):
     """Гаваи(149) и Гаванная(150) → один стем 'гава'; surface-разрешение → 150."""
-    ids = _ids(matcher, "Гаванная блокпост")
+    ids = await _ids(matcher, "Гаванная блокпост")
     assert matcher._name2id["Гаванная"] in ids
     assert matcher._name2id["Гаваи"] not in ids
 
 
 # ------------------------------------------------------------- typo-corrector
 
-def test_surface_typo(matcher):
+async def test_surface_typo(matcher):
     """Орфо-корректор (Tier 2) ловит реальную опечатку."""
-    assert matcher._name2id["Раскидайловская"] in _ids(
+    assert matcher._name2id["Раскидайловская"] in await _ids(
         matcher, "Раскидпйловская белый т4 катается против движения"
     )
 
 
 # ------------------------------------------------------------ Phase B: word-order
 
-def test_word_order_independent(matcher):
+async def test_word_order_independent(matcher):
     """'Застава 2' ≡ '2 застава' (Tier 1b, порядок-независимый)."""
     sid = matcher._name2id["2 застава"]
-    assert sid in _ids(matcher, "Застава 2 в сторону ленпоселка")
-    assert sid in _ids(matcher, "в сторону 2 заставы")
+    assert sid in await _ids(matcher, "Застава 2 в сторону ленпоселка")
+    assert sid in await _ids(matcher, "в сторону 2 заставы")
 
 
 # ------------------------------------------------------- Phase B: spelled ordinals
@@ -173,9 +174,9 @@ def test_word_order_independent(matcher):
     ("в сторону Второй Заставы блокпост", "2 застава"),
     ("на пятой Фонтана блокпост", "5 Фонтана"),
 ])
-def test_spelled_ordinal(matcher, text, name):
+async def test_spelled_ordinal(matcher, text, name):
     """Словесные порядковые в косвенном падеже → цифра (второй→2, пятой→5)."""
-    assert matcher._name2id[name] in _ids(matcher, text)
+    assert matcher._name2id[name] in await _ids(matcher, text)
 
 
 # ----------------------------------------------------------- Phase B: relevance gate
@@ -196,17 +197,17 @@ def test_is_promotional(text, expected):
     assert is_promotional(text) is expected
 
 
-def test_typo_corrector_no_minimal_pair(matcher):
+async def test_typo_corrector_no_minimal_pair(matcher):
     """Орфо-корректор не путает минимальные пары: 'Малая Арнаутская' не должна
     добавлять 'Б Арнаутская' (различающий токen м/б — guard первого символа)."""
-    ids = _ids(matcher, "Малая Арнаутская 73, куча народу, проверяют документы")
+    ids = await _ids(matcher, "Малая Арнаутская 73, куча народу, проверяют документы")
     assert matcher._name2id["Малая Арнаутская"] in ids
     assert matcher._name2id["Б Арнаутская"] not in ids
 
 
 # ----------------------------------------------------------- Phase B: max-span dedup
 
-def test_max_span_drops_subspan():
+async def test_max_span_drops_subspan():
     """Под-спан, вложенный в более длинный матч, отбрасывается.
 
     Синтетический мини-индекс: 'Дерибасовская' (1 слово) и 'Большая
@@ -219,10 +220,10 @@ def test_max_span_drops_subspan():
         {"id": 1, "names": ["Дерибасовская"]},
         {"id": 2, "names": ["Большая Дерибасовская"]},
     ])
-    m = StreetMatcher(morph, index)
+    m = GeoMatcher(morph, index)
     m._initialized = True
     m._stopwords = set()
     m._morph = morph
     toks = tokenize(preprocess_light("поехал по Большой Дерибасовской"))
-    ids = {e["street_id"] for e in m.find_streets(tokens=toks, lemmas=morph.lemmatize_tokens(toks))}
+    ids = {e["geo_id"] for e in await m.find_geo(tokens=toks, lemmas=morph.lemmatize_tokens(toks))}
     assert ids == {2}

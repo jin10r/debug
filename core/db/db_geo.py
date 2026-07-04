@@ -1,6 +1,6 @@
 """
-Street-related database operations.
-Данные улиц грузит postgres-контейнер (init-scripts/04-load-data.sql); здесь —
+Geo-related database operations.
+Данные гео-объектов грузит postgres-контейнер (init-scripts/04-load-data.sql); здесь —
 только чтение (count, geojson, время обновления).
 """
 
@@ -11,31 +11,31 @@ from typing import List, Dict, Any, Optional
 logger = logging.getLogger(__name__)
 
 
-class StreetOperations:
-    """Handles street-related database operations."""
+class GeoOperations:
+    """Handles geo-related database operations."""
 
     def __init__(self, db):
         self.db = db
 
-    async def get_streets_count(self) -> int:
-        """Get the total count of streets."""
+    async def get_geo_count(self) -> int:
+        """Get the total count of geo records."""
         try:
-            return await self.db.fetchval("SELECT COUNT(*) FROM streets")
+            return await self.db.fetchval("SELECT COUNT(*) FROM geo")
         except Exception as e:
-            logger.error(f"Failed to get streets count: {e}")
+            logger.error(f"Failed to get geo count: {e}")
             return 0
 
     async def get_latest_update_time(self) -> Optional[Any]:
-        """Get the timestamp of the last update for the streets table."""
+        """Get the timestamp of the last update for the geo table."""
         try:
-            query = "SELECT last_updated FROM table_updates WHERE table_name = 'streets'"
+            query = "SELECT last_updated FROM table_updates WHERE table_name = 'geo'"
             return await self.db.fetchval(query)
         except Exception as e:
-            logger.error(f"Failed to get latest street update time: {e}")
+            logger.error(f"Failed to get latest geo update time: {e}")
             return None
 
-    async def get_all_streets_as_geojson(self) -> str:
-        """Fetch all streets as a GeoJSON FeatureCollection."""
+    async def get_all_geo_as_geojson(self) -> str:
+        """Fetch all geo records as a GeoJSON FeatureCollection."""
         query = """
             SELECT json_build_object(
                 'type', 'FeatureCollection',
@@ -50,7 +50,7 @@ class StreetOperations:
                     )
                 ), '[]'::json)
             )
-            FROM streets
+            FROM geo
             WHERE ST_IsValid(geom);
         """
         try:
@@ -58,5 +58,5 @@ class StreetOperations:
                 result = await connection.fetchval(query)
             return result if result else '{"type": "FeatureCollection", "features": []}'
         except Exception as e:
-            logger.error(f"Failed to fetch streets as GeoJSON: {e}")
+            logger.error(f"Failed to fetch geo as GeoJSON: {e}")
             return '{"type": "FeatureCollection", "features": []}'

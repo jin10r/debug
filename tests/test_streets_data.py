@@ -1,4 +1,4 @@
-"""Data-integrity guard for postgres/data/streets.csv.
+"""Data-integrity guard for postgres/data/geo.csv.
 
 Notably guards the geometry-type restoration (commit "restore LINESTRING type for
 21 degenerate street polygons"): no POLYGON may again be a near-zero-area sliver
@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-CSV = Path(__file__).resolve().parent.parent / "postgres" / "data" / "streets.csv"
+CSV = Path(__file__).resolve().parent.parent / "postgres" / "data" / "geo.csv"
 ALLOWED = {"POINT", "LINESTRING", "POLYGON", "MULTIPOLYGON", "MULTILINESTRING", "MULTIPOINT"}
 _R_LAT = 111320.0
 
@@ -65,13 +65,13 @@ def test_csv_exists():
     assert CSV.exists(), CSV
 
 
-def test_every_row_has_two_fields():
+def test_every_row_has_three_fields():
     with open(CSV, encoding="utf-8") as f:
         r = csv.reader(f)
         header = next(r)
-        assert header == ["names", "wkt_geom"]
-        bad = [i for i, row in enumerate(r, start=2) if len(row) != 2]
-    assert bad == [], f"rows with != 2 fields: {bad[:10]}"
+        assert header == ["names", "wkt_geom", "type"]
+        bad = [i for i, row in enumerate(r, start=2) if len(row) != 3]
+    assert bad == [], f"rows with != 3 fields: {bad[:10]}"
 
 
 def test_only_allowed_geometry_types():

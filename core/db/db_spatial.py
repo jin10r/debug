@@ -16,19 +16,19 @@ class SpatialOperations:
     def __init__(self, db):
         self.db = db
 
-    async def get_streets_intersection(
+    async def get_geo_intersection(
         self,
-        street_id1: int,
-        street_id2: int
+        geo_id1: int,
+        geo_id2: int
     ) -> Optional[Dict[str, Any]]:
         """
-        Calculate intersection of two streets using PostGIS.
+        Calculate intersection of two geo records using PostGIS.
         Returns GeoJSON point or None.
         """
         query = """
             WITH
-            geom1 AS (SELECT geom FROM streets WHERE id = $1),
-            geom2 AS (SELECT geom FROM streets WHERE id = $2),
+            geom1 AS (SELECT geom FROM geo WHERE id = $1),
+            geom2 AS (SELECT geom FROM geo WHERE id = $2),
             intersection AS (
                 SELECT ST_Intersection(g1.geom, g2.geom) AS geom
                 FROM geom1 g1, geom2 g2
@@ -43,29 +43,29 @@ class SpatialOperations:
             WHERE geom IS NOT NULL AND NOT ST_IsEmpty(geom);
         """
         try:
-            result = await self.db.fetchval(query, street_id1, street_id2)
+            result = await self.db.fetchval(query, geo_id1, geo_id2)
             return result if result else None
         except Exception as e:
             logger.error(
-                f"PostGIS intersection query failed for streets {street_id1}, {street_id2}: {e}",
+                f"PostGIS intersection query failed for geo {geo_id1}, {geo_id2}: {e}",
                 exc_info=True
             )
             return None
 
-    async def get_streets_nearby_intersection(
+    async def get_geo_nearby_intersection(
         self,
-        street_id1: int,
-        street_id2: int,
+        geo_id1: int,
+        geo_id2: int,
         max_distance_m: int = 100
     ) -> Optional[Dict[str, Any]]:
         """
-        Find midpoint on shortest line between two streets if within max_distance_m.
+        Find midpoint on shortest line between two geo records if within max_distance_m.
         Returns GeoJSON Point or None.
         """
         query = """
             WITH
-                g1 AS (SELECT geom FROM streets WHERE id = $1),
-                g2 AS (SELECT geom FROM streets WHERE id = $2),
+                g1 AS (SELECT geom FROM geo WHERE id = $1),
+                g2 AS (SELECT geom FROM geo WHERE id = $2),
                 shortest AS (
                     SELECT ST_ShortestLine(g1.geom, g2.geom) AS geom
                     FROM g1, g2
@@ -81,34 +81,34 @@ class SpatialOperations:
             FROM dist;
         """
         try:
-            result = await self.db.fetchval(query, street_id1, street_id2, max_distance_m)
+            result = await self.db.fetchval(query, geo_id1, geo_id2, max_distance_m)
             return result if result else None
         except Exception as e:
             logger.error(
-                f"PostGIS nearby-intersection query failed for streets {street_id1}, {street_id2}: {e}",
+                f"PostGIS nearby-intersection query failed for geo {geo_id1}, {geo_id2}: {e}",
                 exc_info=True
             )
             return None
 
-    async def get_batch_intersections(self, street_ids: List[int], max_distance_m: int = 100) -> List[Dict[str, Any]]:
+    async def get_batch_intersections(self, geo_ids: List[int], max_distance_m: int = 100) -> List[Dict[str, Any]]:
         """
-        Оптимизированный batch-запрос для получения всех пересечений между парами улиц.
+        Оптимизированный batch-запрос для получения всех пересечений между парами geo-объектов.
         Использует PostGIS для вычисления пересечений и псевдо-пересечений за один запрос.
         
         Возвращает список словарей с:
-        - id1, id2: ID улиц
+        - id1, id2: ID geo-объектов
         - geom: GeoJSON точки пересечения
         - is_real: true для реального пересечения, false для псевдо-пересечения
         """
-        if len(street_ids) < 2:
+        if len(geo_ids) < 2:
             return []
         
         query = """
-            WITH street_pairs AS (
-                -- Генерируем все пары улиц без повторений
+            WITH geo_pairs AS (
+                -- Генерируем все пары без повторений
                 SELECT s1.id AS id1, s2.id AS id2, s1.geom AS geom1, s2.geom AS geom2
-                FROM streets s1
-                CROSS JOIN streets s2
+                FROM geo s1
+                CROSS JOIN geo s2
                 WHERE s1.id = ANY($1::int[]) 
                   AND s2.id = ANY($1::int[])
                   AND s1.id < s2.id
@@ -126,7 +126,7 @@ class SpatialOperations:
                         END
                     )::jsonb AS geom,
                     true AS is_real
-                FROM street_pairs
+                FROM geo_pairs
                 WHERE ST_Intersects(geom1, geom2) 
                   AND NOT ST_IsEmpty(ST_Intersection(geom1, geom2))
             ),
@@ -139,7 +139,7 @@ class SpatialOperations:
                         ST_LineInterpolatePoint(ST_ShortestLine(sp.geom1, sp.geom2), 0.5)
                     )::jsonb AS geom,
                     false AS is_real
-                FROM street_pairs sp
+                FROM geo_pairs sp
                 WHERE NOT EXISTS (
                     SELECT 1 FROM real_intersections ri 
                     WHERE ri.id1 = sp.id1 AND ri.id2 = sp.id2
@@ -152,10 +152,10 @@ class SpatialOperations:
             ORDER BY is_real DESC, id1, id2;
         """
         try:
-            results = await self.db.fetch(query, street_ids, max_distance_m)
+            results = await self.db.fetch(query, geo_ids, max_distance_m)
             return [dict(row) for row in results]
         except Exception as e:
-            logger.error(f"Batch intersection query failed for street IDs {street_ids}: {e}", exc_info=True)
+            logger.error(f"Batch intersection query failed for geo IDs {geo_ids}: {e}", exc_info=True)
             return []
 
     async def get_max_distance_in_polygon(self, polygon_wkt: str) -> Optional[float]:

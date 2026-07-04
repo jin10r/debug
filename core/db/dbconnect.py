@@ -3,7 +3,7 @@
 This module provides a unified interface for database operations,
 delegating to specialized modules for different concerns:
 - db_base: Connection pooling and low-level operations
-- db_streets: Street data operations
+- db_geo: Geo data operations
 - db_events: Event management
 - db_spatial: PostGIS spatial operations
 """
@@ -13,7 +13,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 
 from core.db.db_base import Database
-from core.db.db_streets import StreetOperations
+from core.db.db_geo import GeoOperations
 from core.db.db_events import EventOperations
 from core.db.db_spatial import SpatialOperations
 
@@ -30,7 +30,7 @@ class Request:
     def __init__(self, db: Database):
         self.db = db
         # Initialize specialized operation handlers
-        self.streets = StreetOperations(db)
+        self.geo = GeoOperations(db)
         self.events = EventOperations(db)
         self.spatial = SpatialOperations(db)
         # Для совместимости с parser
@@ -44,29 +44,29 @@ class Request:
         logger.info("Skipping database table initialization. This is now handled by init.sql.")
         pass
 
-    async def get_streets_intersection(self, street_id1: int, street_id2: int) -> Optional[Dict[str, Any]]:
-        """Calculate intersection of two streets using PostGIS."""
-        return await self.spatial.get_streets_intersection(street_id1, street_id2)
+    async def get_geo_intersection(self, geo_id1: int, geo_id2: int) -> Optional[Dict[str, Any]]:
+        """Calculate intersection of two geo records using PostGIS."""
+        return await self.spatial.get_geo_intersection(geo_id1, geo_id2)
 
-    async def get_streets_nearby_intersection(self, street_id1: int, street_id2: int, max_distance_m: int = 100) -> Optional[Dict[str, Any]]:
-        """Find midpoint between two nearby streets."""
-        return await self.spatial.get_streets_nearby_intersection(street_id1, street_id2, max_distance_m)
+    async def get_geo_nearby_intersection(self, geo_id1: int, geo_id2: int, max_distance_m: int = 100) -> Optional[Dict[str, Any]]:
+        """Find midpoint between two nearby geo records."""
+        return await self.spatial.get_geo_nearby_intersection(geo_id1, geo_id2, max_distance_m)
 
-    async def get_batch_intersections(self, street_ids: List[int], max_distance_m: int = 100) -> List[Dict[str, Any]]:
-        """Get batch intersections between multiple streets."""
-        return await self.spatial.get_batch_intersections(street_ids, max_distance_m)
+    async def get_batch_intersections(self, geo_ids: List[int], max_distance_m: int = 100) -> List[Dict[str, Any]]:
+        """Get batch intersections between multiple geo records."""
+        return await self.spatial.get_batch_intersections(geo_ids, max_distance_m)
 
     async def get_max_distance_in_polygon(self, polygon_wkt: str) -> Optional[float]:
         """Calculate maximum distance in polygon."""
         return await self.spatial.get_max_distance_in_polygon(polygon_wkt)
 
-    async def get_streets_count(self) -> int:
-        """Get the total count of streets."""
-        return await self.streets.get_streets_count()
+    async def get_geo_count(self) -> int:
+        """Get the total count of geo records."""
+        return await self.geo.get_geo_count()
 
-    async def get_latest_street_update_time(self) -> Optional[Any]:
-        """Get the timestamp of the last update for the streets table."""
-        return await self.streets.get_latest_update_time()
+    async def get_latest_geo_update_time(self) -> Optional[Any]:
+        """Get the timestamp of the last update for the geo table."""
+        return await self.geo.get_latest_update_time()
 
     async def add_event(
         self, description: str, layer: str, strategy: str,
@@ -77,9 +77,9 @@ class Request:
             description, layer, strategy, geometry, matches, event_time, photo_url
         )
 
-    async def get_all_streets_as_geojson(self) -> str:
-        """Fetch all streets as GeoJSON."""
-        return await self.streets.get_all_streets_as_geojson()
+    async def get_all_geo_as_geojson(self) -> str:
+        """Fetch all geo records as GeoJSON."""
+        return await self.geo.get_all_geo_as_geojson()
 
     async def get_filtered_events_as_geojson(self, time_interval_minutes: int, layers: Optional[List[str]] = None, since_timestamp: Optional[str] = None) -> Dict:
         """Fetch filtered events as GeoJSON."""

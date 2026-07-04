@@ -70,18 +70,18 @@ LAYER_PRIORITY: tuple = tuple(k for k in DEFAULT_LAYER_KEYWORDS if k != 'pig')
 
 @dataclass
 class DatabaseConfig:
-    """PostgreSQL — креды захардкожены: контейнер изолирован от внешнего мира
-    (нет port mapping в docker-compose), безопасно держать default `postgres`."""
+    """PostgreSQL — прямое подключение (без PgBouncer)."""
     host: str = "postgres"
     port: int = 5432
     database: str = "postgres"
     user: str = "postgres"
     password: str = "postgres"
-    # asyncpg pool tuning
+    # Прямое подключение: каждый коннект = backend process в postgres.
+    # pool_max_size=30 — оптимизировано для 1GB postgres контейнера.
     pool_min_size: int = 5
-    pool_max_size: int = 20
-    # Command timeout для одиночного SQL-запроса (process_candidates ~5-50ms,
-    # default 60s достаточно при transient lag, не убивает быстрые запросы).
+    pool_max_size: int = 30
+    # Command timeout для SQL-запроса. Role parser имеет 60s timeout
+    # в postgresql.conf, core — 30s.
     command_timeout: int = 60
 
 
@@ -124,18 +124,18 @@ class JWTConfig:
 
 @dataclass
 class SimilarityConfig:
-    """Параметры sliding-window линкера улиц и LayerClassifier.
+    """Параметры sliding-window линкера гео-объектов и LayerClassifier.
 
-    Используются StreetMatcher (parser/street_matcher.py) и LayerClassifier.
+    Используются GeoMatcher (parser/geo_matcher.py) и LayerClassifier.
     """
     # Порог fuzzy-матча (0-1) для tier-3 lemma fuzzy в _link_span.
     # 0.82: отсекает ложные позитивы (0.75–0.79) при сохранении typo-матчей (≥0.83).
     entity_similarity_threshold: float = 0.82
 
-    # Радиус псевдо-пересечений (метры) для process_candidates SQL.
+    # Радиус для midpoint (метры) — макс. дистанция между геометриями.
     pseudo_intersection_radius_meters: float = 150.0
 
-    # Финальный top-K результатов find_streets().
+    # Финальный top-K результатов find_geo().
     max_entities: int = 5
 
     # Длиннее этого порога (символов) сообщение не считается релевантной локацией.
@@ -165,6 +165,19 @@ class SimilarityConfig:
     # но не искажает intersection/polygon. single_match-fallback берёт лучший по score.
     geometry_min_score: float = 0.85
 
+    # SemanticResolver — параметры интеллектуального анализатора geo-конфликтов.
+    # Модель определяет стратегию (single_match/intersection/midpoint),
+    # PostGIS вычисляет финальную геометрию.
+    semantic_enabled: bool = True
+    semantic_model: str = 'qwen2.5:0.5b'
+    semantic_temperature: float = 0.0
+    semantic_timeout_s: int = 10
+
+    # Макс. дистанция (метры) для midpoint между geo-объектами.
+    midpoint_max_distance_m: float = 150.0
+    # Типы объектов, для которых разрешён midpoint.
+    midpoint_types: tuple = ('street', 'market', 'station', 'park', 'landmark')
+
     # Токены-пунктуация: отфильтровываются из tokens до поиска (_strip_noise).
     punctuation_tokens: tuple = (
         '#', '/', ',', '.', '(', ')', '!', '?', '-', '«', '»', '"', ':', ';',
@@ -183,18 +196,18 @@ class ParserConfig:
     # Это же значение — механизм recovery после краша: бэкфилл переобрабатывает
     # последние history_limit сообщений (дедуп ON CONFLICT делает это безопасным),
     # поэтому оно должно с запасом перекрывать окно простоя × rate сообщений.
-    history_limit: int = 60
+    history_limit: int = 100
 
     # Размер asyncio.Queue для входящих сообщений (производитель-потребитель).
     # Запас под всплески (бэкфилл больших историй + live-пики); put() блокирует
     # при заполнении (backpressure, без потерь), пул воркеров сливает очередь.
-    message_queue_maxsize: int = 60
+    message_queue_maxsize: int = 100
 
     # Число конкурентных воркеров очереди. Перекрывает CPU одного сообщения с
     # DB-I/O другого на всплесках. Безопасно: вставки идемпотентны (ON CONFLICT),
     # порядок не важен, asyncpg-pool конкурентно-безопасен, в CPU-секциях нет
     # await. Кап ≤8 в monitoring.py, чтобы не исчерпать pool (pool_max_size=20).
-    worker_concurrency: int = 3
+    worker_concurrency: int = 5
 
     # Каталог хранения медиафайлов (фотографии событий). Монтируется через
     # volume в docker-compose, путь синхронизирован с разделом volumes.
@@ -234,6 +247,21 @@ class LayerConfig:
 
 
 @dataclass
+class OllamaConfig:
+    """Ollama LLM geo-resolution (Tier-2 fallback).
+
+    Всегда активен (enabled=True), но НЕ обязателен — при недоступности хоста
+    приложение продолжает работу без ошибок. Хост переопределяется через env
+    OLLAMA_HOST (по умолчанию http://host.docker.internal:11434).
+    """
+    enabled: bool = False
+    base_url: str = 'http://host.docker.internal:11434'
+    model: str = 'qwen2.5:0.5b'
+    timeout_s: int = 15
+    max_tokens: int = 128
+
+
+@dataclass
 class Settings:
     app: AppConfig
     db: DatabaseConfig
@@ -243,6 +271,7 @@ class Settings:
     layers: LayerConfig = field(default_factory=LayerConfig)
     parser: ParserConfig = field(default_factory=ParserConfig)
     question_overlay: QuestionOverlayConfig = field(default_factory=QuestionOverlayConfig)
+    ollama: OllamaConfig = field(default_factory=OllamaConfig)
 
 
 def _resolve_jwt_secret(env: Env) -> str:
@@ -308,6 +337,8 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
             if require_jwt else None
         )
 
+        ollama_host = env.str("OLLAMA_HOST", None)
+
         return Settings(
             app=AppConfig(
                 telegram_validation_enabled=env.bool(
@@ -329,6 +360,9 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
                 proxy_scheme=env.str("PROXY_SCHEME", "socks5"),
             ),
             question_overlay=QuestionOverlayConfig(),
+            ollama=OllamaConfig(
+                base_url=ollama_host or 'http://host.docker.internal:11434',
+            ),
         )
     except Exception as e:
         raise ValueError(f"Configuration error: {e}")

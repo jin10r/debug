@@ -11,6 +11,7 @@
 | `kurigram` (pyrogram fork) | Telegram MTProto client |
 | `mawo-pymorphy3` 1.0.4 | Морфологический анализатор (DAWG, ~15-20 MB RAM) |
 | `rapidfuzz` 3.0+ | Surface fuzzy + lemma fuzzy матч против alias-индекса |
+| `spacy` 3.7+ | Семантический анализ пространственных отношений (опционально) |
 | `asyncpg` 0.29+ | PostgreSQL async driver |
 
 ## Архитектура модулей
@@ -25,6 +26,8 @@ parser/
 ├── layer_classifier.py    # cops/bus/traffic/pig по keyword-матчу (hashtag-override)
 ├── phonetic_index.py      # Сборщик surface + lemma индексов при старте
 ├── geo_matcher.py      # Sliding-window линкер: 3 тира (surface/lemma)
+├── spacy_relation_extractor.py  # Семантический анализ пространственных отношений (spaCy)
+├── semantic_resolver.py   # Определение стратегии geo-резолюции (pre-filter + Ollama)
 └── db_adapter.py          # PostgreSQL pool
 ```
 
@@ -43,7 +46,7 @@ parser/
 10. LayerClassifier.classify(lemmas, tokens) → 'cops'|'bus'|'traffic'|'pig'
     └─ ## -якорные токены проверяются первыми (hashtag-override)
 11. [пусто / >380 симв.] → strategy=random, выход
- 12. GeoMatcher.find_geo(tokens, lemmas):
+  12. GeoMatcher.find_geo(tokens, lemmas):
     _strip_noise (пунктуация)
     _candidates_sliding_window: 1..max_sliding_window(=3) токенов
     для каждого кандидата _link_span:
@@ -52,8 +55,17 @@ parser/
       Tier 3 [Lemma fuzzy]   rapidfuzz(lemma_text vs lemma-phrases, порог 0.82)
     dedup по geo_id: max score; is_anchored → +0.05 bonus
     top-K = max_entities(=5)
- 13. process_candidates / geo_execute_scenario SQL (PostGIS): пересечения → geom + strategy
-14. INSERT events ON CONFLICT (message_id) + pg_notify('events_new', feature_json)
+  12.5. SpaCyRelationExtractor.extract_plan (если enabled):
+    Связывание кандидатов с токенами spaCy по span
+    Уточнение типа по контекстным маркерам (сквер → park, улица → street)
+    Извлечение пространственных отношений (между X и Y, от X к Y, в квадрате, недалеко от)
+    Генерация плана: tool/args (single_match, intersection, midpoint)
+ 13. SemanticResolver.resolve (с учётом spaCy плана):
+    Priority 1: spaCy план → маппинг в strategy
+    Priority 2: pre-filter правила (предлоги, типы)
+    Priority 3: Ollama модель (если enabled)
+ 14. process_candidates / geo_execute_scenario SQL (PostGIS): пересечения → geom + strategy
+15. INSERT events ON CONFLICT (message_id) + pg_notify('events_new', feature_json)
 ```
 
 ## Блок-схема (Mermaid)
@@ -68,10 +80,12 @@ flowchart TD
     F --> G[LayerClassifier.classify<br/>hashtag-override → keyword ∩ lemmas]
     F -->|lemmas| H
     E -->|tokens| H[GeoMatcher.find_geo<br/>sliding-window 1..3<br/>Tier1 surface fuzzy 0.85<br/>Tier2 lemma exact<br/>Tier3 lemma fuzzy 0.82<br/>~30-120ms]
-    H --> I[process_candidates SQL<br/>ST_Intersects + pseudo_radius<br/>~5-50ms]
-    G -.layer.-> J
-    I -.geom + strategy.-> J[INSERT events ON CONFLICT<br/>+ pg_notify events_new]
-    J --> K[app LISTEN events_new<br/>→ WebSocket broadcast]
+    H --> I[SpaCyRelationExtractor<br/>type refinement +<br/>spatial patterns<br/>~10-50ms]
+    I --> J[SemanticResolver<br/>spaCy plan → strategy<br/>pre-filter → Ollama<br/>~5-20ms]
+    J --> K[process_candidates SQL<br/>ST_Intersects + pseudo_radius<br/>~5-50ms]
+    G -.layer.-> L
+    K -.geom + strategy.-> L[INSERT events ON CONFLICT<br/>+ pg_notify events_new]
+    L --> M[app LISTEN events_new<br/>→ WebSocket broadcast]
 ```
 
 ## Тиры матчинга в `_link_span`
@@ -107,6 +121,14 @@ flowchart TD
 | `max_text_length` | 380 | Длиннее → strategy=random |
 | `lemma_fallback_enabled` | True | Включение tier-3 lemma fuzzy |
 
+### Параметры SpaCy (`core/settings.py` → `SpaCyConfig`)
+
+| Поле | Default | Назначение |
+|------|---------|-----------|
+| `enabled` | True | Включение spaCy анализа (опционально для экономии ресурсов) |
+| `model_name` | 'ru_core_news_sm' | Модель spaCy для русского языка |
+| `timeout_ms` | 50 | Таймаут обработки (предупреждение если превышен) |
+
 | Поле | Default | Назначение |
 |------|---------|-----------|
 | `history_limit` | 100 | Сообщений из истории при старте |
@@ -133,3 +155,45 @@ flowchart TD
    в одно ядро. Решение: `ProcessPoolExecutor` для `find_streets`.
 5. **Layer-keywords**: точное равенство лемм. Производные формы расширяются
    через явное перечисление в `DEFAULT_LAYER_KEYWORDS`.
+6. **SpaCy модель**: требует дополнительной памяти (~50-100MB) и времени (~10-50ms).
+   Может быть отключена через `spacy.enabled = False` в настройках.
+
+## SpaCyRelationExtractor
+
+Модуль для семантического анализа пространственных отношений между кандидатами.
+
+### Функциональность
+
+- **Связывание кандидатов с токенами**: мапинг candidate spans на spaCy токены через char_span
+- **Уточнение типов по контексту**: фильтрация кандидатов по синтаксически связанным маркерам
+  (например, "Кировский сквер" → только park-типы, не street)
+- **Извлечение пространственных отношений**: определение паттернов:
+  - "между X и Y" → bounds → intersection
+  - "от X в направлении Y" / "от X к Y" → from, to → midpoint
+  - "в квадрате A, B, C, D" → bounds → intersection
+  - "недалеко от A, B, C" / "рядом с A" → objects → single_match/intersection
+
+### Интеграция
+
+Модуль вставляется в pipeline между GeoMatcher и SemanticResolver:
+1. GeoMatcher.find_geo → кандидаты с geo_id
+2. SpaCyRelationExtractor.extract_plan → уточнение типов + пространственные роли
+3. SemanticResolver.resolve → финальная стратегия (с учётом spaCy плана)
+4. process_candidates SQL → вычисление геометрии
+
+### Конфигурация
+
+```python
+# core/settings.py
+@dataclass
+class SpaCyConfig:
+    enabled: bool = True  # Отключить для экономии ресурсов
+    model_name: str = 'ru_core_news_sm'
+    timeout_ms: int = 50
+```
+
+### Производительность
+
+- Lazy loading модели при первом запросе
+- Таймаут с предупреждением при превышении 50ms
+- Опциональное отключение без нарушения обратной совместимости

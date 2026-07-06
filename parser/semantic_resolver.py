@@ -100,8 +100,16 @@ class SemanticResolver:
         tokens: list,
         lemmas: list,
         candidates: List[Dict],
+        spatial_plan: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Определить стратегию для списка кандидатов.
+
+        Args:
+            text: исходный текст
+            tokens: токены
+            lemmas: леммы
+            candidates: список кандидатов от GeoMatcher
+            spatial_plan: план от SpaCyRelationExtractor (опционально)
 
         Returns:
             Dict с geo_ids, strategy, reasoning или None (fallback).
@@ -109,17 +117,82 @@ class SemanticResolver:
         if not self._initialized or not candidates:
             return None
 
+        # Priority 1: Use spaCy spatial plan if available
+        if spatial_plan and spatial_plan.get('plan'):
+            result = self._resolve_from_spatial_plan(spatial_plan, candidates)
+            if result is not None:
+                logger.debug(f"[Resolver] SpaCy plan: {result['strategy']} ({result.get('reasoning')})")
+                return result
+
+        # Priority 2: Pre-filter rules
         result = self._pre_filter(text, candidates)
         if result is not None:
             logger.debug(f"[Resolver] Pre-filter: {result['strategy']} ({result.get('reasoning')})")
             return result
 
+        # Priority 3: Model call (Ollama)
         if self._ollama_base is not None:
             result = await self._model_call(text, candidates)
             if result is not None:
                 logger.debug(f"[Resolver] Model: {result['strategy']} ({result.get('reasoning')})")
                 return result
 
+        return None
+
+    def _resolve_from_spatial_plan(
+        self,
+        spatial_plan: Dict[str, Any],
+        candidates: List[Dict]
+    ) -> Optional[Dict[str, Any]]:
+        """Преобразовать spaCy план в стратегию для process_candidates.
+
+        Args:
+            spatial_plan: план от SpaCyRelationExtractor с полем 'plan'
+            candidates: список кандидатов от GeoMatcher
+
+        Returns:
+            Dict с geo_ids, strategy, reasoning или None
+        """
+        plan = spatial_plan.get('plan', [])
+        if not plan:
+            return None
+
+        # Take the first (highest priority) plan item
+        plan_item = plan[0]
+        tool = plan_item.get('tool')
+        args = plan_item.get('args', {})
+
+        # Map spaCy tools to process_candidates strategies
+        if tool == 'single_match':
+            object_id = args.get('object')
+            if object_id:
+                return {
+                    'geo_ids': [object_id],
+                    'strategy': 'single_match',
+                    'reasoning': 'spacy_single_match',
+                }
+
+        elif tool == 'intersection':
+            bounds = args.get('bounds', [])
+            if bounds and len(bounds) >= 2:
+                return {
+                    'geo_ids': bounds,
+                    'strategy': 'intersection',
+                    'reasoning': 'spacy_intersection',
+                }
+
+        elif tool == 'midpoint':
+            from_id = args.get('from')
+            to_id = args.get('to')
+            if from_id and to_id:
+                return {
+                    'geo_ids': [from_id, to_id],
+                    'strategy': 'midpoint',
+                    'reasoning': 'spacy_midpoint',
+                }
+
+        # Unknown tool or invalid args
+        logger.warning(f"[Resolver] Unknown spaCy tool or invalid args: {tool}, {args}")
         return None
 
     def _pre_filter(self, text: str, candidates: List[Dict]) -> Optional[Dict[str, Any]]:

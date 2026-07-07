@@ -23,11 +23,9 @@ import asyncpg
 
 from .layer_classifier import LayerClassifier
 from .morphology import Morphology
-from .onnx_encoder import OnnxEncoder
 from .phonetic_index import PhoneticIndex
 from .geo_matcher import GeoMatcher
 from .semantic_resolver import SemanticResolver
-from .type_validator import TypeValidator
 from .word_tokenizer import tokenize
 from .text_preprocessor import preprocess_light, strip_tail, is_promotional
 
@@ -127,9 +125,9 @@ class MessageProcessor:
 
         self.index = PhoneticIndex(self.morph)
         self.matcher = GeoMatcher(self.morph, self.index)
-        self.onnx_encoder = OnnxEncoder("models/rubert_tiny2_int8.onnx")
-        self.type_validator = TypeValidator(self.onnx_encoder)
-        self.resolver = SemanticResolver(self.morph, self.index, self.type_validator)
+        self.onnx_encoder = None
+        self.type_validator = None
+        self.resolver = SemanticResolver(self.morph, self.index)
         self.layer_classifier = LayerClassifier(self.morph)
         self._listen_conn: Optional[asyncpg.Connection] = None
 
@@ -155,15 +153,20 @@ class MessageProcessor:
                 logger.error("GeoMatcher initialization failed")
                 return False
 
-            # OnnxEncoder — zero-shot BERT type validator (опционально).
+            # OnnxEncoder — zero-shot BERT type validator (опционально, lazy import).
+            from .onnx_encoder import OnnxEncoder
+            from .type_validator import TypeValidator
+            self.onnx_encoder = OnnxEncoder("models/rubert_tiny2_int8.onnx")
             logger.info("Initializing OnnxEncoder...")
             await self.onnx_encoder.initialize()
 
             # TypeValidator — валидация типов кандидатов через BERT.
+            self.type_validator = TypeValidator(self.onnx_encoder)
             logger.info("Initializing TypeValidator...")
             await self.type_validator.initialize()
 
             # SemanticResolver — загружает стоп-слова, инициализирует модель (если enabled).
+            self.resolver = SemanticResolver(self.morph, self.index, self.type_validator)
             logger.info("Initializing SemanticResolver...")
             await self.resolver.initialize(self.db_pool)
 
@@ -476,7 +479,7 @@ class MessageProcessor:
         if self.resolver:
             await self.resolver.close()
 
-        if self.onnx_encoder:
+        if self.onnx_encoder is not None:
             await self.onnx_encoder.close()
 
         logger.info("MessageProcessor closed")

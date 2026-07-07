@@ -3,6 +3,10 @@
 Loads once at startup (~15MB), encodes context windows and type descriptions
 for cosine-similarity zero-shot type prediction.
 
+Heavy imports (numpy, onnxruntime, transformers) are lazy: only loaded when
+_model_load() is called. This allows the module to be imported in environments
+without these deps (e.g. parser container without ONNX model).
+
 Usage:
     encoder = OnnxEncoder("models/rubert_tiny2_int8.onnx")
     encoder.warmup_types({"street": "городская улица, проспект, бульвар", ...})
@@ -10,16 +14,8 @@ Usage:
 """
 
 import logging
-import re
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
-
-import numpy as np
-
-try:
-    import onnxruntime as ort
-except ImportError:
-    ort = None
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -28,26 +24,19 @@ _MODEL_DIM = 312
 _MAX_SEQ_LEN = 64
 
 
-def _mean_pool(last_hidden: np.ndarray, attention_mask: np.ndarray) -> np.ndarray:
-    """Mean pooling over non-padded tokens."""
-    mask = attention_mask.astype(np.float32)[:, :, np.newaxis]
-    masked = last_hidden * mask
-    return masked.sum(axis=1) / mask.sum(axis=1).clip(min=1e-9)
-
-
-def _normalize(emb: np.ndarray) -> np.ndarray:
-    norm = np.linalg.norm(emb, axis=1, keepdims=True)
-    return emb / norm.clip(min=1e-9)
-
-
 class OnnxEncoder:
-    """ONNX-based sentence encoder for zero-shot type validation."""
+    """ONNX-based sentence encoder for zero-shot type validation.
+
+    All heavy deps (numpy, onnxruntime, transformers) are loaded lazily
+    in _load_model(). If any are missing, is_ready stays False and all
+    methods return empty results gracefully.
+    """
 
     def __init__(self, model_path: str) -> None:
         self._model_path = model_path
-        self._session: Optional[ort.InferenceSession] = None
+        self._session = None
         self._tokenizer = None
-        self._type_embeddings: Dict[str, np.ndarray] = {}
+        self._type_embeddings: Dict[str, object] = {}
         self._ready = False
 
     async def initialize(self) -> bool:
@@ -55,7 +44,15 @@ class OnnxEncoder:
         return await self._load_model()
 
     async def _load_model(self) -> bool:
-        if ort is None:
+        try:
+            import numpy as np
+        except ImportError:
+            logger.warning("[ONNX] numpy not installed")
+            return False
+
+        try:
+            import onnxruntime as ort
+        except ImportError:
             logger.warning("[ONNX] onnxruntime not installed")
             return False
 
@@ -82,11 +79,14 @@ class OnnxEncoder:
             logger.error(f"[ONNX] Load failed: {exc}")
             return False
 
-    def encode(self, texts: List[str]) -> np.ndarray:
+    def encode(self, texts: List[str]) -> object:
         """Encode texts to normalized sentence embeddings.
 
-        Returns shape (len(texts), _MODEL_DIM).
+        Returns numpy array shape (len(texts), _MODEL_DIM) if ready,
+        else zeros array. Uses lazy numpy import.
         """
+        import numpy as np
+
         if not self._ready or self._session is None or self._tokenizer is None:
             return np.zeros((len(texts), _MODEL_DIM), dtype=np.float32)
 
@@ -102,8 +102,14 @@ class OnnxEncoder:
             "attention_mask": encoded["attention_mask"].astype(np.int64),
         }
         outputs = self._session.run(["last_hidden_state"], ort_inputs)
-        emb = _mean_pool(outputs[0], encoded["attention_mask"])
-        return _normalize(emb)
+
+        last_hidden = outputs[0]
+        mask = encoded["attention_mask"].astype(np.float32)[:, :, np.newaxis]
+        masked = last_hidden * mask
+        emb = masked.sum(axis=1) / mask.sum(axis=1).clip(min=1e-9)
+
+        norm = np.linalg.norm(emb, axis=1, keepdims=True)
+        return emb / norm.clip(min=1e-9)
 
     def warmup_types(self, type_descriptions: Dict[str, str]) -> None:
         """Precompute and cache embeddings for all geo type descriptions."""
@@ -125,6 +131,8 @@ class OnnxEncoder:
         Returns dict of {type: score} sorted by score descending.
         Empty dict if not warmed up.
         """
+        import numpy as np
+
         if not self._ready or not self._type_embeddings:
             return {}
         context_emb = self.encode([context])[0]

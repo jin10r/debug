@@ -23,9 +23,11 @@ import asyncpg
 
 from .layer_classifier import LayerClassifier
 from .morphology import Morphology
+from .onnx_encoder import OnnxEncoder
 from .phonetic_index import PhoneticIndex
 from .geo_matcher import GeoMatcher
 from .semantic_resolver import SemanticResolver
+from .type_validator import TypeValidator
 from .word_tokenizer import tokenize
 from .text_preprocessor import preprocess_light, strip_tail, is_promotional
 
@@ -96,7 +98,8 @@ _INSERT_EVENT_FROM_CANDIDATES = """
     WITH pc AS (
         SELECT result_geom, result_strategy, result_matches
         FROM process_candidates(
-            $6::int[], $7::double precision[], $8::text[], $9::varchar
+            $6::int[], $7::double precision[], $8::text[],
+            $10::varchar, $9::text[]
         )
     ),
     inserted AS (
@@ -124,7 +127,9 @@ class MessageProcessor:
 
         self.index = PhoneticIndex(self.morph)
         self.matcher = GeoMatcher(self.morph, self.index)
-        self.resolver = SemanticResolver(self.morph, self.index)
+        self.onnx_encoder = OnnxEncoder("models/rubert_tiny2_int8.onnx")
+        self.type_validator = TypeValidator(self.onnx_encoder)
+        self.resolver = SemanticResolver(self.morph, self.index, self.type_validator)
         self.layer_classifier = LayerClassifier(self.morph)
         self._listen_conn: Optional[asyncpg.Connection] = None
 
@@ -149,6 +154,14 @@ class MessageProcessor:
             if not success:
                 logger.error("GeoMatcher initialization failed")
                 return False
+
+            # OnnxEncoder — zero-shot BERT type validator (опционально).
+            logger.info("Initializing OnnxEncoder...")
+            await self.onnx_encoder.initialize()
+
+            # TypeValidator — валидация типов кандидатов через BERT.
+            logger.info("Initializing TypeValidator...")
+            await self.type_validator.initialize()
 
             # SemanticResolver — загружает стоп-слова, инициализирует модель (если enabled).
             logger.info("Initializing SemanticResolver...")
@@ -286,11 +299,13 @@ class MessageProcessor:
         geo_ids: list = []
         geo_scores: list = []
         geo_texts: list = []
+        geo_types: list = []
         for ent in entities:
             if ent['geo_id'] not in geo_ids:
                 geo_ids.append(ent['geo_id'])
                 geo_scores.append(ent['score'])
                 geo_texts.append(ent['text'])
+                geo_types.append(ent.get('type', 'street'))
 
         # Объектов не нашлось — случайная точка.
         if not geo_ids:
@@ -329,6 +344,7 @@ class MessageProcessor:
                     geo_ids = [gid for gid in geo_ids if gid in id_set]
                     geo_scores = [s for gid, s in zip(geo_ids, geo_scores) if gid in id_set]
                     geo_texts = [t for gid, t in zip(geo_ids, geo_texts) if gid in id_set]
+                    geo_types = [t for gid, t in zip(geo_ids, geo_types) if gid in id_set]
                 logger.info(
                     f"Message {message_id}: resolver → {strategy}, "
                     f"geo_ids={geo_ids}"
@@ -342,7 +358,7 @@ class MessageProcessor:
                 message_id=message_id, event_time=event_time, description=preserved,
                 photo_path=photo_path, layer=layer,
                 geo_ids=geo_ids, geo_scores=geo_scores,
-                geo_texts=geo_texts, strategy=strategy,
+                geo_texts=geo_texts, geo_types=geo_types, strategy=strategy,
             ),
             tokens=tokens, geo_ids=geo_ids,
         )
@@ -376,7 +392,8 @@ class MessageProcessor:
     async def _insert_event_from_candidates(
         self, *, message_id: int, event_time: datetime, description: str,
         photo_path: Optional[str], layer: str, geo_ids: list,
-        geo_scores: list, geo_texts: list, strategy: Optional[str] = None,
+        geo_scores: list, geo_texts: list, geo_types: Optional[list] = None,
+        strategy: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Вставить событие, посчитав геометрию через process_candidates в том же
         запросе — один roundtrip к БД (раньше было SELECT + отдельный INSERT).
@@ -386,7 +403,7 @@ class MessageProcessor:
         return await self._run_insert(
             _INSERT_EVENT_FROM_CANDIDATES,
             (message_id, event_time, description, photo_path, layer,
-             geo_ids, scores_array, geo_texts, strategy),
+             geo_ids, scores_array, geo_texts, geo_types, strategy),
             message_id=message_id,
         )
 
@@ -458,5 +475,8 @@ class MessageProcessor:
 
         if self.resolver:
             await self.resolver.close()
+
+        if self.onnx_encoder:
+            await self.onnx_encoder.close()
 
         logger.info("MessageProcessor closed")

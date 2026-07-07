@@ -6,13 +6,18 @@
 --   0 совпадений  → random
 --   1 совпадение  → single_match (полная геометрия объекта)
 --   2+ совпадений → intersection → midpoint → single_match (best score)
+--
+-- p_geo_types: массив типов объектов в том же порядке, что p_geo_ids.
+--   Используется для фильтрации midpoint (только разрешённые типы).
+--   Если NULL — используются типы из таблицы geo.
 -- =============================================================================
 
 CREATE OR REPLACE FUNCTION process_candidates(
     p_geo_ids           INT[]   DEFAULT NULL,
     p_scores            FLOAT[] DEFAULT NULL,
     p_matched_texts     TEXT[]  DEFAULT NULL,
-    p_strategy          VARCHAR(40) DEFAULT NULL
+    p_strategy          VARCHAR(40) DEFAULT NULL,
+    p_geo_types         TEXT[]  DEFAULT NULL
 )
 RETURNS TABLE(
     result_geom     GEOMETRY,
@@ -32,11 +37,18 @@ DECLARE
     v_pseudo_collected GEOMETRY;
     v_score_threshold  FLOAT := 0.85;   -- geom_min_score для strong_geoms
     v_pseudo_radius    FLOAT := 150.0;  -- м, макс. дистанция для midpoint
-    v_midpoint_types   TEXT[] := ARRAY['street', 'market', 'station', 'park', 'landmark'];
+    v_midpoint_types   TEXT[];
 BEGIN
     v_scores := COALESCE(
         p_scores,
         ARRAY_FILL(1.0::float, ARRAY[COALESCE(array_length(p_geo_ids, 1), 0)])
+    );
+
+    -- Разрешённые типы для midpoint: из параметра, из таблицы конфигурации, или fallback
+    v_midpoint_types := COALESCE(
+        p_geo_types,
+        (SELECT allowed_types FROM strategy_type_filters WHERE strategy = 'midpoint'),
+        ARRAY['street', 'market', 'station', 'park', 'landmark']
     );
 
     -- ── 0 совпадений: случайная точка ─────────────────────────────────────────

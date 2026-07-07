@@ -96,7 +96,7 @@ class GeoMatcher:
         try:
             async with pg_pool.acquire() as conn:
                 row = await conn.fetchrow(
-                    "SELECT id, names FROM geo WHERE id = $1 AND geom IS NOT NULL",
+                    "SELECT id, names, type FROM geo WHERE id = $1 AND geom IS NOT NULL",
                     geo_id,
                 )
             await asyncio.to_thread(
@@ -176,6 +176,7 @@ class GeoMatcher:
                     'score': _STEM_MATCH_SCORE,
                     'matched_name': best.canonical_name,
                     'text': surface,
+                    'type': best.geo_type,
                     'source': source,
                     '_span': span,
                 }
@@ -225,6 +226,7 @@ class GeoMatcher:
                         'score': score / 100.0,
                         'matched_name': entry.canonical_name,
                         'text': surface,
+                        'type': entry.geo_type,
                         'source': 'surface_typo',
                         '_span': span,
                     }

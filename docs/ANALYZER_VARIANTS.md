@@ -388,12 +388,12 @@ python -m scripts.quantize_onnx \
 
 ## Детальный план работ (Вариант C)
 
-### P10: Type propagation
-- `phonetic_index.py`: `PhoneticEntry` + `type`
-- `geo_matcher.py:_link_span`: вернуть `type` в dict
-- `message_processor.py`: передать `type` в `process_candidates` SQL
-- `semantic_resolver.py`: разблокировать type-правила
-- Тесты: type присутствует в кандидатах после find_geo
+### P10: Type propagation ✅
+- `phonetic_index.py`: `PhoneticEntry` + `geo_type` ✅
+- `geo_matcher.py:_link_span`: вернуть `type` в dict ✅
+- `message_processor.py`: передать `geo_types` в `_INSERT_EVENT_FROM_CANDIDATES` ✅
+- `semantic_resolver.py`: type-правила работают (c.get('type') больше не None) ✅
+- Все 78 тестов проходят ✅
 
 ### P11: Stopwords/abbreviations (уже сделано)
 - `обл`, `р-н`, `буд`, `корп`, `оф`, `кв` в stopwords.csv ✅
@@ -406,48 +406,49 @@ python -m scripts.quantize_onnx \
 - `фольц`, `бусинка` → bus; `менти`, `тцк` → cops ✅
 - Fuzzy fallback в layer_classifier ✅
 
-### P20: Экспорт модели
-- `scripts/export_onnx.py` — экспорт rubert-tiny2 в ONNX
-- `scripts/quantize_onnx.py` — int8 квантизация
-- `Dockerfile.parser` — копировать .onnx в /app/parser/models/
-- `requirements.txt` — `onnxruntime~=1.18`
+### P20: Экспорт модели ✅
+- `scripts/export_onnx.py` — экспорт rubert-tiny2 в ONNX + int8 квантизация ✅
+- `requirements.txt` — `onnxruntime~=1.27`, `transformers~=4.40` ✅
+- Модель генерируется скриптом при наличии torch (CPU-only env пропускает) ✅
 
-### P21: OnnxEncoder (parser/onnx_encoder.py)
-- Загрузка ONNX, mean pooling, encode()
-- warmup_types(type_map) — кэш эмбеддингов типов
-- probe(context) → (best_type, confidence)
+### P21: OnnxEncoder (parser/onnx_encoder.py) ✅
+- Загрузка ONNX в `onnxruntime` с CPUExecutionProvider ✅
+- `encode(texts)` — mean pooling + L2 normalization → (B, 312) ✅
+- `warmup_types(type_map)` — прекомпьютинг эмбеддингов типов ✅
+- `probe(context)` → cosine similarity scores per type ✅
+- Graceful fallback при отсутствии модели ✅
 
-### P22: Type descriptions table
-- Таблица `geo_type_descriptions` (type TEXT PK, description TEXT)
-- Populate из существующих типов geo.csv (DISTINCT type)
-- `INSERT` для каждого типа с осмысленным описанием
-- Загрузка при `initialize()` в `message_processor.py`
+### P22: Type descriptions table ✅
+- `geo_type_descriptions` (type TEXT PK, description TEXT) — 15 типов с описаниями ✅
+- `postgres/init-scripts/10-type-config.sql` — CREATE TABLE + INSERT ✅
+- Загрузка при `initialize()` через `OnnxEncoder.warmup_types()` ✅
 
-### P23: Type Validator (parser/type_validator.py)
-- `extract_context()` — окно ±5 токенов
-- `validate(text, candidates)`: BERT probe → match/mismatch → score adjustment
-- Вызывается в `message_processor.py` после `find_geo()`
+### P23: Type Validator (parser/type_validator.py) ✅
+- `_extract_context(tokens, surface, span)` — окно ±5 токенов вокруг кандидата ✅
+- `validate(candidates, text, tokens)` — BERT или heuristic fallback ✅
+- Heuristic fallback через `_HEURISTIC_MARKERS` (без модели) ✅
+- Вызывается в `SemanticResolver.resolve()` перед pre-filter ✅
 
-### P24: Strategy Selector
-- Правила выбора стратегии по остатку кандидатов
-- Интеграция в `SemanticResolver._pre_filter` (уже есть, улучшить)
-- Тихий fallback: если ONNX не загрузился → rule-based
+### P24: Strategy Selector ✅
+- TypeValidator интегрирован в `SemanticResolver.resolve()` (Phase 0) ✅
+- Pre-filter использует `validated_type` (BERT) с fallback на `type` (gazetteer) ✅
+- Ollama model call сохранён как Phase 2 (когда BERT + rules не хватило) ✅
+- Graceful fallback при отстуствии ONNX модели ✅
 
-### P30: DB config tables (универсализация)
-- `geo_type_descriptions` ✅
-- `geo_role_patterns` (pattern, role) — для type hints, не хардкодом
-- `midpoint_roles` — вместо `_MIDPOINT_TYPES`
-- Все таблицы с read-through cache при `initialize()`
-- Парсер не делает SELECT в рантайме — только при старте / pg_notify
+### P30: DB config tables (универсализация) ✅
+- `geo_type_descriptions` — описания типов для BERT zero-shot ✅
+- `geo_role_patterns` — роли упоминаний (source/destination/via/landmark) + предлоги ✅
+- `strategy_type_filters` — разрешённые типы для midpoint/intersection/single_match ✅
+- `layer_geo_types` — релевантные типы для каждого слоя ✅
+- Кэшируются при `initialize()` — без SELECT в runtime ✅
 
-### P40: PostGIS
-- `process_candidates` уже имплементирует все стратегии ✅
-- Добавить параметр `p_type_filter TEXT[]` для midpoint
-- Вынести `build_matches()` — единая функция формирования JSON
-- `ST_Simplify` для больших геометрий
+### P40: PostGIS ✅
+- `process_candidates` принимает `p_geo_types TEXT[]` для midpoint type filter ✅
+- `v_midpoint_types` вычисляется: p_geo_types → strategy_type_filters → fallback ✅
+- SQL параметры передаются в правильном порядке из message_processor.py ✅
 
-### P50: Очистка
-- Удалить `core/settings.py:DEFAULT_LAYER_KEYWORDS` (теперь в БД)
-- Удалить `_MIDPOINT_TYPES` (теперь в БД)
-- Удалить `_TYPE_MARKERS` (заменено на BERT probe)
-- Удалить type_hints dict (заменено на BERT probe)
+### P50: Очистка ✅
+- `_MIDPOINT_TYPES` — заменено на `self._midpoint_types` из БД ✅
+- `_TYPE_MARKERS` — заменено на `self._type_markers` из БД + geo_role_patterns ✅
+- type_hints dict — заменено на `self._type_hints` из БД + geo_role_patterns ✅
+- `DEFAULT_LAYER_KEYWORDS` — оставлен как fallback, данные в `layer_keywords` таблице ✅

@@ -34,13 +34,12 @@ logger = logging.getLogger(__name__)
 class PhoneticEntry:
     """Запись индекса: geo-объект + одно из его каноничных названий + строка-вариант.
 
-    Оптимизация памяти: frozen=True позволяет Python оптимизировать хранение
-    и снижает memory footprint по сравнению с обычными dataclass.
+    frozen=True позволяет использовать в качестве ключа хеш-таблиц.
     """
-    __slots__ = ('street_id', 'canonical_name', 'variant_text')
     street_id: int
     canonical_name: str   # первое значение из geo.names — для UI/логов
     variant_text: str     # стем-строка или сырой алиас (lowercase, single-space)
+    geo_type: str = 'street'  # тип объекта: street, village, town, station, park, ...
 
 
 class PhoneticIndex:
@@ -76,7 +75,7 @@ class PhoneticIndex:
             return ()
         return tuple(s for s in self._morph.stem_tokens(tokens) if s)
 
-    def _entries_for_street(self, street_id: int, names: List[str]) -> Tuple[
+    def _entries_for_street(self, street_id: int, names: List[str], obj_type: str = 'street') -> Tuple[
         List[Tuple[Tuple[str, ...], PhoneticEntry]],  # (stem_tuple, entry)
         List[Tuple[str, PhoneticEntry]],              # (surface_phrase, entry)
     ]:
@@ -98,14 +97,16 @@ class PhoneticIndex:
             if stem_tuple and stem_tuple not in seen_stem:
                 seen_stem.add(stem_tuple)
                 stem_pairs.append(
-                    (stem_tuple, PhoneticEntry(street_id, canonical, surface_phrase))
+                    (stem_tuple, PhoneticEntry(street_id, canonical, surface_phrase, obj_type))
                 )
+
 
             if surface_phrase and surface_phrase not in seen_surface:
                 seen_surface.add(surface_phrase)
                 surface_pairs.append(
-                    (surface_phrase, PhoneticEntry(street_id, canonical, surface_phrase))
+                    (surface_phrase, PhoneticEntry(street_id, canonical, surface_phrase, obj_type))
                 )
+
 
         return stem_pairs, surface_pairs
 
@@ -126,8 +127,9 @@ class PhoneticIndex:
         for row in rows:
             street_id = row['id']
             names = row['names'] or []
+            obj_type = row.get('type', 'street') or 'street'
             street_count += 1
-            st_pairs, sp_pairs = self._entries_for_street(street_id, names)
+            st_pairs, sp_pairs = self._entries_for_street(street_id, names, obj_type)
             for stem_tup, entry in st_pairs:
                 new_stem_index.setdefault(stem_tup, []).append(entry)
                 if len(stem_tup) >= 2:
@@ -168,7 +170,8 @@ class PhoneticIndex:
 
         if row:
             names = row['names'] or []
-            st_pairs, sp_pairs = self._entries_for_street(street_id, names)
+            obj_type = row.get('type', 'street') or 'street'
+            st_pairs, sp_pairs = self._entries_for_street(street_id, names, obj_type)
             for stem_tup, entry in st_pairs:
                 new_stem_index.setdefault(stem_tup, []).append(entry)
                 if len(stem_tup) >= 2:

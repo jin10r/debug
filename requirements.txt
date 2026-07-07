@@ -20,5 +20,4 @@ pyjwt~=2.8
 # cryptography НЕ требуется: JWT — HS256 (hmac/hashlib из stdlib), прямых импортов
 # нет. При переходе на RS256/ES256 поставить `pyjwt[crypto]` (подтянет cryptography).
 
-# NLP for semantic spatial relation extraction
-spacy~=3.7
+

@@ -156,7 +156,7 @@ class GeoMatcher:
         return out
 
     async def _link_span(self, surface: str, stems: Tuple[str, ...], span: Tuple[int, int]) -> Optional[Dict]:
-        if not surface:
+        if not surface or len(surface) < 3:
             return None
 
         # Tier 1: точный кортеж стемов — ядро распознавания.

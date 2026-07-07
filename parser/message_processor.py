@@ -26,7 +26,6 @@ from .morphology import Morphology
 from .phonetic_index import PhoneticIndex
 from .geo_matcher import GeoMatcher
 from .semantic_resolver import SemanticResolver
-from .spacy_relation_extractor import SpaCyRelationExtractor
 from .word_tokenizer import tokenize
 from .text_preprocessor import preprocess_light, strip_tail, is_promotional
 
@@ -127,7 +126,6 @@ class MessageProcessor:
         self.matcher = GeoMatcher(self.morph, self.index)
         self.resolver = SemanticResolver(self.morph, self.index)
         self.layer_classifier = LayerClassifier(self.morph)
-        self.spacy_extractor = SpaCyRelationExtractor()
         self._listen_conn: Optional[asyncpg.Connection] = None
 
     async def initialize(self) -> bool:
@@ -155,10 +153,6 @@ class MessageProcessor:
             # SemanticResolver — загружает стоп-слова, инициализирует модель (если enabled).
             logger.info("Initializing SemanticResolver...")
             await self.resolver.initialize(self.db_pool)
-
-            # SpaCyRelationExtractor — загружает модель spaCy (если enabled).
-            logger.info("Initializing SpaCyRelationExtractor...")
-            await self.spacy_extractor.initialize()
 
             # Подписка на уведомления от PostgreSQL
             logger.info("Setting up PostgreSQL notifications...")
@@ -298,26 +292,6 @@ class MessageProcessor:
                 geo_scores.append(ent['score'])
                 geo_texts.append(ent['text'])
 
-        # SpaCyRelationExtractor: уточнение типов и пространственные отношения
-        spatial_plan = None
-        if geo_ids and self.spacy_extractor._enabled:
-            try:
-                # Prepare candidates for spaCy (add span if available, otherwise None)
-                spacy_candidates = []
-                for ent in entities:
-                    spacy_candidates.append({
-                        'id': ent['geo_id'],
-                        'name': ent.get('matched_name', ent['text']),
-                        'type': 'unknown',  # GeoMatcher doesn't return type, would need DB lookup
-                        'geom_type': 'unknown',
-                        'span': ent.get('_span')  # May not be available
-                    })
-
-                spatial_plan = self.spacy_extractor.extract_plan(preserved, spacy_candidates)
-                logger.debug(f"Message {message_id}: spaCy plan: {spatial_plan}")
-            except Exception as e:
-                logger.warning(f"Message {message_id}: spaCy extraction failed: {e}")
-
         # Объектов не нашлось — случайная точка.
         if not geo_ids:
             proper = [t.text for t in tokens
@@ -345,7 +319,6 @@ class MessageProcessor:
                 tokens=tokens,
                 lemmas=lemmas,
                 candidates=entities,
-                spatial_plan=spatial_plan,
             )
             if resolved is not None:
                 strategy = resolved.get('strategy')
@@ -485,8 +458,5 @@ class MessageProcessor:
 
         if self.resolver:
             await self.resolver.close()
-
-        if self.spacy_extractor:
-            await self.spacy_extractor.close()
 
         logger.info("MessageProcessor closed")

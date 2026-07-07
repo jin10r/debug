@@ -77,4 +77,14 @@ class LayerClassifier:
             if self._keyword_lemmas[layer] & token_lemmas:
                 return layer
 
+        # Fuzzy fallback: for 'pig' results, try fuzzy-matching
+        # original surfaces against keyword lemmas (catches typos).
+        from rapidfuzz import fuzz
+        token_surfaces = {l.surface.lower() for l in lemmas if l.surface}
+        for layer in _LAYER_PRIORITY:
+            for kw_lemma in self._keyword_lemmas[layer]:
+                for token_surface in token_surfaces:
+                    if fuzz.ratio(kw_lemma, token_surface) >= 85:
+                        return layer
+
         return 'pig'

@@ -20,6 +20,7 @@ DEFAULT_LAYER_KEYWORDS: dict[str, tuple] = {
         'спринтер',
         'рено',
         'фольксваген',
+        'фольц',
         'хёндай',
         'Хундай',
         'вито',
@@ -30,7 +31,7 @@ DEFAULT_LAYER_KEYWORDS: dict[str, tuple] = {
         'н1', 'н2', 'н3', 'н4', 'н5',
         # pymorphy лемматизирует «бус»→«бусы», но «буса»/«бусик»→самостоятельные
         # леммы ⇒ косвенные/слэнговые формы не совпадали. Добавлены явно.
-        'буса', 'бусик',
+        'буса', 'бусик', 'бусинка',
     ),
     'cops': (
         'коп',
@@ -43,12 +44,12 @@ DEFAULT_LAYER_KEYWORDS: dict[str, tuple] = {
         'экипаж',
         'мент',
         'менты',
+        'менти',
         'полицейский',
         'полицай',
         'police',
         'мусорня',
-        'мусорской'
-        
+        'мусорской',
     ),
     'traffic': (
         'дтп',
@@ -262,19 +263,6 @@ class OllamaConfig:
 
 
 @dataclass
-class SpaCyConfig:
-    """SpaCy semantic spatial relation extraction.
-
-    Опциональный модуль для уточнения типов объектов и извлечения пространственных
-    отношений на основе синтаксического анализа. Может быть отключён для
-    экономии ресурсов (enabled=False).
-    """
-    enabled: bool = True
-    model_name: str = 'ru_core_news_sm'
-    timeout_ms: int = 50
-
-
-@dataclass
 class Settings:
     app: AppConfig
     db: DatabaseConfig
@@ -285,7 +273,6 @@ class Settings:
     parser: ParserConfig = field(default_factory=ParserConfig)
     question_overlay: QuestionOverlayConfig = field(default_factory=QuestionOverlayConfig)
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
-    spacy: SpaCyConfig = field(default_factory=SpaCyConfig)
 
 
 def _resolve_jwt_secret(env: Env) -> str:

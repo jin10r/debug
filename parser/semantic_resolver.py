@@ -18,16 +18,32 @@ except Exception:
 
 logger = logging.getLogger(__name__)
 
-# Предлоги направления — триггер midpoint
-_DIRECTIONAL_PREPS: frozenset = frozenset({
-    'от', 'до', 'между', 'из', 'к', 'ко',
-    'по_пути', 'по дороге', 'напротив',
-})
-
 # Типы объектов, для которых разрешён midpoint
 _MIDPOINT_TYPES: frozenset = frozenset({
     'street', 'market', 'station', 'park', 'landmark',
 })
+
+# Контекстные маркеры для уточнения типа geo-объекта по тексту
+# (аналог бывшего spaCy TYPE_MARKERS, но без модели)
+_TYPE_MARKERS: Dict[str, str] = {
+    "сквер": "park",
+    "парк": "park",
+    "сад": "park",
+    "улица": "street",
+    "проспект": "street",
+    "переулок": "street",
+    "бульвар": "street",
+    "набережная": "embankment",
+    "село": "village",
+    "деревня": "village",
+    "посёлок": "village",
+    "город": "town",
+    "площадь": "square",
+    "мост": "bridge",
+    "станция": "station",
+    "остановка": "stop",
+    "рынок": "market",
+}
 
 
 def _build_prompt(text: str, candidates: List[Dict]) -> str:
@@ -100,7 +116,6 @@ class SemanticResolver:
         tokens: list,
         lemmas: list,
         candidates: List[Dict],
-        spatial_plan: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Определить стратегию для списка кандидатов.
 
@@ -109,7 +124,6 @@ class SemanticResolver:
             tokens: токены
             lemmas: леммы
             candidates: список кандидатов от GeoMatcher
-            spatial_plan: план от SpaCyRelationExtractor (опционально)
 
         Returns:
             Dict с geo_ids, strategy, reasoning или None (fallback).
@@ -117,82 +131,19 @@ class SemanticResolver:
         if not self._initialized or not candidates:
             return None
 
-        # Priority 1: Use spaCy spatial plan if available
-        if spatial_plan and spatial_plan.get('plan'):
-            result = self._resolve_from_spatial_plan(spatial_plan, candidates)
-            if result is not None:
-                logger.debug(f"[Resolver] SpaCy plan: {result['strategy']} ({result.get('reasoning')})")
-                return result
-
-        # Priority 2: Pre-filter rules
+        # Priority 1: Pre-filter rules
         result = self._pre_filter(text, candidates)
         if result is not None:
             logger.debug(f"[Resolver] Pre-filter: {result['strategy']} ({result.get('reasoning')})")
             return result
 
-        # Priority 3: Model call (Ollama)
+        # Priority 2: Model call (Ollama)
         if self._ollama_base is not None:
             result = await self._model_call(text, candidates)
             if result is not None:
                 logger.debug(f"[Resolver] Model: {result['strategy']} ({result.get('reasoning')})")
                 return result
 
-        return None
-
-    def _resolve_from_spatial_plan(
-        self,
-        spatial_plan: Dict[str, Any],
-        candidates: List[Dict]
-    ) -> Optional[Dict[str, Any]]:
-        """Преобразовать spaCy план в стратегию для process_candidates.
-
-        Args:
-            spatial_plan: план от SpaCyRelationExtractor с полем 'plan'
-            candidates: список кандидатов от GeoMatcher
-
-        Returns:
-            Dict с geo_ids, strategy, reasoning или None
-        """
-        plan = spatial_plan.get('plan', [])
-        if not plan:
-            return None
-
-        # Take the first (highest priority) plan item
-        plan_item = plan[0]
-        tool = plan_item.get('tool')
-        args = plan_item.get('args', {})
-
-        # Map spaCy tools to process_candidates strategies
-        if tool == 'single_match':
-            object_id = args.get('object')
-            if object_id:
-                return {
-                    'geo_ids': [object_id],
-                    'strategy': 'single_match',
-                    'reasoning': 'spacy_single_match',
-                }
-
-        elif tool == 'intersection':
-            bounds = args.get('bounds', [])
-            if bounds and len(bounds) >= 2:
-                return {
-                    'geo_ids': bounds,
-                    'strategy': 'intersection',
-                    'reasoning': 'spacy_intersection',
-                }
-
-        elif tool == 'midpoint':
-            from_id = args.get('from')
-            to_id = args.get('to')
-            if from_id and to_id:
-                return {
-                    'geo_ids': [from_id, to_id],
-                    'strategy': 'midpoint',
-                    'reasoning': 'spacy_midpoint',
-                }
-
-        # Unknown tool or invalid args
-        logger.warning(f"[Resolver] Unknown spaCy tool or invalid args: {tool}, {args}")
         return None
 
     def _pre_filter(self, text: str, candidates: List[Dict]) -> Optional[Dict[str, Any]]:
@@ -203,8 +154,9 @@ class SemanticResolver:
         candidate_names = {c.get('matched_name', '').lower() for c in candidates}
 
         # ── Правило 1: предлоги направления → midpoint ──────────────────────────
-        # "от X до Y", "между X и Y"
-        has_from_to = any(p in text_lower for p in ('от', 'до')) and len(candidates) >= 2
+        # "от X до Y", "между X и Y", "в сторону X", "по направлению к X"
+        dir_prepositions = ('от', 'до', 'в сторону', 'по направлению к', 'из', 'в сторону от')
+        has_from_to = any(p in text_lower for p in dir_prepositions) and len(candidates) >= 2
         has_between = 'между' in text_lower and len(candidates) >= 2
         if has_from_to or has_between:
             midpoint_types = _MIDPOINT_TYPES & candidate_types
@@ -241,9 +193,38 @@ class SemanticResolver:
                         'reasoning': f'type_hint_multiple:{target_type}',
                     }
 
-        # ── Правило 3: одноимённые объекты, в тексте есть второй топоним ────────
-        # Если среди кандидатов есть пары одинаковых названий с разными id,
-        # и в тексте есть третий объект — выбрать пару с мин. расстоянием.
+        # ── Правило 3: уточнение типа по контекстным маркерам (_TYPE_MARKERS) ──
+        # "Кировский сквер" → park, "улица Ленина" → street
+        # Аналог бывшего spaCy _refine_types_by_context, но без dependency parse
+        for marker_word, target_type in _TYPE_MARKERS.items():
+            if marker_word in text_lower:
+                typed = [c for c in candidates if c.get('type') == target_type]
+                if typed:
+                    return {
+                        'geo_ids': [c['geo_id'] for c in typed],
+                        'strategy': 'single_match' if len(typed) == 1 else 'intersection',
+                        'reasoning': f'marker_refine:{target_type}',
+                    }
+
+        # ── Правило 4a: "/" — пересечение улиц ────────────────────────────────────
+        # "Гагарина/Лунный", "Гайдара/Ген. Петрова", "Щорса/Аэропортовская"
+        if '/' in text:
+            parts = [p.strip() for p in text.split('/')]
+            match_values = []
+            for c in candidates:
+                match_values.append(c.get('matched_name', '').lower())
+                match_values.append(c.get('text', '').lower())
+            match_values = [v for v in match_values if v]
+            for part in parts:
+                pl = part.lower()
+                if any(mv in pl or pl in mv for mv in match_values):
+                    return {
+                        'geo_ids': [c['geo_id'] for c in candidates],
+                        'strategy': 'intersection',
+                        'reasoning': 'slash_intersection',
+                    }
+
+        # ── Правило 4b: одноимённые объекты, в тексте есть второй топоним ────────
         name_to_ids: Dict[str, List[int]] = {}
         for c in candidates:
             name = (c.get('matched_name') or '').lower()
@@ -251,8 +232,7 @@ class SemanticResolver:
 
         for name, ids in name_to_ids.items():
             if len(ids) > 1 and len(candidates) > len(ids):
-                # Есть дубликат + ещё один кандидат → не можем решить без модели
-                return None  # Пусть модель разбирает
+                return None
 
         return None
 

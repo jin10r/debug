@@ -112,14 +112,6 @@ class SemanticResolver:
                     if row['strategy'] == 'midpoint':
                         self._midpoint_types = tuple(row['allowed_types'])
 
-                marker_rows = await conn.fetch(
-                    "SELECT marker, type FROM geo_role_patterns "
-                    "UNION ALL "
-                    "SELECT unnest(prepositions) as marker, role as type FROM geo_role_patterns"
-                )
-                for row in marker_rows:
-                    self._type_markers[row['marker']] = row['type']
-
             ollama = settings.ollama if settings else None
             if ollama and ollama.enabled:
                 self._ollama_base = ollama.base_url.rstrip('/')

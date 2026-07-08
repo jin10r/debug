@@ -40,7 +40,11 @@ CREATE TABLE IF NOT EXISTS events (
         'random',
         'single_match',
         'intersection',
-        'midpoint'
+        'midpoint',
+        'pseudo_intersection',
+        'proximity',
+        'centroid',
+        'area'
     )),
     geom GEOMETRY,
     PRIMARY KEY (id, event_time)
@@ -91,7 +95,11 @@ ALTER TABLE events ADD CONSTRAINT events_strategy_check
         'random',
         'single_match',
         'intersection',
-        'midpoint'
+        'midpoint',
+        'pseudo_intersection',
+        'proximity',
+        'centroid',
+        'area'
     ));
 
 ALTER TABLE events DROP CONSTRAINT IF EXISTS events_layer_check;

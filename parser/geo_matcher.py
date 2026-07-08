@@ -65,7 +65,7 @@ class GeoMatcher:
         try:
             async with pg_pool.acquire() as conn:
                 geo_rows = await conn.fetch(
-                    "SELECT id, names, type FROM geo WHERE geom IS NOT NULL"
+                    "SELECT id, names, type, ST_GeometryType(geom) AS geom_type FROM geo WHERE geom IS NOT NULL"
                 )
                 sw_rows = await conn.fetch("SELECT word FROM stopwords")
 
@@ -83,7 +83,7 @@ class GeoMatcher:
         try:
             async with pg_pool.acquire() as conn:
                 rows = await conn.fetch(
-                    "SELECT id, names, type FROM geo WHERE geom IS NOT NULL"
+                    "SELECT id, names, type, ST_GeometryType(geom) AS geom_type FROM geo WHERE geom IS NOT NULL"
                 )
             count = await asyncio.to_thread(self._index.build, rows)
             logger.info(f"[Geo] Reindexed {count} variants")
@@ -96,7 +96,7 @@ class GeoMatcher:
         try:
             async with pg_pool.acquire() as conn:
                 row = await conn.fetchrow(
-                    "SELECT id, names, type FROM geo WHERE id = $1 AND geom IS NOT NULL",
+                    "SELECT id, names, type, ST_GeometryType(geom) AS geom_type FROM geo WHERE id = $1 AND geom IS NOT NULL",
                     geo_id,
                 )
             await asyncio.to_thread(
@@ -177,6 +177,7 @@ class GeoMatcher:
                     'matched_name': best.canonical_name,
                     'text': surface,
                     'type': best.geo_type,
+                    'geom_type': best.geom_type,
                     'source': source,
                     '_span': span,
                 }
@@ -186,7 +187,7 @@ class GeoMatcher:
             settings.similarity.surface_typo_threshold * 100
             if settings and settings.similarity
             and getattr(settings.similarity, 'surface_typo_threshold', None) is not None
-            else 90.0
+            else 80.0
         )
         s_phrases, s_meta = self._index.surface_phrases()
         if s_phrases and len(surface) >= 5:
@@ -227,6 +228,7 @@ class GeoMatcher:
                         'matched_name': entry.canonical_name,
                         'text': surface,
                         'type': entry.geo_type,
+                        'geom_type': entry.geom_type,
                         'source': 'surface_typo',
                         '_span': span,
                     }

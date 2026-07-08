@@ -151,7 +151,7 @@ class SimilarityConfig:
     # Высокий — это ИСПРАВЛЕНИЕ опечаток (DL 1-2), а не семантический матч:
     # отсекает "среди"/"Средняя" (разные слова), пропускает "чепаевская"/
     # "чапаевская". Падежи ловит стем-индекс (Tier 1), не fuzzy.
-    surface_typo_threshold: float = 0.90
+    surface_typo_threshold: float = 0.80
 
     # Sliding-window: максимальный размер окна (токенов) при генерации кандидатов.
     # Окно 1..max_sliding_window охватывает улицы из 1, 2 или 3 слов.
@@ -164,7 +164,7 @@ class SimilarityConfig:
     # Мин. score вторичного матча для участия в ГЕОМЕТРИИ мультиматч-пересечений
     # (process_candidates). Ниже порога матч остаётся в matches (для прозрачности),
     # но не искажает intersection/polygon. single_match-fallback берёт лучший по score.
-    geometry_min_score: float = 0.85
+    geometry_min_score: float = 0.80
 
     # SemanticResolver — параметры интеллектуального анализатора geo-конфликтов.
     # Модель определяет стратегию (single_match/intersection/midpoint),

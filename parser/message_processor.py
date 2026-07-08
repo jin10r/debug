@@ -25,7 +25,6 @@ from .layer_classifier import LayerClassifier
 from .morphology import Morphology
 from .phonetic_index import PhoneticIndex
 from .geo_matcher import GeoMatcher
-from .semantic_resolver import SemanticResolver
 from .word_tokenizer import tokenize
 from .text_preprocessor import preprocess_light, strip_tail, is_promotional
 
@@ -90,14 +89,13 @@ _INSERT_EVENT_SIMPLE = """
 """ + _EVENT_INSERT_TAIL
 
 # Матч-ветка: geom/strategy/matches приходят из process_candidates ВНУТРИ того
-# же statement — один roundtrip вместо двух (был отдельный SELECT + INSERT).
-# p_strategy=$9: 'single_match', 'intersection', 'midpoint' или NULL (fallback).
+# же statement — один roundtrip.
 _INSERT_EVENT_FROM_CANDIDATES = """
     WITH pc AS (
         SELECT result_geom, result_strategy, result_matches
         FROM process_candidates(
             $6::int[], $7::double precision[], $8::text[],
-            $10::varchar, $9::text[]
+            NULL::varchar, $9::text[]
         )
     ),
     inserted AS (
@@ -125,9 +123,6 @@ class MessageProcessor:
 
         self.index = PhoneticIndex(self.morph)
         self.matcher = GeoMatcher(self.morph, self.index)
-        self.onnx_encoder = None
-        self.type_validator = None
-        self.resolver = SemanticResolver(self.morph, self.index)
         self.layer_classifier = LayerClassifier(self.morph)
         self._listen_conn: Optional[asyncpg.Connection] = None
 
@@ -152,23 +147,6 @@ class MessageProcessor:
             if not success:
                 logger.error("GeoMatcher initialization failed")
                 return False
-
-            # OnnxEncoder — zero-shot BERT type validator (опционально, lazy import).
-            from .onnx_encoder import OnnxEncoder
-            from .type_validator import TypeValidator
-            self.onnx_encoder = OnnxEncoder("models/rubert_tiny2_int8.onnx")
-            logger.info("Initializing OnnxEncoder...")
-            await self.onnx_encoder.initialize()
-
-            # TypeValidator — валидация типов кандидатов через BERT.
-            self.type_validator = TypeValidator(self.onnx_encoder)
-            logger.info("Initializing TypeValidator...")
-            await self.type_validator.initialize()
-
-            # SemanticResolver — загружает стоп-слова, инициализирует модель (если enabled).
-            self.resolver = SemanticResolver(self.morph, self.index, self.type_validator)
-            logger.info("Initializing SemanticResolver...")
-            await self.resolver.initialize(self.db_pool)
 
             # Подписка на уведомления от PostgreSQL
             logger.info("Setting up PostgreSQL notifications...")
@@ -329,30 +307,6 @@ class MessageProcessor:
                 tokens=tokens, geo_ids=geo_ids,
             )
 
-        # SemanticResolver: определяет стратегию для 2+ кандидатов.
-        strategy: Optional[str] = None
-        if len(geo_ids) > 1:
-            resolved = await self.resolver.resolve(
-                text=preserved,
-                tokens=tokens,
-                lemmas=lemmas,
-                candidates=entities,
-            )
-            if resolved is not None:
-                strategy = resolved.get('strategy')
-                resolved_ids = resolved.get('geo_ids')
-                if resolved_ids is not None:
-                    # Пересортировать geo_ids/scores/texts по решению модели
-                    id_set = set(resolved_ids)
-                    geo_ids = [gid for gid in geo_ids if gid in id_set]
-                    geo_scores = [s for gid, s in zip(geo_ids, geo_scores) if gid in id_set]
-                    geo_texts = [t for gid, t in zip(geo_ids, geo_texts) if gid in id_set]
-                    geo_types = [t for gid, t in zip(geo_ids, geo_types) if gid in id_set]
-                logger.info(
-                    f"Message {message_id}: resolver → {strategy}, "
-                    f"geo_ids={geo_ids}"
-                )
-
         logger.debug(
             f"Message {message_id}: {len(geo_ids)} geo matched: {geo_ids}"
         )
@@ -361,7 +315,7 @@ class MessageProcessor:
                 message_id=message_id, event_time=event_time, description=preserved,
                 photo_path=photo_path, layer=layer,
                 geo_ids=geo_ids, geo_scores=geo_scores,
-                geo_texts=geo_texts, geo_types=geo_types, strategy=strategy,
+                geo_texts=geo_texts, geo_types=geo_types,
             ),
             tokens=tokens, geo_ids=geo_ids,
         )
@@ -396,17 +350,15 @@ class MessageProcessor:
         self, *, message_id: int, event_time: datetime, description: str,
         photo_path: Optional[str], layer: str, geo_ids: list,
         geo_scores: list, geo_texts: list, geo_types: Optional[list] = None,
-        strategy: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Вставить событие, посчитав геометрию через process_candidates в том же
-        запросе — один roundtrip к БД (раньше было SELECT + отдельный INSERT).
-        Если strategy указан (от SemanticResolver), передаётся в SQL как p_strategy.
+        запросе — один roundtrip к БД.
         """
         scores_array = [float(s) for s in geo_scores]
         return await self._run_insert(
             _INSERT_EVENT_FROM_CANDIDATES,
             (message_id, event_time, description, photo_path, layer,
-             geo_ids, scores_array, geo_texts, geo_types, strategy),
+             geo_ids, scores_array, geo_texts, geo_types),
             message_id=message_id,
         )
 
@@ -475,11 +427,5 @@ class MessageProcessor:
 
         if self.matcher:
             await self.matcher.close()
-
-        if self.resolver:
-            await self.resolver.close()
-
-        if self.onnx_encoder is not None:
-            await self.onnx_encoder.close()
 
         logger.info("MessageProcessor closed")

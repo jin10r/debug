@@ -163,7 +163,7 @@ window.createPopupContent = function(properties: Record<string, unknown>): strin
     const time = properties.time ? window.formatDateTime(properties.time as string) : '';
     const description = properties.description ? (() => {
         const escaped = window.processTelegramHTML(properties.description as string);
-        const highlighted = _highlightMatchedParts(escaped, properties.matches as Array<Record<string, unknown>> | undefined);
+        return _highlightMatchedParts(escaped, properties.matches as Array<Record<string, unknown>> | undefined);
     })() : '';
 
     const photoUrl = properties.photo_url;

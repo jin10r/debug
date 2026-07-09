@@ -80,7 +80,7 @@ logs
 optimization_results.json
 
 # Generated event exports (large, produced locally — not versioned)
-nnew_events_export.csv
+new_events_export.csv
 events_export.csv
 
 # ONNX model files (large binaries, downloaded separately)

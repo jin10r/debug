@@ -4,8 +4,14 @@
 /**
  * Обрабатывает новые события: показывает уведомление и вибрацию
  */
-function handleNewEvents(events) {
-    events.forEach((event, index) => {
+interface NewEvent {
+    id: string | number;
+    layer: string;
+    description?: string;
+}
+
+function handleNewEvents(events: NewEvent[]): void {
+    events.forEach((event: NewEvent, index: number) => {
         setTimeout(() => {
             let message = '';
 

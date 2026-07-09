@@ -50,6 +50,14 @@ RUN useradd -m -u 1000 parser && \
 COPY --chown=parser:parser parser/ ./parser/
 COPY --chown=parser:parser core/ ./core/
 
+# Очистка .pyc/runtime-мусора из runtime-стадии
+RUN find /home/parser/.local -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true && \
+    find /home/parser/.local -type f -name "*.pyc" -delete && \
+    find /home/parser/.local -type f -name "*.pyo" -delete && \
+    find /app -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true && \
+    find /app -type f -name "*.pyc" -delete && \
+    pip uninstall -y pip setuptools wheel 2>/dev/null || true
+
 # Healthcheck задаётся в docker-compose.yml (pgrep на процесс monitoring).
 
 USER parser

@@ -4,25 +4,25 @@
  * Показывает центральный попап с контентом
  * @param {string} content - HTML контент попапа
  */
-function showCenterPopup(content) {
+function showCenterPopup(content: string): void {
     const popup = document.getElementById('centerPopup');
     const overlay = document.getElementById('centerPopupOverlay');
     const popupContent = document.getElementById('centerPopupContent');
 
-    popupContent.innerHTML = content;
-    popup.classList.add('show');
-    overlay.classList.add('show');
+    if (popupContent) popupContent.innerHTML = content;
+    popup?.classList.add('show');
+    overlay?.classList.add('show');
 }
 
 /**
  * Скрывает центральный попап
  */
-function hideCenterPopup() {
+function hideCenterPopup(): void {
     const popup = document.getElementById('centerPopup');
     const overlay = document.getElementById('centerPopupOverlay');
 
-    popup.classList.remove('show');
-    overlay.classList.remove('show');
+    popup?.classList.remove('show');
+    overlay?.classList.remove('show');
 }
 
 /**
@@ -30,7 +30,7 @@ function hideCenterPopup() {
  * @param {string} text - Текст для копирования
  * @returns {Promise<boolean>} - Успешно ли скопировано
  */
-async function copyToClipboard(text) {
+async function copyToClipboard(text: string): Promise<boolean> {
     try {
         // Haptic feedback при копировании
         if (window.telegramIntegration) {
@@ -70,27 +70,25 @@ async function copyToClipboard(text) {
                 // Bot API 6.2+: Показываем нативный попап
                 if (window.telegramIntegration) {
                     window.telegramIntegration.showPopup('Адрес скопирован в буфер обмена', [{ type: 'ok' }]);
-                } else if (window.Telegram?.WebApp?.showPopup && window.Telegram?.WebApp?.isVersionAtLeast && window.Telegram.WebApp.isVersionAtLeast('6.2')) {
+                } else if (window.Telegram?.WebApp?.showPopup && window.Telegram?.WebApp?.isVersionAtLeast?.('6.2')) {
                     try {
                         window.Telegram.WebApp.showPopup({
-                            title: '✅ Скопировано',
                             message: 'Адрес скопирован в буфер обмена',
                             buttons: [{ type: 'ok' }]
                         });
                     } catch (e) {
                         alert('✅ Адрес скопирован в буфер обмена');
                     }
-                } else if (window.Telegram?.WebApp?.showAlert && window.Telegram?.WebApp?.isVersionAtLeast && window.Telegram.WebApp.isVersionAtLeast('6.2')) {
+                } else if (window.Telegram?.WebApp?.showAlert && window.Telegram?.WebApp?.isVersionAtLeast?.('6.2')) {
                     try {
                         window.Telegram.WebApp.showAlert('✅ Адрес скопирован в буфер обмена');
-                    } catch (e) {
+                    } catch (_e) {
                         alert('✅ Адрес скопирован в буфер обмена');
                     }
                 } else {
                     alert('✅ Адрес скопирован в буфер обмена');
                 }
 
-                // Success haptic feedback
                 if (window.telegramIntegration) {
                     window.telegramIntegration.hapticFeedback('success');
                 }
@@ -119,7 +117,7 @@ async function copyToClipboard(text) {
 
         if (success) {
             alert('✅ Адрес скопирован в буфер обмена');
-        return true;
+            return true;
         }
 
         throw new Error('All copy methods failed');
@@ -127,18 +125,16 @@ async function copyToClipboard(text) {
     } catch (error) {
         console.error('Copy failed:', error);
 
-        // Error haptic feedback
         if (window.telegramIntegration) {
             window.telegramIntegration.hapticFeedback('error');
         }
 
-        // Показываем ошибку через Telegram API если доступен
         if (window.telegramIntegration) {
             window.telegramIntegration.showAlert('❌ Не удалось скопировать адрес. Попробуйте еще раз.');
-        } else if (window.Telegram?.WebApp?.showAlert && window.Telegram?.WebApp?.isVersionAtLeast && window.Telegram.WebApp.isVersionAtLeast('6.2')) {
+        } else if (window.Telegram?.WebApp?.showAlert && window.Telegram?.WebApp?.isVersionAtLeast?.('6.2')) {
             try {
                 window.Telegram.WebApp.showAlert('❌ Не удалось скопировать адрес. Попробуйте еще раз.');
-            } catch (e) {
+            } catch (_e) {
                 alert('❌ Не удалось скопировать адрес');
             }
         } else {
@@ -151,7 +147,7 @@ async function copyToClipboard(text) {
 /**
  * Создает и показывает попап легенды
  */
-function showLegendPopup() {
+function showLegendPopup(): void {
     // Порядок строк соответствует приоритету классификации слоёв
     // (parser/layer_classifier.py: bus → cops → traffic → pig-fallback).
     const rowStyle = 'padding: 10px 0; color: var(--tg-text-color, #000); font-size: 15px; line-height: 1.4;';

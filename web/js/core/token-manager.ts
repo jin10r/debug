@@ -12,13 +12,13 @@
     'use strict';
 
     // Private state
-    let _refreshTimer = null;
+    let _refreshTimer: ReturnType<typeof setTimeout> | null = null;
     const _REFRESH_THRESHOLD_MS = 60000; // Refresh 1 minute before expiration
 
     /**
      * Decode JWT token payload (without verification)
      */
-    function decodeToken(token) {
+    function decodeToken(token: string): Record<string, unknown> | null {
         try {
             const base64Url = token.split('.')[1];
             if (!base64Url) return null;
@@ -40,11 +40,11 @@
     /**
      * Check if token is expired
      */
-    function isTokenExpired(token, thresholdMs = 0) {
-        const payload = decodeToken(token);
+    function isTokenExpired(token: string, thresholdMs: number = 0): boolean {
+        const payload = decodeToken(token) as { exp?: number } | null;
         if (!payload || !payload.exp) return true;
 
-        const expirationTime = payload.exp * 1000; // Convert to milliseconds
+        const expirationTime = payload.exp * 1000;
         const now = Date.now();
 
         return now >= (expirationTime - thresholdMs);
@@ -53,8 +53,8 @@
     /**
      * Get token expiration time
      */
-    function getTokenExpiration(token) {
-        const payload = decodeToken(token);
+    function getTokenExpiration(token: string): Date | null {
+        const payload = decodeToken(token) as { exp?: number } | null;
         if (!payload || !payload.exp) return null;
 
         return new Date(payload.exp * 1000);
@@ -77,7 +77,7 @@
     /**
      * Store tokens in sessionStorage
      */
-    function storeTokens(accessToken, refreshToken) {
+    function storeTokens(accessToken: string, refreshToken?: string): void {
         sessionStorage.setItem('access_token', accessToken);
         if (refreshToken) {
             sessionStorage.setItem('refresh_token', refreshToken);
@@ -96,7 +96,7 @@
     /**
      * Refresh access token using refresh token
      */
-    async function refreshAccessToken() {
+    async function refreshAccessToken(): Promise<string | null> {
         const refreshToken = getRefreshToken();
 
         if (!refreshToken) {
@@ -146,7 +146,7 @@
             return;
         }
 
-        const payload = decodeToken(accessToken);
+        const payload = decodeToken(accessToken) as { exp?: number } | null;
         if (!payload || !payload.exp) {
             console.warn('[TokenManager] Invalid token, cannot schedule refresh');
             return;

@@ -176,12 +176,20 @@ class ParserBot:
                 f"{proxy_config['hostname']}:{proxy_config['port']}"
             )
 
+        # api_id/api_hash не обязательны — session.session уже авторизована.
+        # Передаются только если заданы в env (для обновления сессии).
+        client_kwargs = {
+            'name': 'session',
+            'workdir': '/app/parser',
+        }
+        if proxy_config:
+            client_kwargs['proxy'] = proxy_config
+        if settings.parser.api_id and settings.parser.api_hash:
+            client_kwargs['api_id'] = settings.parser.api_id
+            client_kwargs['api_hash'] = settings.parser.api_hash
+
         try:
-            self.app = Client(
-                name="session",
-                workdir="/app/parser",
-                **({"proxy": proxy_config} if proxy_config else {})
-            )
+            self.app = Client(**client_kwargs)
             logger.info("Starting Telegram client...")
             await self.app.start()
             logger.info("✅ Telegram client started successfully")
@@ -199,12 +207,23 @@ class ParserBot:
         try:
             logger.info(f"Loading history from channel {self.channel_id}...")
 
-            await self._warmup_peer()
+            # get_chat() принудительно резолвит peer и кеширует access_hash
+            # в session.session. После этого get_chat_history() работает без
+            # contacts.ResolvePhone (который падает с PHONE_NOT_OCCUPIED).
+            try:
+                chat = await self.app.get_chat(int(self.channel_id))
+                logger.info(f"Channel resolved: {chat.title or self.channel_id}")
+            except Exception as e:
+                logger.warning(
+                    f"Could not resolve channel {self.channel_id}: {e} — "
+                    "skipping history backfill (live messages still work)"
+                )
+                return
 
             count = 0
             # Используем async for для стриминга - не загружаем всю историю в память
             async for message in self.app.get_chat_history(
-                chat_id=self.channel_id,
+                chat_id=int(self.channel_id),
                 limit=settings.parser.history_limit,
             ):
                 await self._message_queue.put(message)
@@ -217,29 +236,6 @@ class ParserBot:
 
         except Exception as e:
             logger.error(f"Failed to load chat history: {e}")
-
-    async def _warmup_peer(self) -> bool:
-        """Populate session peer cache before history fetch.
-
-        Pyrogram needs access_hash in session.session for numeric peer IDs.
-        Iterating get_dialogs() until we find the target channel writes it
-        without fetching the full dialog list.
-        Returns True if peer was found, False otherwise.
-        """
-        target_id = int(self.channel_id)
-        try:
-            async for dialog in self.app.get_dialogs():
-                if dialog.chat.id == target_id:
-                    logger.info(f"Peer cache warmed for channel {self.channel_id}")
-                    return True
-            logger.warning(
-                f"Channel {self.channel_id} not found in dialogs — "
-                "peer cache not warmed, history load may fail"
-            )
-            return False
-        except Exception as e:
-            logger.warning(f"Peer warmup failed ({e}) — will attempt history load anyway")
-            return False
 
     async def start(self):
         """Запуск бота."""

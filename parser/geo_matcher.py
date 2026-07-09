@@ -50,6 +50,14 @@ _LOC_PREPS: frozenset = frozenset({
     'около', 'возле', 'вдоль',
 })
 
+# Короткие предлоги/служебные слова в конце sliding-window кандидата.
+# Если окно заканчивается на один из них ("петрова к", "ильфа по"),
+# кандидат отбрасывается — это артефакт окна, а не реальное имя.
+_WINDOW_TAIL_STOPWORDS: frozenset = frozenset({
+    'к', 'в', 'по', 'от', 'за', 'из', 'у', 'до', 'не',
+    'на', 'с', 'о', 'об', 'под', 'над', 'для', 'при',
+})
+
 # Типы в порядке приоритета: settlement выше street
 class GeoMatcher:
     """Поиск по geo таблице: кандидаты → geo_id через surface/lemma индекс."""
@@ -295,6 +303,11 @@ class GeoMatcher:
         best_by_geo: Dict[int, Dict] = {}
         for surface, stem_tuple, start_i, end_i, _size, _gap, is_anchored in candidates:
             if surface in self._stopwords:
+                continue
+            # Отбрасываем кандидаты, оканчивающиеся на короткий предлог:
+            # "петрова к" → ложное совпадение с "Петровка" и т.п.
+            tail_tokens = surface.rsplit(' ', 1)
+            if len(tail_tokens) > 1 and tail_tokens[1] in _WINDOW_TAIL_STOPWORDS:
                 continue
             result = await self._link_span(surface, stem_tuple, (start_i, end_i))
             if result is None:

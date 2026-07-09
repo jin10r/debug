@@ -4,51 +4,113 @@
 // Инициализация глобальных переменных
 window.adSquares = {};
 
-// Скрывает все текстовые слои (type: symbol) в уже загруженном MapLibre GL стиле.
-function hideMaplibreLabels(glMap) {
-    glMap.getStyle().layers
-        .filter(function(l) { return l.type === 'symbol'; })
-        .forEach(function(l) { glMap.setLayoutProperty(l.id, 'visibility', 'none'); });
+// Helper: MapLibre GL map methods that need `this` binding preserved.
+// Extracting methods from the object (e.g. `const fn = glMap.getStyle; fn()`)
+// loses `this` → TypeError inside MapLibre internals.
+interface GLMap {
+    getStyle(): { layers: Array<Record<string, unknown>> };
+    setLayoutProperty(id: string, prop: string, val: string): void;
+    setPaintProperty(id: string, prop: string, val: string | number): void;
+    isStyleLoaded(): boolean;
+    once(event: string, fn: () => void): void;
 }
 
-function _applyDarkTheme(glMap) {
-    glMap.getStyle().layers
-        .filter(l => l.type === 'symbol')
-        .forEach(l => glMap.setLayoutProperty(l.id, 'visibility', 'none'));
+// Скрывает все текстовые слои (type: symbol) в уже загруженном MapLibre GL стиле.
+// try/catch: getStyle() может упасть если карта ещё не полностью инициализирована
+// во время первого render-цикла (initGL → onAdd → setStyle).
+function hideMaplibreLabels(glMap: GLMap): void {
+    try {
+        const style = glMap.getStyle();
+        if (!style || !style.layers) return;
+        style.layers
+            .filter(function(l: Record<string, unknown>) { return l.type === 'symbol'; })
+            .forEach(function(l: Record<string, unknown>) {
+                try {
+                    glMap.setLayoutProperty(l.id as string, 'visibility', 'none');
+                } catch (_e) { /* layer not ready */ }
+            });
+    } catch (_e) { /* map style not loaded yet */ }
+}
 
-    glMap.getStyle().layers.forEach(layer => {
-        const id = (layer.id || '').toLowerCase();
-        const sl = (layer['source-layer'] || '').toLowerCase();
-        try {
-            if (layer.type === 'background') {
-                glMap.setPaintProperty(layer.id, 'background-color', '#0d1b2e');
-            } else if (layer.type === 'fill') {
-                if (id.includes('water') || sl === 'water' || sl.includes('water')) {
-                    glMap.setPaintProperty(layer.id, 'fill-color', '#4db8d4');
-                    glMap.setPaintProperty(layer.id, 'fill-opacity', 0.6);
-                } else if (id.includes('building') || sl === 'building') {
-                    glMap.setPaintProperty(layer.id, 'fill-color', '#c8ccd0');
-                    glMap.setPaintProperty(layer.id, 'fill-opacity', 0.25);
-                } else {
-                    glMap.setPaintProperty(layer.id, 'fill-color', '#0d1b2e');
+function _applyDarkTheme(glMap: GLMap): void {
+    try {
+        const style = glMap.getStyle();
+        if (!style || !style.layers) return;
+        const layers = style.layers;
+
+        layers
+            .filter(l => l.type === 'symbol')
+            .forEach(l => {
+                try {
+                    glMap.setLayoutProperty(l.id as string, 'visibility', 'none');
+                } catch (_e) { /* ignore */ }
+            });
+
+        layers.forEach(layer => {
+            const id = ((layer.id as string) || '').toLowerCase();
+            const sl = ((layer['source-layer'] as string) || '').toLowerCase();
+            try {
+                if (layer.type === 'background') {
+                    glMap.setPaintProperty(layer.id as string, 'background-color', '#0d1b2e');
+                } else if (layer.type === 'fill') {
+                    if (id.includes('water') || sl === 'water' || sl.includes('water')) {
+                        glMap.setPaintProperty(layer.id as string, 'fill-color', '#4db8d4');
+                        glMap.setPaintProperty(layer.id as string, 'fill-opacity', 0.6);
+                    } else if (id.includes('building') || sl === 'building') {
+                        glMap.setPaintProperty(layer.id as string, 'fill-color', '#c8ccd0');
+                        glMap.setPaintProperty(layer.id as string, 'fill-opacity', 0.25);
+                    } else {
+                        glMap.setPaintProperty(layer.id as string, 'fill-color', '#0d1b2e');
+                    }
+                } else if (layer.type === 'line') {
+                    if (id.includes('water') || sl === 'water') {
+                        glMap.setPaintProperty(layer.id as string, 'line-color', '#4db8d4');
+                    } else if (id.includes('motorway') || id.includes('trunk') || id.includes('primary')) {
+                        glMap.setPaintProperty(layer.id as string, 'line-color', '#3a7bd5');
+                    } else if (id.includes('secondary') || id.includes('tertiary')) {
+                        glMap.setPaintProperty(layer.id as string, 'line-color', '#5b9bd5');
+                    } else if (sl === 'transportation' || id.includes('road') || id.includes('street')) {
+                        glMap.setPaintProperty(layer.id as string, 'line-color', '#2d5a8e');
+                    }
                 }
-            } else if (layer.type === 'line') {
-                if (id.includes('water') || sl === 'water') {
-                    glMap.setPaintProperty(layer.id, 'line-color', '#4db8d4');
-                } else if (id.includes('motorway') || id.includes('trunk') || id.includes('primary')) {
-                    glMap.setPaintProperty(layer.id, 'line-color', '#3a7bd5');
-                } else if (id.includes('secondary') || id.includes('tertiary')) {
-                    glMap.setPaintProperty(layer.id, 'line-color', '#5b9bd5');
-                } else if (sl === 'transportation' || id.includes('road') || id.includes('street')) {
-                    glMap.setPaintProperty(layer.id, 'line-color', '#2d5a8e');
-                }
-            }
-        } catch (_) {}
-    });
+            } catch (_e) { /* ignore paint errors */ }
+        });
+    } catch (_e) { /* map style not loaded yet */ }
+}
+
+// Helper: apply theme to a MapLibre GL map.
+// Uses 'idle' event which fires when MapLibre has finished rendering and
+// all tiles are loaded — more reliable than setTimeout or 'load' event
+// (which fires before the map's internal style is fully initialized).
+function _applyThemeToGLMap(glMap: GLMap, theme?: string): void {
+    const apply = (): void => {
+        if (theme === 'dark') {
+            _applyDarkTheme(glMap);
+        } else {
+            hideMaplibreLabels(glMap);
+        }
+    };
+    if (glMap.isStyleLoaded()) {
+        glMap.once('idle', apply);
+    } else {
+        glMap.once('load', () => glMap.once('idle', apply));
+    }
 }
 
 // Доступные тайлы карт
-const TILE_PROVIDERS = {
+interface TileProviderMaplibre {
+    type: 'maplibre';
+    style: string;
+    theme?: string;
+}
+interface TileProviderOSM {
+    type?: undefined;
+    url: string;
+    options: Record<string, unknown>;
+}
+type TileProvider = TileProviderMaplibre | TileProviderOSM;
+
+const TILE_PROVIDERS: Record<string, TileProvider> = {
     'vector-light': {
         type: 'maplibre',
         style: 'https://tiles.openfreemap.org/styles/liberty'
@@ -69,11 +131,11 @@ const TILE_PROVIDERS = {
 };
 
 // Текущий активный тайл
-let currentTileLayer = null;
+let currentTileLayer: L.Layer | null = null;
 let currentTileKey = 'vector-light';
 
 // Функция для переключения тайлов
-window.switchTileLayer = function(tileKey) {
+window.switchTileLayer = function(tileKey: string): void {
     if (!TILE_PROVIDERS[tileKey] || tileKey === currentTileKey) {
         return;
     }
@@ -91,20 +153,20 @@ window.switchTileLayer = function(tileKey) {
 
     // Создаем и добавляем новый слой
     const provider = TILE_PROVIDERS[tileKey];
-    let newLayer;
+    let newLayer: L.Layer;
     if (provider.type === 'maplibre') {
-        newLayer = L.maplibreGL({ style: provider.style });
+        newLayer = (L as unknown as { maplibreGL: (opts: { style: string }) => L.Layer }).maplibreGL({ style: provider.style });
         newLayer.addTo(map);
-        const glMap = newLayer.getMaplibreMap();
-        const applyTheme = provider.theme === 'dark'
-            ? () => _applyDarkTheme(glMap)
-            : () => hideMaplibreLabels(glMap);
-        if (glMap.isStyleLoaded()) { applyTheme(); }
-        else { glMap.once('load', applyTheme); }
+        const glMap = (newLayer as unknown as { getMaplibreMap: () => GLMap }).getMaplibreMap();
+        if (glMap.isStyleLoaded()) {
+            _applyThemeToGLMap(glMap, (provider as TileProviderMaplibre).theme);
+        } else {
+            glMap.once('load', () => _applyThemeToGLMap(glMap, (provider as TileProviderMaplibre).theme));
+        }
     } else {
-        newLayer = L.tileLayer(provider.url, { minZoom: 11, maxZoom: 19, ...provider.options });
+        newLayer = L.tileLayer((provider as TileProviderOSM).url, { minZoom: 11, maxZoom: 19, ...(provider as TileProviderOSM).options });
         newLayer.addTo(map);
-        newLayer.bringToBack();
+        (newLayer as L.TileLayer).bringToBack();
     }
 
     currentTileLayer = newLayer;
@@ -113,7 +175,7 @@ window.switchTileLayer = function(tileKey) {
     // Сохраняем выбор в localStorage
     try {
         localStorage.setItem('preferred_tile_layer', tileKey);
-    } catch (e) {
+    } catch (_e) {
         // Игнорируем ошибки localStorage
     }
 
@@ -121,12 +183,8 @@ window.switchTileLayer = function(tileKey) {
 };
 
 // Инициализация карты и UI компонентов
-window.initializeMap = function() {
+window.initializeMap = function(): void {
     // Инициализация карты (Leaflet)
-    // minZoom/maxZoom совпадают с диапазоном тайлов (см. TILE_PROVIDERS, 11–19).
-    // Это гарантирует, что зум карты никогда не опустится ниже minZoom тайлов:
-    // иначе markerCluster при addLayer уходит за вершину дерева кластеров
-    // (_topClusterLevel.__parent === undefined) и падает с TypeError.
     const map = L.map('map', {
         attributionControl: false,
         zoomControl: true,
@@ -138,61 +196,51 @@ window.initializeMap = function() {
     // Проверяем сохраненный выбор тайла
     try {
         const savedTile = localStorage.getItem('preferred_tile_layer');
-        // Проверяем, что сохраненный ключ существует в TILE_PROVIDERS
-        if (savedTile && TILE_PROVIDERS[savedTile]) {
+        if (savedTile && savedTile in TILE_PROVIDERS) {
             currentTileKey = savedTile;
         } else if (savedTile) {
-            // Старый ключ больше не существует — очищаем localStorage
             console.log('[initializeMap] Clearing outdated tile key from localStorage:', savedTile);
             localStorage.removeItem('preferred_tile_layer');
         }
-    } catch (e) {
+    } catch (_e) {
         // Игнорируем ошибки localStorage
     }
 
     // Добавляем выбранный тайл
     const provider = TILE_PROVIDERS[currentTileKey];
     if (provider.type === 'maplibre') {
-        currentTileLayer = L.maplibreGL({ style: provider.style });
+        currentTileLayer = (L as unknown as { maplibreGL: (opts: { style: string }) => L.Layer }).maplibreGL({ style: provider.style });
         currentTileLayer.addTo(map);
-        const glMap = currentTileLayer.getMaplibreMap();
-        const applyTheme = provider.theme === 'dark'
-            ? () => _applyDarkTheme(glMap)
-            : () => hideMaplibreLabels(glMap);
-        if (glMap.isStyleLoaded()) { applyTheme(); }
-        else { glMap.once('load', applyTheme); }
+        const glMap = (currentTileLayer as unknown as { getMaplibreMap: () => GLMap }).getMaplibreMap();
+        if (glMap.isStyleLoaded()) {
+            _applyThemeToGLMap(glMap, (provider as TileProviderMaplibre).theme);
+        } else {
+            glMap.once('load', () => _applyThemeToGLMap(glMap, (provider as TileProviderMaplibre).theme));
+        }
     } else {
-        currentTileLayer = L.tileLayer(provider.url, { minZoom: 11, maxZoom: 19, ...provider.options });
+        currentTileLayer = L.tileLayer((provider as TileProviderOSM).url, { minZoom: 11, maxZoom: 19, ...(provider as TileProviderOSM).options });
         currentTileLayer.addTo(map);
     }
 
-    // Иконка Day/Night — статичная, не меняется при переключении
-
-    // Устанавливаем экземпляр карты в глобальное состояние
     window.setMapInstance(map);
 
-    // Слои карты создаются ОДИН РАЗ и переиспользуются. renderFromCache
-    // обновляет их инкрементно (diff), без пересоздания на каждое событие.
     initializeMapLayers(map);
-
-    // Инициализация UI компонентов
     initializeControls(map);
     addQuestionOverlay(map);
     initializeAdSquares(map);
 
-    // Инициализация WebSocket соединения
     window.initializeWebSocket();
 };
 
 // Создание постоянных слоёв карты (один раз за сессию)
-function initializeMapLayers(map) {
-    window.markerClusterGroup = L.markerClusterGroup({
+function initializeMapLayers(map: L.Map): void {
+    window.markerClusterGroup = (L as unknown as { markerClusterGroup: (opts: Record<string, unknown>) => L.LayerGroup }).markerClusterGroup({
         chunkedLoading: true,
         maxClusterRadius: 50,
         spiderfyOnMaxZoom: true,
         showCoverageOnHover: false,
         zoomToBoundsOnClick: true,
-        iconCreateFunction: function(cluster) {
+        iconCreateFunction: function(cluster: { getChildCount(): number }) {
             const childCount = cluster.getChildCount();
             return new L.DivIcon({
                 html: '<div style="background-color: rgba(255, 87, 51, 0.8); border-radius: 50%; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 14px;">' + childCount + '</div>',
@@ -210,7 +258,7 @@ function initializeMapLayers(map) {
 }
 
 // Функция для обновления индикатора статуса соединения
-window.updateOnlineStatus = function(isOnline) {
+window.updateOnlineStatus = function(isOnline: boolean): void {
     const connectionIndicator = document.getElementById('connection-indicator');
     if (connectionIndicator) {
         connectionIndicator.style.display = isOnline ? 'none' : 'block';
@@ -221,46 +269,47 @@ window.updateOnlineStatus = function(isOnline) {
 };
 
 // Функция для инициализации контролов
-function initializeControls(map) {
+function initializeControls(map: L.Map): void {
     const controlsContainer = document.getElementById('controlsContainer');
     const controlsSlider = document.getElementById('controlsSlider');
-    const indicators = document.querySelectorAll('#controlsIndicators .dot');
+    const indicators = document.querySelectorAll<HTMLElement>('#controlsIndicators .dot');
+
+    if (!controlsContainer || !controlsSlider) return;
+    const slider = controlsSlider; // guaranteed non-null below
 
     let startX = 0, currentX = 0, deltaX = 0, isSwiping = false, activePanel = 0;
-    const panels = Array.from(controlsSlider.querySelectorAll('.controlPanel'));
+    const panels = Array.from(slider.querySelectorAll('.controlPanel'));
     const panelCount = Math.max(1, panels.length);
     const stepPercent = 100 / panelCount;
-    let isInitialized = false; // Флаг для отслеживания инициализации
 
-    function setPanel(idx, skipDataLoad = false) {
+    function setPanel(idx: number, _skipDataLoad: boolean = false): void {
         activePanel = Math.min(Math.max(idx, 0), panelCount - 1);
-        controlsSlider.style.transform = `translateX(-${activePanel * stepPercent}%)`;
+        slider.style.transform = `translateX(-${activePanel * stepPercent}%)`;
         indicators.forEach((el, i) => el.classList.toggle('active', i === activePanel));
-
         window.hapticFeedback('selection_changed');
     }
 
     // Touch события
-    controlsContainer.addEventListener('touchstart', e => {
+    controlsContainer.addEventListener('touchstart', (e: TouchEvent) => {
         if (e.touches.length !== 1) return;
         startX = e.touches[0].clientX;
         currentX = startX;
         isSwiping = true;
-        controlsSlider.style.transition = 'none';
+        slider.style.transition = 'none';
     }, { passive: true });
 
-    controlsContainer.addEventListener('touchmove', e => {
+    controlsContainer.addEventListener('touchmove', (e: TouchEvent) => {
         if (!isSwiping) return;
         currentX = e.touches[0].clientX;
         deltaX = currentX - startX;
-        controlsSlider.style.transform = `translateX(calc(-${activePanel * stepPercent}% + ${deltaX}px))`;
+        slider.style.transform = `translateX(calc(-${activePanel * stepPercent}% + ${deltaX}px))`;
     }, { passive: true });
 
     controlsContainer.addEventListener('touchend', () => {
         if (!isSwiping) return;
-        controlsSlider.style.transition = '';
+        slider.style.transition = '';
 
-        if (Math.abs(deltaX) > 40) { // minSwipe = 40
+        if (Math.abs(deltaX) > 40) {
             if (deltaX < 0 && activePanel < panelCount - 1) setPanel(activePanel + 1);
             else if (deltaX > 0 && activePanel > 0) setPanel(activePanel - 1);
             else setPanel(activePanel);
@@ -277,37 +326,29 @@ function initializeControls(map) {
         el.addEventListener('click', () => setPanel(idx));
     });
 
-    // Инициализация: устанавливаем панель 0 без загрузки данных
-    // (данные загрузит bootstrapUI() после инициализации всех компонентов)
     setPanel(0, true);
-    isInitialized = true; // Помечаем как инициализированное после первого setPanel
 
     // Фильтр времени
     const realtimeControls = document.querySelector('#realtimeControls .buttons');
     if (realtimeControls) {
-        realtimeControls.addEventListener('click', e => {
-            if (e.target.tagName !== 'BUTTON') return;
+        realtimeControls.addEventListener('click', (e: Event) => {
+            const target = e.target as HTMLElement;
+            if (target.tagName !== 'BUTTON') return;
 
             window.hapticFeedback('light');
-            const newFilter = parseInt(e.target.dataset.minutes, 10);
-            // Снимаем активный класс со всех кнопок
+            const newFilter = parseInt(target.dataset.minutes || '0', 10);
             realtimeControls.querySelectorAll('button').forEach(btn => btn.classList.remove('active'));
-            // Устанавливаем активный класс на нажатую кнопку
-            e.target.classList.add('active');
-            // Обновляем фильтр. Перерисовка карты произойдёт реактивно —
-            // через подписку event_manager на изменения store.
+            target.classList.add('active');
             window.updateTimeFilter(newFilter);
         });
 
-        // Устанавливаем активную кнопку в соответствии с текущим значением фильтра
         const currentFilter = (window.store && window.store.getState)
             ? window.store.getState().currentTimeFilter
             : (window.DEFAULT_TIME_FILTER || 30);
-        realtimeControls.querySelector(`button[data-minutes="${currentFilter}"]`)?.classList.add('active');
+        (realtimeControls.querySelector(`button[data-minutes="${currentFilter}"]`) as HTMLElement | null)?.classList.add('active');
 
-        // Если не нашли кнопку для текущего значения, используем значение по умолчанию
         if (!realtimeControls.querySelector('.active')) {
-            realtimeControls.querySelector(`button[data-minutes="${window.DEFAULT_TIME_FILTER || 30}"]`)?.classList.add('active');
+            (realtimeControls.querySelector(`button[data-minutes="${window.DEFAULT_TIME_FILTER || 30}"]`) as HTMLElement | null)?.classList.add('active');
         }
     }
 
@@ -317,36 +358,35 @@ function initializeControls(map) {
         const activeLayers = window.store?.getState().activeLayers;
         if (activeLayers) {
             layerControls.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-                cb.checked = activeLayers.has(cb.dataset.layer);
+                const checkbox = cb as HTMLInputElement;
+                checkbox.checked = activeLayers.has((checkbox.dataset.layer || '') as import('../types/geojson').EventLayer);
             });
         }
 
-        layerControls.addEventListener('change', e => {
-            if (e.target.tagName !== 'INPUT' || e.target.type !== 'checkbox') return;
+        layerControls.addEventListener('change', (e: Event) => {
+            const target = e.target as HTMLInputElement;
+            if (target.tagName !== 'INPUT' || target.type !== 'checkbox') return;
             window.hapticFeedback('selection_changed');
-            window.toggleLayerInStore(e.target.dataset.layer);
+            window.toggleLayerInStore(target.dataset.layer || '');
         });
     }
 
     // Переключение тайлов карты
     const tileControls = document.querySelector('#mapTileControls .tile-buttons');
     if (tileControls) {
-        tileControls.addEventListener('click', e => {
-            if (e.target.tagName !== 'BUTTON') return;
+        tileControls.addEventListener('click', (e: Event) => {
+            const target = e.target as HTMLElement;
+            if (target.tagName !== 'BUTTON') return;
 
             window.hapticFeedback('light');
-            const tileKey = e.target.dataset.tile;
+            const tileKey = target.dataset.tile || '';
 
-            // Снимаем активный класс со всех кнопок
             tileControls.querySelectorAll('button').forEach(btn => btn.classList.remove('active'));
-            // Устанавливаем активный класс на нажатую кнопку
-            e.target.classList.add('active');
+            target.classList.add('active');
 
-            // Переключаем тайл
             window.switchTileLayer(tileKey);
         });
 
-        // Устанавливаем активную кнопку в соответствии с текущим тайлом
         const activeTileButton = tileControls.querySelector(`button[data-tile="${currentTileKey}"]`);
         if (activeTileButton) {
             tileControls.querySelectorAll('button').forEach(btn => btn.classList.remove('active'));
@@ -354,12 +394,11 @@ function initializeControls(map) {
         }
     }
 
-    // Кнопки взаимодействия
     initializeInteractionControls();
 }
 
 // Функция для инициализации кнопок взаимодействия
-function initializeInteractionControls() {
+function initializeInteractionControls(): void {
     const legendBtn = document.getElementById('legendBtn');
     const dayNightBtn = document.getElementById('dayNightBtn');
     const closeBtn = document.getElementById('closeCenterPopup');
@@ -370,7 +409,6 @@ function initializeInteractionControls() {
         showLegendPopup();
     });
 
-    // Кнопка День/Ночь
     dayNightBtn?.addEventListener('click', () => {
         window.hapticFeedback('light');
         toggleDayNightMode();
@@ -388,28 +426,20 @@ function initializeInteractionControls() {
 }
 
 // Функция переключения режима День/Ночь
-function toggleDayNightMode() {
-    const dayNightIcon = document.getElementById('dayNightIcon');
+function toggleDayNightMode(): void {
     const isDarkMode = currentTileKey === 'dark';
-
-    // Переключаем между 'vector-light' (день) и 'dark' (ночь)
     const newTileKey = isDarkMode ? 'vector-light' : 'dark';
-
     window.switchTileLayer(newTileKey);
-
-    // Иконка daynight.svg статична — src и filter не меняются
-
     console.log('[DayNight] Switched to:', newTileKey);
 }
 
 // Функция для добавления оверлея вопроса
-function addQuestionOverlay(map) {
+function addQuestionOverlay(map: L.Map): void {
     const questionBounds = L.latLngBounds(
         [46.45304, 30.76985],
         [46.54304, 30.89285]
     );
 
-    // Добавляем версионирование для обхода кеша
     const overlayUrl = `/assets/images/question.svg?v=${Date.now()}`;
 
     const questionOverlay = L.imageOverlay(overlayUrl, questionBounds, {
@@ -426,30 +456,19 @@ function addQuestionOverlay(map) {
     });
 }
 
-// Функция для инициализации рекламных квадратов - использует статичный banner.svg
-function initializeAdSquares(map) {
+// Функция для инициализации рекламных квадратов
+function initializeAdSquares(map: L.Map): void {
     console.log('[initializeAdSquares] Starting banner initialization...');
 
     const bounds = L.latLngBounds([46.4370, 30.92288], [46.5240, 31.06208]);
     const imageUrl = '/assets/images/banner.svg';
     const fullUrl = imageUrl + '?v=' + Date.now();
     console.log('[initializeAdSquares] Banner URL:', fullUrl);
-    console.log('[initializeAdSquares] Current host:', window.location.host);
 
     const popupContent = `<h3>Исходный код приложения доступен на <a href="https://github.com/develop4alive/survival_map" target="_blank">GitHub</a></h3><br>поблагодарить разработчика можно на <a href="https://bastyon.com/keep_alive_odessa?ref=PHQHKADhBPxxSwjiggV6G2BxSvy6TY1Lgb" target="_blank">bastyon</a>`;
 
     if (!window.adSquares.ad1) {
         console.log('[initializeAdSquares] Creating image overlay...');
-
-        // Test image loading
-        const testImg = new Image();
-        testImg.onload = function() {
-            console.log('[initializeAdSquares] Banner image preloaded successfully:', this.width, 'x', this.height);
-        };
-        testImg.onerror = function() {
-            console.error('[initializeAdSquares] Failed to preload banner image!');
-        };
-        testImg.src = fullUrl;
 
         const overlay = L.imageOverlay(fullUrl, bounds, {
             opacity: 1,
@@ -460,16 +479,8 @@ function initializeAdSquares(map) {
 
         console.log('[initializeAdSquares] Overlay added to map');
 
-        overlay.bindPopup(popupContent, window.DEFAULT_POPUP_OPTIONS);
+        overlay.bindPopup(popupContent, window.DEFAULT_POPUP_OPTIONS as Record<string, unknown>);
         window.adSquares.ad1 = overlay;
-
-        // Check if overlay is actually visible
-        overlay.on('load', function() {
-            console.log('[initializeAdSquares] Banner image loaded on map');
-        });
-        overlay.on('error', function() {
-            console.error('[initializeAdSquares] Banner image failed to load on map');
-        });
     } else {
         console.log('[initializeAdSquares] Banner already exists, skipping');
     }
@@ -478,80 +489,71 @@ function initializeAdSquares(map) {
 
 // =============================================================================
 // Инкрементный рендер карты
-//
-// renderedById хранит, какие Leaflet-слои созданы для каждого id события и в
-// какую группу они добавлены. На каждый вызов renderFromCache() выполняется
-// diff отфильтрованного набора против отрисованного:
-//   - новые id            → создать слои и добавить в группы;
-//   - исчезнувшие id       → удалить слои из групп (истёк TTL / фильтр / слой);
-//   - изменившиеся feature → удалить старые слои и создать заново;
-//   - неизменные           → не трогать.
-// Добавление одного события стоит O(1) вместо полного пересоздания карты.
 // =============================================================================
 
-const renderedById = new Map();
+interface RenderedRecord {
+    featureRef: import('../types/geojson').EventFeature;
+    items: Array<{ layer: L.Layer; group: L.LayerGroup }>;
+}
+const renderedById = new Map<string | number, RenderedRecord>();
 
 // Извлечение стабильного id из feature.
-function featureId(feature) {
+function featureId(feature: import('../types/geojson').EventFeature): string | number | null {
     const p = feature && feature.properties;
     if (!p) return null;
     if (p.id != null) return p.id;
-    if (p.event_id != null) return p.event_id;
-    if (p._id != null) return p._id;
-    if (p.uid != null) return p.uid;
     return null;
 }
 
 // Удаление всех слоёв, отрисованных для данного id.
-function removeRenderedEvent(id) {
+function removeRenderedEvent(id: string | number): void {
     const record = renderedById.get(id);
     if (!record) return;
     for (const item of record.items) {
         try {
             item.group.removeLayer(item.layer);
-        } catch (e) {
-            // Слой мог быть уже удалён — игнорируем
+        } catch (_e) {
+            // Слой мог быть уже удалён
         }
     }
     renderedById.delete(id);
 }
 
 // Создание и добавление слоёв для одного feature.
-function addRenderedEvent(id, feature, map) {
+function addRenderedEvent(id: string | number, feature: import('../types/geojson').EventFeature, map: L.Map): void {
     if (!feature.geometry) return;
 
-    let elements;
-    switch (feature.geometry.type) {
+    const props = feature.properties as Record<string, unknown>;
+    let elements: L.Layer[];    const geoType = feature.geometry.type as string;
+    switch (geoType) {
         case 'Point':
-            elements = window.createCircle(map, feature.geometry.coordinates, feature.properties, feature.properties.strategy);
+            elements = window.createCircle(map, (feature.geometry as import('geojson').Point).coordinates as [number, number], props, props.strategy as string);
             break;
         case 'LineString':
-            elements = window.createPolyline(map, feature.geometry.coordinates, feature.properties);
+            elements = window.createPolyline(map, (feature.geometry as import('geojson').LineString).coordinates as [number, number][], props);
             break;
         case 'Polygon':
-            elements = window.createPolygon(map, feature.geometry.coordinates, feature.properties);
+            elements = window.createPolygon(map, (feature.geometry as import('geojson').Polygon).coordinates as [number, number][][], props);
             break;
         case 'MultiPolygon':
-            elements = window.createMultiPolygon(map, feature.geometry.coordinates, feature.properties);
+            elements = window.createMultiPolygon(map, (feature.geometry as unknown as import('geojson').MultiPolygon).coordinates as [number, number][][][], props);
             break;
         default:
-            console.warn('[renderFromCache] Unsupported geometry type:', feature.geometry.type);
+            console.warn('[renderFromCache] Unsupported geometry type:', geoType);
             return;
     }
 
-    const items = [];
+    const items: Array<{ layer: L.Layer; group: L.LayerGroup }> = [];
     for (const element of elements) {
         if (!element) continue;
 
-        let group;
+        let group: L.LayerGroup;
         if (element instanceof L.Marker) {
-            // Случайные точки — отдельная некластеризуемая группа
-            group = (feature.properties.strategy === 'random')
-                ? window.randomMarkersGroup
-                : window.markerClusterGroup;
+            group = (props.strategy === 'random')
+                ? window.randomMarkersGroup!
+                : window.markerClusterGroup!;
         } else {
-            // Геометрия (круги, линии, полигоны)
-            group = window.geometryLayerGroup;
+            group = window.geometryLayerGroup!;
         }
 
         group.addLayer(element);
@@ -562,7 +564,7 @@ function addRenderedEvent(id, feature, map) {
 }
 
 // Инкрементная синхронизация карты с отфильтрованным набором событий из store.
-window.renderFromCache = function() {
+window.renderFromCache = function(): void {
     const map = window.currentMapInstance;
     if (!map) {
         console.error('[renderFromCache] Map instance not available');
@@ -576,12 +578,12 @@ window.renderFromCache = function() {
     const geoJsonData = window.getFilteredDataForRendering();
     const features = (geoJsonData && geoJsonData.features) ? geoJsonData.features : [];
 
-    const nextIds = new Set();
+    const nextIds = new Set<string | number>();
     let added = 0;
     let updated = 0;
 
     for (let i = 0; i < features.length; i++) {
-        const feature = features[i];
+        const feature = features[i] as import('../types/geojson').EventFeature;
         const id = featureId(feature);
         if (id == null) continue;
 
@@ -589,10 +591,10 @@ window.renderFromCache = function() {
 
         const existing = renderedById.get(id);
         if (existing && existing.featureRef === feature) {
-            continue; // не изменилось — пропускаем
+            continue;
         }
         if (existing) {
-            removeRenderedEvent(id); // изменилось — пересоздаём
+            removeRenderedEvent(id);
             updated++;
         } else {
             added++;
@@ -600,7 +602,6 @@ window.renderFromCache = function() {
         addRenderedEvent(id, feature, map);
     }
 
-    // Удаляем слои событий, выпавших из отфильтрованного набора
     let removed = 0;
     for (const id of Array.from(renderedById.keys())) {
         if (!nextIds.has(id)) {
@@ -615,13 +616,9 @@ window.renderFromCache = function() {
 };
 
 // Функция инициализации UI
-window.bootstrapUI = function() {
+window.bootstrapUI = function(): void {
     window.initializeMap();
 
-    // Первичный рендер из того, что уже есть в store (гидратация из
-    // localStorage для офлайн-отображения). Все последующие изменения
-    // отрисовываются реактивно через подписку event_manager на store —
-    // никаких таймеров-костылей.
     requestAnimationFrame(() => {
         window.renderFromCache();
     });

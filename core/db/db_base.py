@@ -50,6 +50,10 @@ class Database:
 
     def __init__(self):
         self.pool: Optional[asyncpg.Pool] = None
+        # Specialized operation handlers, attached in app_factory.py after connect()
+        self.events = None
+        self.geo = None
+        self.spatial = None
 
     async def connect(self, max_retries: int = 10, retry_delay: float = 2.0, **kwargs) -> bool:
         """Create connection pool with manual retry logic."""

@@ -91,8 +91,8 @@
   });
 
   try {
-    const fallbackV = String(Date.now());
-    await loadScript(`/js/telegram/integration.js/__v__/${fallbackV}`);
+    const v = Date.now();
+    await loadScript(`/dist/js/telegram/integration.js?t=${v}`);
 
     if (window.telegramIntegration) {
       window.telegramIntegration.init();
@@ -103,8 +103,6 @@
       window.Telegram.WebApp.ready();
       window.Telegram.WebApp.expand();
     }
-
-    const v = Date.now();
     await loadScript(`/dist/js/common.js?t=${v}`);
     await loadScript(`/dist/js/core/store.js?t=${v}`);
     await loadScript(`/dist/js/core/local_cache.js?t=${v}`);

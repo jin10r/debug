@@ -26,7 +26,7 @@ window.serverNow = function() {
  *   2. Иначе → navigator.vibrate(N) (HTML5 Vibration API)
  *   3. Иначе → silent no-op
  */
-const _HAPTIC_VIBRATE_PATTERN = {
+const _HAPTIC_VIBRATE_PATTERN: Record<string, number | number[]> = {
     light: 30,
     medium: 50,
     heavy: 100,
@@ -34,17 +34,15 @@ const _HAPTIC_VIBRATE_PATTERN = {
     warning: [50, 20, 50],
     error: [100, 20, 100],
     selection_changed: 10,
-};
+} as Record<string, number | number[]>;
 
-function _parseTgVersion(versionStr) {
+function _parseTgVersion(versionStr: string | undefined): number {
     if (!versionStr) return 6.1;  // assume safe default
     const parts = String(versionStr).split('.');
     const major = parseInt(parts[0], 10) || 6;
     const minor = parseInt(parts[1] || '0', 10) || 0;
     return major + minor / 10;
-}
-
-window.hapticFeedback = function(type = 'medium') {
+}    window.hapticFeedback = function(type: string = 'medium'): void {
     const tg = window.Telegram?.WebApp;
     const hasNativeHaptics = !!tg?.HapticFeedback;
     const tgVersion = _parseTgVersion(tg?.version);
@@ -72,21 +70,21 @@ window.hapticFeedback = function(type = 'medium') {
         try {
             switch (type) {
                 case 'light':
-                    tg.HapticFeedback.impactOccurred('light');
+                    tg!.HapticFeedback!.impactOccurred('light');
                     return;
                 case 'heavy':
-                    tg.HapticFeedback.impactOccurred('heavy');
+                    tg!.HapticFeedback!.impactOccurred('heavy');
                     return;
                 case 'success':
                 case 'warning':
                 case 'error':
-                    tg.HapticFeedback.notificationOccurred(type);
+                    tg!.HapticFeedback!.notificationOccurred(type as 'success' | 'warning' | 'error');
                     return;
                 case 'selection_changed':
-                    tg.HapticFeedback.selectionChanged();
+                    tg!.HapticFeedback!.selectionChanged();
                     return;
                 default:
-                    tg.HapticFeedback.impactOccurred('medium');
+                    tg!.HapticFeedback!.impactOccurred('medium');
                     return;
             }
         } catch (e) {
@@ -111,7 +109,7 @@ window.hapticFeedback = function(type = 'medium') {
     // 3. HTML5 Vibration API — работает в браузерах и старых Telegram WebView
     if (navigator.vibrate) {
         try {
-            const pattern = _HAPTIC_VIBRATE_PATTERN[type] || 50;
+            const pattern: number | number[] = _HAPTIC_VIBRATE_PATTERN[type] ?? 50;
             navigator.vibrate(pattern);
             return;
         } catch (e) {
@@ -121,14 +119,14 @@ window.hapticFeedback = function(type = 'medium') {
 };
 
 window.playNotificationSound = (function() {
-    let audioContext = null;
+    let audioContext: AudioContext | null = null;
     let enabled = false;
 
-    function init() {
+    function init(): void {
         if (enabled) return;
         enabled = true;
         try {
-            const Ctx = window.AudioContext || window.webkitAudioContext;
+            const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
             if (!Ctx) return;
             audioContext = new Ctx();
             if (audioContext.state === 'suspended') {
@@ -181,10 +179,10 @@ window.playNotificationSound = (function() {
 /**
  * Функция показа уведомлений
  */
-window.showNotification = function(message, duration = 3000, type = 'info') {
+window.showNotification = function(message: string, duration: number = 3000, type: string = 'info'): void {
     // Rule 5: every notification — including errors — fires haptic feedback.
     // Map the notification type to the matching haptic.
-    const HAPTIC_BY_TYPE = { error: 'error', warning: 'warning', success: 'success', info: 'light' };
+    const HAPTIC_BY_TYPE: Record<string, string> = { error: 'error', warning: 'warning', success: 'success', info: 'light' };
     window.hapticFeedback(HAPTIC_BY_TYPE[type] || 'light');
 
     let container = document.getElementById('notificationContainer');
@@ -290,7 +288,7 @@ window.showNotification = function(message, duration = 3000, type = 'info') {
  * API возвращает время в UTC в формате ISO 8601
  * Конвертируем в Europe/Kiev для отображения
  */
-window.formatDateTime = function(dateTimeStr) {
+window.formatDateTime = function(dateTimeStr: string): string {
     if (!dateTimeStr) return '';
     try {
         const timeMatch = dateTimeStr.match(/T(\d{2}):(\d{2})/);
@@ -325,7 +323,7 @@ window.formatDateTime = function(dateTimeStr) {
  * на это: текст всегда экранируется и интерпретируется только как текст —
  * никакой разметки из данных события в DOM не попадает.
  */
-window.processTelegramHTML = function(text) {
+window.processTelegramHTML = function(text: string): string {
     if (!text) return '';
     const div = document.createElement('div');
     div.textContent = String(text);

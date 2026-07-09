@@ -1,25 +1,51 @@
-FROM python:3.11.10-slim-bookworm
+# Dockerfile.core — API сервер (multi-stage build)
+# Stage 1: builder — установка зависимостей
+FROM python:3.11.10-slim-bookworm AS builder
 
-# Create non-root user for security
-RUN groupadd -r appuser && useradd -r -g appuser appuser
-
-WORKDIR /app
-
-# Install system dependencies as root with BuildKit caching
-RUN --mount=type=cache,target=/var/cache/apt,id=app-apt \
+RUN --mount=type=cache,target=/var/cache/apt,id=core-apt \
     apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies with pip caching
 COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --user --no-cache-dir -r requirements.txt && \
+    find /root/.local -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true && \
+    find /root/.local -type f -name "*.pyc" -delete && \
+    find /root/.local -type f -name "*.pyo" -delete && \
+    find /root/.local -type f -name "*.md" -delete
+
+# Stage 2: runtime — минимальный образ без gcc, pip, setuptools
+FROM python:3.11.10-slim-bookworm
+
+# Create non-root user
+RUN groupadd -r appuser && useradd -r -g appuser appuser
+
+WORKDIR /app
+
+# Only runtime apt deps (libpq for asyncpg)
+RUN --mount=type=cache,target=/var/cache/apt,id=core-runtime \
+    apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy installed Python packages from builder
+COPY --from=builder /root/.local /home/appuser/.local
+ENV PATH="/home/appuser/.local/bin:$PATH"
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
 
 # Copy application files
 COPY core/ ./core/
 COPY main.py .
+
+# Remove .pyc from app code too
+RUN find /app -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true && \
+    find /app -type f -name "*.pyc" -delete && \
+    find /app -type f -name "*.pyo" -delete && \
+    pip uninstall -y pip setuptools wheel 2>/dev/null || true
 
 # Create media directory with correct ownership
 RUN mkdir -p /app/media/events && chown -R appuser:appuser /app
@@ -27,8 +53,5 @@ RUN mkdir -p /app/media/events && chown -R appuser:appuser /app
 USER appuser
 
 EXPOSE 8080
-
-# Healthcheck определён в docker-compose.yml — single source of truth.
-# Дубликат HEALTHCHECK здесь был source of drift между compose и Dockerfile.
 
 CMD ["python", "main.py"]

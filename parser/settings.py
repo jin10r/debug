@@ -6,7 +6,7 @@ from pathlib import Path
 # Добавляем корень проекта в путь для импорта core
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from core.settings import load_settings, LAYER_PRIORITY, DEFAULT_LAYER_KEYWORDS
+from core.settings import load_settings
 
 # Глобальный экземпляр настроек (без JWT для parser)
 try:
@@ -15,4 +15,4 @@ except Exception as e:
     print(f"Failed to load settings: {e}")
     settings = None
 
-__all__ = ['settings', 'LAYER_PRIORITY', 'DEFAULT_LAYER_KEYWORDS']
+__all__ = ['settings']

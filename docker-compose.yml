@@ -64,6 +64,8 @@ services:
     # drain_timeout=20s) до SIGKILL — буфер не теряется на деплое/рестарте.
     stop_grace_period: 60s
     environment:
+      PARSER_API_ID: ${PARSER_API_ID:-}
+      PARSER_API_HASH: ${PARSER_API_HASH:-}
       PROXY_HOST: ${PROXY_HOST:-}
       PROXY_PORT: ${PROXY_PORT:-1080}
       PROXY_SCHEME: ${PROXY_SCHEME:-socks5}

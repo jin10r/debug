@@ -15,10 +15,11 @@ _DB_PROBE_TTL_SEC = 5.0
 _db_probe_cache: dict = {'ts': 0.0, 'ok': False, 'error': None}
 
 
-async def _check_db(db_request, *, use_cache: bool) -> tuple[bool, str]:
+async def _check_db(db_pool, *, use_cache: bool) -> tuple[bool, str]:
     """Проверка PostgreSQL. Возвращает (ok, message).
 
     Args:
+        db_pool: Database instance from app['db_pool'].
         use_cache: если True, возвращает результат не старше TTL без актуального
             SELECT 1 (для /health liveness). False — всегда актуальный probe
             (для /health/ready, чтобы LB не отправлял трафик на падающий DB).
@@ -30,8 +31,8 @@ async def _check_db(db_request, *, use_cache: bool) -> tuple[bool, str]:
         return False, _db_probe_cache['error'] or 'Not connected (cached)'
 
     try:
-        if db_request and db_request.db.is_connected:
-            await db_request.db.fetchval('SELECT 1')
+        if db_pool and db_pool.is_connected:
+            await db_pool.fetchval('SELECT 1')
             _db_probe_cache.update({'ts': now, 'ok': True, 'error': None})
             return True, 'Connected'
         msg = 'Not connected'
@@ -44,9 +45,9 @@ async def _check_db(db_request, *, use_cache: bool) -> tuple[bool, str]:
         return False, msg
 
 
-async def _check_db_cached(db_request) -> tuple[bool, str]:
+async def _check_db_cached(db_pool) -> tuple[bool, str]:
     """Backwards-compat shim: использует кэш. Для /health (liveness)."""
-    return await _check_db(db_request, use_cache=True)
+    return await _check_db(db_pool, use_cache=True)
 
 
 async def health_live_handler(request: web.Request):
@@ -76,7 +77,7 @@ async def health_ready_handler(request: web.Request):
     
     Use for: Kubernetes readiness probe, deployment validation
     """
-    db_request = request.app.get('db')
+    db_pool = request.app.get('db')
     cache = request.app.get('cache')
     
     checks = {
@@ -87,7 +88,7 @@ async def health_ready_handler(request: web.Request):
     
     # Check PostgreSQL — readiness probe должна быть актуальной (без кэша),
     # иначе LB направит трафик на падающий DB в течение TTL-окна.
-    db_ok, db_msg = await _check_db(db_request, use_cache=False)
+    db_ok, db_msg = await _check_db(db_pool, use_cache=False)
     if db_ok:
         checks['database'] = {'status': 'healthy', 'message': db_msg}
     else:
@@ -126,7 +127,7 @@ async def health_detailed_handler(request: web.Request):
     
     Use for: Monitoring dashboards, debugging
     """
-    db_request = request.app.get('db')
+    db_pool = request.app.get('db')
     cache = request.app.get('cache')
 
     utc_time = datetime.utcnow()
@@ -140,8 +141,8 @@ async def health_detailed_handler(request: web.Request):
     
     # Database metrics
     try:
-        if db_request and db_request.db.pool:
-            pool = db_request.db.pool
+        if db_pool and db_pool.pool:
+            pool = db_pool.pool
             health_data['checks']['database'] = {
                 'status': 'healthy',
                 'pool_size': pool.get_size(),

@@ -2,71 +2,14 @@ from dataclasses import dataclass, field
 from environs import Env
 from typing import Optional
 import logging
+import os
 import secrets
 
 logger = logging.getLogger(__name__)
 
-# Ключевые слова слоёв — канонические словоформы (не стемы).
-# LayerClassifier лемматизирует и ключи, и токены сообщения через mawo_pymorphy3,
-# поэтому все падежи/числа словоформ совпадают автоматически.
-#
-# Порядок ключей задаёт приоритет классификации: первый совпавший слой
-# выигрывает (см. parser/layer_classifier.py). 'pig' — fallback без ключей.
-DEFAULT_LAYER_KEYWORDS: dict[str, tuple] = {
-    'bus': (
-        'автобус',
-        'бус',
-        'хайс',
-        'спринтер',
-        'рено',
-        'фольксваген',
-        'фольц',
-        'хёндай',
-        'Хундай',
-        'вито',
-        'сталкер',
-        'транспортёр',
-        'h1', 'h2', 'h3', 'h4', 'h5',
-        'т5', 'т4', 'т3', 'т2', 'т1',
-        'н1', 'н2', 'н3', 'н4', 'н5',
-        # pymorphy лемматизирует «бус»→«бусы», но «буса»/«бусик»→самостоятельные
-        # леммы ⇒ косвенные/слэнговые формы не совпадали. Добавлены явно.
-        'буса', 'бусик', 'бусинка',
-    ),
-    'cops': (
-        'коп',
-        'полиция',
-        'мусор',
-        'мусара',
-        'люстра',
-        'мигалка',
-        'патруль',
-        'экипаж',
-        'мент',
-        'менты',
-        'менти',
-        'полицейский',
-        'полицай',
-        'police',
-        'мусорня',
-        'мусорской',
-    ),
-    'traffic': (
-        'дтп',
-        'авария',
-        'пробка',
-        'затор',
-        'светофор',
-        'блокпост',
-        'пост',
-        'бп',
-        'б/п'
-    ),
-    'pig': (),
-}
-
-# Порядок приоритета (исключая fallback 'pig').
-LAYER_PRIORITY: tuple = tuple(k for k in DEFAULT_LAYER_KEYWORDS if k != 'pig')
+# NOTE: DEFAULT_LAYER_KEYWORDS and LAYER_PRIORITY are defined in
+# parser/layer_classifier.py — the only consumer. core/settings.py
+# keeps only the LayerConfig dataclass for the /api/config endpoint.
 
 
 @dataclass
@@ -151,7 +94,7 @@ class SimilarityConfig:
     # Высокий — это ИСПРАВЛЕНИЕ опечаток (DL 1-2), а не семантический матч:
     # отсекает "среди"/"Средняя" (разные слова), пропускает "чепаевская"/
     # "чапаевская". Падежи ловит стем-индекс (Tier 1), не fuzzy.
-    surface_typo_threshold: float = 0.80
+    surface_typo_threshold: float = 0.85
 
     # Sliding-window: максимальный размер окна (токенов) при генерации кандидатов.
     # Окно 1..max_sliding_window охватывает улицы из 1, 2 или 3 слов.
@@ -184,13 +127,20 @@ class SimilarityConfig:
         '#', '/', ',', '.', '(', ')', '!', '?', '-', '«', '»', '"', ':', ';',
     )
 
-    def get_layer_keywords(self, layer: str) -> tuple:
-        return DEFAULT_LAYER_KEYWORDS.get(layer, ())
+    # NOTE: Layer keyword data is defined in parser/layer_classifier.py.
+    # SimilarityConfig no longer owns layer keywords — the parser reads its
+    # own DEFAULT_LAYER_KEYWORDS directly.
 
 
 @dataclass
 class ParserConfig:
     """Параметры parser-сервиса (monitoring.py)."""
+
+    # Telegram API credentials — required for pyrogram Client to connect.
+    # api_id/api_hash берутся на https://my.telegram.org/apps.
+    # Передаются через env (PARSER_API_ID / PARSER_API_HASH), НЕ в кодовой базе.
+    api_id: Optional[int] = None
+    api_hash: Optional[str] = None
 
     # Сколько сообщений тянуть из истории канала при старте парсера.
     # Высокое значение увеличивает startup latency, низкое — пропускает старые.
@@ -237,14 +187,33 @@ class QuestionOverlayConfig:
 
 @dataclass
 class LayerConfig:
-    cops: tuple = field(default_factory=lambda: DEFAULT_LAYER_KEYWORDS['cops'])
-    bus: tuple = field(default_factory=lambda: DEFAULT_LAYER_KEYWORDS['bus'])
-    traffic: tuple = field(default_factory=lambda: DEFAULT_LAYER_KEYWORDS['traffic'])
-    pig: tuple = field(default_factory=lambda: DEFAULT_LAYER_KEYWORDS['pig'])
+    """Layer keywords for the /api/config endpoint.
+
+    These defaults mirror parser/layer_classifier.py::DEFAULT_LAYER_KEYWORDS
+    to keep the core's config endpoint independent of the parser module.
+    """
+    cops: tuple = (
+        'коп', 'полиция', 'мусор', 'мусара', 'люстра', 'мигалка',
+        'патруль', 'экипаж', 'мент', 'менты', 'менти', 'полицейский',
+        'полицай', 'police', 'мусорня', 'мусорской',
+    )
+    bus: tuple = (
+        'автобус', 'бус', 'хайс', 'спринтер', 'рено', 'фольксваген',
+        'фольц', 'хёндай', 'Хундай', 'вито', 'сталкер', 'транспортёр',
+        'h1', 'h2', 'h3', 'h4', 'h5', 'т5', 'т4', 'т3', 'т2', 'т1',
+        'н1', 'н2', 'н3', 'н4', 'н5', 'буса', 'бусик', 'бусинка',
+    )
+    traffic: tuple = (
+        'дтп', 'авария', 'пробка', 'затор', 'светофор',
+        'блокпост', 'пост', 'бп', 'б/п',
+    )
+    pig: tuple = ()
+
+    _ALL_LAYERS = ('bus', 'cops', 'traffic', 'pig')
 
     def as_dict(self) -> dict:
-        """Слой → tuple ключевых слов. Порядок соответствует LAYER_PRIORITY + 'pig'."""
-        return {layer: getattr(self, layer) for layer in DEFAULT_LAYER_KEYWORDS}
+        """Слой → tuple ключевых слов."""
+        return {layer: getattr(self, layer) for layer in self._ALL_LAYERS}
 
 
 @dataclass
@@ -340,6 +309,12 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
 
         ollama_host = env.str("OLLAMA_HOST", None)
 
+        # parser API credentials — handle empty-string from docker-compose ${VAR:-}
+        _api_id_raw = os.environ.get('PARSER_API_ID', '').strip()
+        _api_hash_raw = os.environ.get('PARSER_API_HASH', '').strip()
+        api_id_val = int(_api_id_raw) if _api_id_raw else None
+        api_hash_val = _api_hash_raw or None
+
         return Settings(
             app=AppConfig(
                 telegram_validation_enabled=env.bool(
@@ -359,6 +334,8 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
                 socks5_host=env.str("PROXY_HOST", None),
                 proxy_port=env.int("PROXY_PORT", 1080),
                 proxy_scheme=env.str("PROXY_SCHEME", "socks5"),
+                api_id=api_id_val,
+                api_hash=api_hash_val,
             ),
             question_overlay=QuestionOverlayConfig(),
             ollama=OllamaConfig(

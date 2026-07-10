@@ -72,6 +72,7 @@ DEFAULT_LAYER_KEYWORDS: dict[str, tuple] = {
         'police',
         'мусорня',
         'мусорской',
+        'сирена',
     ),
     'traffic': (
         'дтп',

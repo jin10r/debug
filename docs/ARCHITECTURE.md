@@ -1,173 +1,299 @@
-# Архитектура микросервисов Survival Map
+# Архитектура Survival Map
+
+Survival Map — Telegram Mini App для картирования событий Одессы в реальном времени.
+Парсер читает Telegram-канал, извлекает геолокации из сообщений с помощью NLP-пайплайна,
+записывает в PostGIS, и через `LISTEN/NOTIFY` доставляет события на фронтенд (Leaflet PWA)
+за <100 мс.
+
+**Стек:** PostgreSQL 15 + PostGIS 3.3 · Python 3.11 (aiohttp + asyncio + kurigram) · TypeScript + Leaflet · nginx · Docker Compose
+
+---
 
 ## 1. Общая архитектура
 
-Система состоит из 5 микросервисов, объединённых тремя изолированными Docker-сетями
-(`frontend`, `backend`, `db`). База данных (`db`) изолирована от внешнего мира
-(internal: true).
-
 ```
-                   Telegram (MTProto)
-                          │
-                          ▼
-  ┌───────────────────────────────────────────────────┐
-  │                   parser                          │
-  │  Kurigram (MTProto клиент) + NLP Pipeline         │
-  │  ~200-400ms/сообщение, 8 workers, asyncio.Queue   │
-  │  HTTP → model:8082  (Tier-2 LLM geo-resolution)   │
-  └─────────────────────┬─────────────────────────────┘
-                        │ INSERT + SELECT geo_execute_scenario()
-                        ▼
-  ┌───────────────────────────────────────────────────┐
-  │               postgres (PostGIS)                   │
-  │  PostgreSQL 15 + PostGIS 3.3 + pg_cron            │
-  │  process_candidates() — PostGIS geo-resolution     │
-  │  geo_execute_scenario() — LLM-directed сценарии   │
-  │  pg_notify → 'events_new', 'geo_updated'           │
-  └─────────────────────┬─────────────────────────────┘
-                        │ LISTEN/NOTIFY
-                        ▼
-  ┌───────────────────────────────────────────────────┐
-  │                  core                              │
-  │  aiohttp (HTTP + WebSocket) + aiogram (TG bot)    │
-  │  REST API (15+ endpoints) + WS GeoJSON broadcast  │
-  │  JWT auth + HMAC initData + rate limiting         │
-  └─────────────────────┬─────────────────────────────┘
-                        │ WebSocket / HTTP
-                        ▼
-  ┌───────────────────────────────────────────────────┐
-  │                  web (nginx)                       │
-  │  Reverse proxy, rate limit (10r/s api, 1r/s auth) │
-  │  Статика: Leaflet PWA Telegram Mini App           │
-  └─────────────────────┬─────────────────────────────┘
+                 Telegram (MTProto)
                         │
                         ▼
-              Браузер / Telegram WebView
+┌─────────────────────────────────────────────────┐
+│                  parser                          │
+│  kurigram (MTProto клиент) + NLP Pipeline        │
+│  asyncio.Queue(maxsize=100) × 5 workers         │
+│  CPU-only: pymorphy3 + rapidfuzz + ONNX BERT     │
+└───────────────────┬─────────────────────────────┘
+                    │ INSERT INTO events (CTE + process_candidates)
+                    │ + pg_notify('events_new')
+                    ▼
+┌─────────────────────────────────────────────────┐
+│              postgres (PostGIS)                   │
+│  PostgreSQL 15 + PostGIS 3.3 + pg_cron           │
+│  geo (1728 записей, 8 типов) + events (TTL 60м) │
+│  process_candidates() — постGIS geo-resolution    │
+│  LISTEN/NOTIFY → core                             │
+└───────────────────┬─────────────────────────────┘
+                    │ LISTEN('events_new', 'events_cleaned')
+                    ▼
+┌─────────────────────────────────────────────────┐
+│                   core                            │
+│  aiohttp (HTTP + WebSocket) + aiogram (TG bot)   │
+│  REST API (15+ endpoints) + WS GeoJSON broadcast │
+│  JWT auth + HMAC initData + rate limiting         │
+└───────────────────┬─────────────────────────────┘
+                    │ WebSocket / HTTP
+                    ▼
+┌─────────────────────────────────────────────────┐
+│                   web (nginx)                     │
+│  Reverse proxy (10r/s API, 1r/s auth)            │
+│  Статика: Leaflet PWA Telegram Mini App           │
+└───────────────────┬─────────────────────────────┘
+                    │
+                    ▼
+           Браузер / Telegram WebView
+```
+
+### Сети Docker
+
+| Сеть | Область | Доступ |
+|------|---------|--------|
+| `db` | postgres | **internal: true** — изолирована от внешнего мира |
+| `backend` | parser, core | внутренняя связь парсер ↔ core |
+| `frontend` | web, core | проксирование nginx → core |
+
+Изоляция `db` — ключевой принцип безопасности: ни парсер, ни core не доступны напрямую снаружи; единственный вход — nginx:80.
+
+---
+
+## 2. Структура репозитория
+
+```
+survival_map/
+├── core/                   # aiohttp backend (API, WS, JWT, middleware)
+├── parser/                 # Telegram парсер (kurigram + NLP pipeline)
+├── postgres/
+│   ├── init-scripts/       # SQL: схема, функции, триггеры, данные
+│   ├── config/             # postgresql.conf, pg_hba.conf
+│   └── data/               # geo.csv (1728), stopwords.csv
+├── web/                    # Leaflet PWA (TypeScript + webpack)
+│   ├── js/                 # TypeScript source (core/, modules/, telegram/)
+│   ├── assets/             # vendor libs (leaflet, maplibre-gl, markercluster)
+│   └── css/
+├── scripts/                # Утилиты экспорта, анализа, миграции
+├── tests/                  # pytest (parser + core)
+├── docs/                   # Архитектура по микросервисам
+├── docker-compose.yml      # Оркестрация 4 сервисов
+├── Dockerfile.core         # Multi-stage: python:3.11 → runtime
+├── Dockerfile.parser       # Multi-stage: python:3.11 → runtime
+├── Dockerfile.postgres     # postgis/postgis:15-3.3 + pg_cron
+├── Dockerfile.web          # node:20 builder → nginx:1.27-alpine
+├── nginx.conf              # Reverse proxy + rate limiting + CSP
+├── main.py                 # Точка входа core
+└── gen_session.py          # Генерация Telegram session (один раз)
 ```
 
 ---
 
-## 2. Технологический стек контейнеров
+## 3. Поток данных: Telegram → Карта
 
-### 2.1 postgres
+### 3.1 Полный цикл (с латентностями)
 
-| Компонент | Значение |
-|-----------|----------|
-| **Базовый образ** | `postgis/postgis:15-3.3` (PostgreSQL 15 + PostGIS 3.3) |
-| **Доп. расширения** | `pg_cron` (очистка событий каждые 5 мин), `pg_stat_statements` |
-| **Язык PL** | `plpgsql` |
-| **Конфигурация** | `shared_buffers = 256MB`, `effective_cache_size = 384MB`, `work_mem = 4MB`, `maintenance_work_mem = 64MB`, `random_page_cost = 1.1` (SSD), `statement_timeout = 30s`, `max_connections = 20` |
-| **Скрипты инициализации** | 9 файлов: `01-extensions.sql`, `02-tables.sql`, `03-functions.sql`, `04-load-data.sql`, `06-notify-trigger.sql`, `08-process-candidates.sql`, `09-event-geom-trigger.sql`, `10-geometry-scenarios.sql` |
-| **Пользователи** | `app_user` (parser), `ws_user` (core), оба с доступом только из Docker CIDR |
-| **Сети** | `db` (internal) — изолирована от внешнего мира |
-| **Ресурсы** | лимит: 0.5 CPU / 512MB RAM |
+```
+  Шаг 1: Получение сообщения (~5-50ms)
+  ────────────────────────────────────
+  kurigram (MTProto) получает сообщение из Telegram-канала.
+  Фильтр по CHANNEL_ID в handler. Помещается в asyncio.Queue.
 
-**Основные таблицы:**
-- `events` — события с геометрией, слоем, стратегией; TTL 60 мин (pg_cron)
-- `geo` — единый справочник гео-объектов (улицы, деревни, ж/д станции и т.д.; 1728 записей, 8 типов)
-- `stopwords` — стоп-слова, `layer_keywords` — ключевые слова слоёв
-- `events_meta` — метаданные для синхронизации WebSocket (version, max_event_id)
+  Шаг 2: Предобработка текста (~5-10ms)
+  ──────────────────────────────────────
+  strip_tail()        — удаление "сообщить/подписаться"
+  preprocess_light()  — HTML, UA→RU нормализация, время
+  word_tokenizer()    — regex-токенизация, слияние "5я"
 
-**Ключевые функции:**
-- `process_candidates()` — geo-resolution: 0 matches → random; 1 → полная геометрия;
-  2+ → ST_Intersection / псевдопересечение (≤150m) / convex hull
-- `geo_execute_scenario(p_scenario, ...)` — диспетчеризация по 10 сценариям
-  (intersection, nearest_point, buffer_area, along_line, within_polygon,
-  pseudo_intersection, convex_hull, random, single_object, centroid_area)
-- Триггер `notify_event_inserted` — pg_notify('events_new', ...)
-- Триггер `event_geom_trigger` — аудит изменений геометрии
-- Триггер `notify_geo_updated` — pg_notify('geo_updated', ...)
+  Шаг 3: Морфология (~30-80ms)
+  ─────────────────────────────
+  pymorphy3 (DAWG, LRU 10k) → леммы
+  snowballstemmer → стеммы (для fuzzy-индекса)
 
----
+  Шаг 4: Классификация слоя (~0.1ms)
+  ───────────────────────────────────
+  LayerClassifier: cops / bus / traffic / pig
+  по ключевым словам (layer_keywords в БД + fallback в коде).
 
-### 2.2 parser
+  Шаг 5: Поиск гео-объектов (~30-120ms)
+  ──────────────────────────────────────
+  GeoMatcher: скользящее окно 1-3 токенов, 3 тира:
+    T1: surface fuzzy (rapidfuzz, порог 0.85)
+    T2: lemma exact (O(1) dict lookup)
+    T3: lemma fuzzy (rapidfuzz, порог 0.82)
+  → до 5 кандидатов с geo_id, score, matched_text.
 
-| Компонент | Значение |
-|-----------|----------|
-| **Базовый образ** | `python:3.11.10-slim-bookworm` (multi-stage) |
-| **Точка входа** | `python -m parser.monitoring` |
-| **Порт** | 8765 (только healthcheck) |
-| **Telegram клиент** | `kurigram` (форк Pyrogram) — user session, MTProto |
-| **NLP библиотеки** | `pymorphy3` (лемматизация), `snowballstemmer` (стемминг), `rapidfuzz` (нечёткий поиск), `onnxruntime` (семантическая модель), `faiss-cpu` (векторный поиск) |
-| **Семантическая модель** | `multilingual-e5-small` ONNX (~118MB) |
-| **Асинхронный фреймворк** | `asyncio` + `asyncpg` (пул соединений к PG) |
-  | **HTTP клиенты** | `aiohttp`: `model_client.py` → model:8082 (30s timeout, TTL cache 60s) |
-| **Очередь сообщений** | `asyncio.Queue(maxsize=1000)`, 8 workers, drain_timeout=20s |
-  | **Сети** | `backend` (model) + `db` (postgres) |
-| **Ресурсы** | лимит: 1.0 CPU / 512MB RAM |
+  Шаг 6: TypeValidator + SemanticResolver (~5-20ms)
+  ──────────────────────────────────────────────────
+  ONNX BERT (rubert-tiny2, ~15MB) — zero-shot определение типа
+  по контексту ±5 токенов. Heuristic fallback без модели.
+  SemanticResolver: pre-filter правила → Ollama (опционально).
 
-**Pipeline обработки сообщения:**
-1. `strip_tail` — удаление маркера "сообщить"/"подписаться"
-2. `preprocess_light` — удаление HTML, нормализация UA→RU, удаление хештегов
-3. `word_tokenizer.tokenize` — токенизация, слияние "5я", is_anchored для ##
-4. `morphology.lemmatize_tokens` — pymorphy3 (LRU 10k) + snowballstemmer
-5. `layer_classifier.classify` — cops / bus / traffic / pig (keyword match)
- 6. `geo_matcher.find_geo` — скользящее окно 1-3 токенов, 3 уровня:
-    - T1: стемминг (snowballstemmer, точное совпадение)
-    - T1b: семантические эмбеддинги (e5-small ONNX + FAISS cosine)
-    - T2: нечёткое совпадение (rapidfuzz token_sort_ratio ≥ 0.85)
- 7. Классификация сценария через `process_candidates` или `geo_execute_scenario()`
- 8. INSERT в events через CTE с `process_candidates()`
+  Шаг 7: PostGIS geo-resolution (~5-50ms)
+  ───────────────────────────────────────
+  process_candidates() — один SQL CTE:
+    0 кандидатов → random (точка в overlay-зоне)
+    1 кандидат → single_match (полная геометрия)
+    2+ кандидатов → приоритетная цепочка:
+      1) intersection (ST_Intersects)
+      2) area (cluster пересечений, все в 1 км → ConvexHull)
+      3) pseudo_intersection (ST_DWithin 150м)
+      4) proximity (ST_DWithin 500м)
+      5) centroid
+      6) single_match (лучший по score)
+  ON CONFLICT (message_id) DO NOTHING — идемпотентность.
 
----
+  Шаг 8: Уведомление (~5-20ms)
+  ─────────────────────────────
+  Триггер → pg_notify('events_new', GeoJSON Feature).
+  core LISTEN → WebSocketManager → broadcast всем клиентам.
+  Фронтенд: addEvent → marker на карту + анимация.
+```
 
-### 2.3 model (LLM Geo-Resolution — Tier-2)
+**Итого:** ~80-320 мс на сообщение (CPU-only, без GPU).
 
-| Компонент | Значение |
-|-----------|----------|
-| **Базовый образ** | `python:3.12-slim` |
-| **Фреймворк** | `aiohttp` |
-| **Точка входа** | `python -m model.server` |
-| **Порт** | 8082 |
-| **LLM движок** | `llama-cpp-python` + Qwen2.5-0.5B-Instruct GGUF (q4_k_m, ~400MB) |
-| **Контекст** | ctx=8192, threads=4 |
-| **Tool-calling** | MAX_TOOL_TURNS=5, thresholds [0.5, 0.7, 0.85, 0.95, 0.99] |
-| **Инструменты** (8 шт) | search_geo, get_geo_info, compute_intersection, compute_distance, compute_convex_hull, get_nearby, normalize_text, spatial_filter_outliers |
-| **Доступ к postgres** | Прямое asyncpg-соединение (DSN: postgresql://postgres:postgres@postgres:5432/postgres) |
-| **Сети** | `backend` + `db` |
-| **Ресурсы** | лимит: 1.5 CPU / 1GB RAM |
+### 3.2 Альтернативные потоки
 
-**Эндпоинты:**
-- `GET /health` — проверка здоровья
-- `POST /resolve` — geo-resolution с LLM tool-calling
+| Поток | Описание |
+|-------|----------|
+| **Ручное событие** | Карта → клик → POST /api/events → INSERT → pg_notify → WS |
+| **TTL очистка** | pg_cron каждые 5 мин → DELETE events > 1ч → pg_notify('events_cleaned') |
+| **Обновление газеттира** | INSERT/UPDATE в geo → trigger → pg_notify('geo_updated') → parser |
 
 ---
 
-### 2.4 core
+## 4. Микросервисы: детали
+
+### 4.1 postgres — [docs/postgres.md](postgres.md)
 
 | Компонент | Значение |
 |-----------|----------|
-| **Базовый образ** | `python:3.11.10-slim-bookworm` |
-| **Точка входа** | `python main.py` |
-| **Порт** | 8080 |
-| **HTTP сервер** | `aiohttp` (TCPSite) |
-| **Telegram бот** | `aiogram` (polling) |
-| **База данных** | `asyncpg` (pool min=2, max=10, timeout=30s) |
-| **JWT auth** | HS256, автогенерация secret, access 15min / refresh 24h, LRU verify cache (10k entries, 60s TTL) |
-| **Telegram auth** | HMAC-SHA256 initData, circuit breaker (pybreaker, fail_max=5, reset_timeout=30s) |
-| **CSRF** | HMAC токен, 1h TTL |
-| **Rate limiting** | Fixed-window, default 60/60s, per-endpoint переопределения |
-| **WebSocket** | `WebSocketManager` — pg_notify('events_new'), GeoJSON FeatureCollection broadcast |
-| **Кэш (in-memory)** | `CacheManager` — OrderedDict LRU + TTL, async lock, без Redis |
-| **Метрики** | Prometheus `/metrics` |
-| **Сети** | `frontend` (web) + `backend` (model) + `db` (postgres) |
-| **Ресурсы** | лимит: 1.0 CPU / 512MB RAM |
+| Базовый образ | `postgis/postgis:15-3.3` |
+| Расширения | pg_cron (TTL), pg_stat_statements (мониторинг) |
+| Конфигурация | shared_buffers=384MB, effective_cache_size=768MB, work_mem=8MB |
+| Таймауты | statement_timeout: parser 60s, core 30s, maintenance 300s |
+| Партиционирование | events по дням (PARTITION BY RANGE event_time) |
+| Ресурсы | 1 CPU / 1GB RAM |
 
-**Эндпоинты (15+):**
-- `GET /health*` — мониторинг
-- `GET /api/validation-config`, `POST /api/validate-init` — Telegram initData
-- `POST /api/auth/refresh` — обновление JWT
-- `GET /api/config` — конфигурация фронтенда
-- `GET /api/events` — список событий с фильтрацией
-- `POST /api/events` — создание события (ручной ввод с карты)
-- `GET /api/events/updates` — long-polling (legacy, основной канал — WS)
-- `GET /api/events/snapshot` — снепшот всех событий
-- `GET /api/events/status` — метаданные очереди
-- `GET /api/geo`, `/api/geo/all` — справочник гео-объектов
-- `GET /api/data-status` — статус данных
-- `WS /ws` — WebSocket (основной канал)
-- `GET /metrics` — Prometheus
-- `GET /media/{filename}` — раздача фото
+**Таблицы:**
+
+| Таблица | Назначение | Ключевые индексы |
+|---------|-----------|------------------|
+| `geo` | Газеттир (1728 записей, 8 типов): names TEXT[], geom GEOMETRY, type | GIN(names), GiST(geom) |
+| `events` | События с TTL 60 мин (партиционирована по дням) | time DESC, GiST(geom), layer, message_id UNIQUE |
+| `stopwords` | Стоп-слова матчера | PK(word) |
+| `layer_keywords` | Ключевые слова классификации слоёв | PK(layer) |
+| `events_meta` | Метаданные для WS-синхронизации (version, max_event_id) | version++ на INSERT/DELETE |
+| `geo_type_descriptions` | Описания типов для zero-shot BERT | PK(type) |
+| `geo_role_patterns` | Роли geo-объектов (source/destination/via/landmark) | PK(role) |
+| `strategy_type_filters` | Разрешённые типы для каждой стратегии | PK(strategy) |
+| `layer_geo_types` | Релевантные типы для каждого слоя | PK(layer) |
+
+**Ключевые SQL-функции:**
+
+- `process_candidates()` — geo-resolution: 0→random, 1→single_match, 2+→приоритетная цепочка
+- `clean_old_events()` — pg_cron: DROP целых партиций + DELETE текущей, pg_notify
+
+**Init-скрипты (13 файлов, по порядку):**
+
+01-extensions → 02-tables → 03-functions → 04-load-data → 05-role-timeouts → 06-notify-trigger → 07-indexes → 08-process-candidates → 09-event-geom-trigger → 10-type-config → 11-partition-maintenance → 12-materialized-views → 14-training-examples
+
+> Init-скрипты исполняются только при **пустом** томе. Правка geo.csv требует `docker compose down -v` или ручного INSERT.
+
+### 4.2 parser — [docs/parser.md](parser.md)
+
+| Компонент | Значение |
+|-----------|----------|
+| Базовый образ | `python:3.11.10-slim-bookworm` (multi-stage) |
+| Точка входа | `python -m parser.monitoring` |
+| Telegram клиент | kurigram (форк Pyrogram), user session |
+| NLP | pymorphy3 (DAWG), snowballstemmer, rapidfuzz |
+| ONNX | rubert-tiny2 (~15MB), mean-pooling + cosine similarity |
+| Очередь | asyncio.Queue(maxsize=100), 5 workers |
+| Drain | stop_grace_period=60s, drain_timeout=20s |
+| Ресурсы | 1 CPU / 768MB RAM |
+
+**Модули:**
+
+```
+parser/
+├── monitoring.py          # kurigram client + Queue + workers + heartbeat
+├── message_processor.py   # Оркестратор: pipeline → SQL
+├── text_preprocessor.py   # strip_tail + preprocess_light
+├── word_tokenizer.py      # regex-токенизация, слияние
+├── morphology.py          # pymorphy3 + Lemma + LRU
+├── layer_classifier.py    # cops/bus/traffic/pig
+├── phonetic_index.py      # Surface + lemma индексы при старте
+├── geo_matcher.py         # Sliding-window: 3 тира matching
+├── type_validator.py      # ONNX BERT zero-shot type probe
+├── semantic_resolver.py   # Pre-filter → Ollama (опционально)
+├── onnx_encoder.py        # rubert-tiny2 ONNX inference
+├── collector.py           # Сбор метрик
+└── db_adapter.py          # asyncpg pool
+```
+
+**Метрики качества (~99 событий):**
+
+| Стратегия | % | Описание |
+|-----------|---|----------|
+| single_match | ~58 | Одно geo-существо |
+| random | ~28 | Не распознано |
+| intersection | ~9 | Пересечение 2+ улиц |
+| polygon_intersection | ~5 | ConvexHull кластера |
+
+### 4.3 core — [docs/core.md](core.md)
+
+| Компонент | Значение |
+|-----------|----------|
+| Базовый образ | `python:3.11.10-slim-bookworm` (multi-stage) |
+| Точка входа | `python main.py` |
+| HTTP сервер | aiohttp (TCPSite, port 8080) |
+| Telegram бот | aiogram (polling) |
+| БД пул | asyncpg (min=5, max=30, timeout=60s) |
+| JWT | HS256, access 15мин / refresh 24ч, ephemeral secret |
+| Telegram auth | HMAC-SHA256 initData, circuit breaker (fail_max=5, reset=30s) |
+| Rate limiting | Fixed-window, default 60/мин, nginx edge: 10r/s api, 1r/s auth |
+| Кэш | In-memory OrderedDict LRU + TTL (без Redis) |
+| Метрики | Prometheus /metrics |
+| Ресурсы | 1 CPU / 768MB RAM |
+
+**Модули:**
+
+```
+core/
+├── app_factory.py      # Сборка app, middleware, pg_notify listener
+├── settings.py         # @dataclass конфиг (env только для секретов)
+├── models.py           # Pydantic модели
+├── api/
+│   ├── routes.py       # Регистрация маршрутов
+│   ├── health.py       # /health, /health/ready, /health/detailed
+│   ├── auth.py         # /api/validate-init, /api/auth/refresh
+│   ├── config.py       # /api/config, /api/validation-config
+│   ├── events.py       # /api/events (CRUD), /api/events/snapshot, /status
+│   ├── websocket.py    # WebSocketManager (register/broadcast)
+│   └── media.py        # /media/{filename}
+├── middlewares/
+│   ├── logging_config.py
+│   ├── metrics.py      # Prometheus
+│   ├── csrf.py         # CSRF HMAC token
+│   ├── jwt_auth.py     # JWT verification
+│   ├── auth.py         # JWT issue/verify
+│   ├── ratelimit.py    # Fixed-window per ip+path
+│   └── dbmiddleware.py # inject db adapter
+├── db/
+│   ├── db_base.py      # asyncpg pool
+│   ├── dbconnect.py    # Lifecycle management
+│   ├── db_events.py    # CRUD events, snapshots
+│   ├── db_geo.py       # Gazetteer queries
+│   └── db_spatial.py   # PostGIS queries
+└── utils/
+    ├── cache.py        # In-memory LRU + TTL
+    ├── telegram_validation.py  # HMAC-SHA256 initData
+    └── metrics.py      # Prometheus counters
+```
 
 **Middleware chain (порядок):**
 1. Logging
@@ -176,262 +302,205 @@
 4. JWT Auth
 5. Rate Limiter
 
----
+**Эндпоинты (15+):**
 
-## 3. Поток данных (Data Flow)
+| Метод | Путь | Назначение |
+|-------|------|-----------|
+| GET | `/health`, `/health/live`, `/health/ready`, `/health/detailed` | Мониторинг |
+| GET/POST | `/api/validation-config` | Конфиг валидации |
+| POST | `/api/validate-init` | Telegram initData → JWT |
+| POST | `/api/auth/refresh` | Обновление JWT |
+| GET/POST | `/api/config` | Конфигурация фронтенда |
+| GET | `/api/events` | Snapshot событий |
+| POST | `/api/events` | Создание события |
+| GET | `/api/events/snapshot` | Полный снапшот |
+| GET | `/api/events/status` | Метаданные очереди |
+| GET | `/api/geo`, `/api/geo/all` | Газеттир |
+| GET | `/api/data-status` | Статус данных |
+| WS | `/ws` | WebSocket (live-события) |
+| GET | `/metrics` | Prometheus |
+| GET | `/media/{filename}` | Медиа |
 
-### 3.1 Полный цикл обработки сообщения из Telegram
+### 4.4 web — [docs/web.md](web.md)
 
-```
-  Шаг 1: Парсинг Telegram канала
-  ────────────────────────────────
-  parser (monitoring.py) через kurigram (MTProto) получает новое
-  сообщение из заданных Telegram каналов. Сообщение содержит:
-  текст, время, опционально фото. Сообщение помещается в
-  asyncio.Queue(maxsize=1000), откуда его забирает один из 8 workers.
+| Компонент | Значение |
+|-----------|----------|
+| Сервер | nginx:1.27-alpine |
+| Фронтенд | Vanilla TypeScript + Leaflet + MapLibre GL (basemap) |
+| State | zustand 5.x (reactive store) |
+| Сборка | webpack 5 → dist/js/* |
+| PWA | Service worker (sw.js), offline-first, localStorage cache |
+| TS strict | **Включён** (strict: true, noImplicitAny, strictNullChecks) |
+| Ресурсы | 0.5 CPU / 128MB RAM |
 
-
-  Шаг 2: Предобработка текста
-  ──────────────────────────────
-  Парсер последовательно применяет:
-  - strip_tail() — удаление "сообщить"/"подписаться"
-  - preprocess_light() — удаление HTML, замена UA→RU ("ї"→"и", "є"→"е"),
-    удаление хештегов, извлечение времени из текста
-  - word_tokenizer.tokenize() — разбиение на токены, слияние "5я"→"5_я"
-  - morphology.lemmatize_tokens() — лемматизация pymorphy3 + стемминг
-    snowballstemmer
-
-
-  Шаг 3: Определение слоя (layer)
-  ─────────────────────────────────
-  layer_classifier.classify() сопоставляет ключевые слова с 4 слоями:
-  - "cops" — посты про полицию/военных
-  - "bus" — посты про автобусы/общественный транспорт
-  - "traffic" — посты про ДТП/пробки
-  - "pig" — всё остальное (default)
-
-
-  Шаг 4: Поиск гео-объектов (geo matching)
-  ──────────────────────────────────────────
-  geo_matcher.find_geo() применяет скользящее окно 1-3 токенов
-  с тремя уровнями поиска в gazetteer улиц:
-
-  [T1] Стемминг: точное совпадение стеммированных токенов
-       (snowballstemmer) с нормализованными названиями.
-       ≈ 85-90% всех совпадений.
-
-  [T1b] Семантический: эмбеддинги multilingual-e5-small ONNX →
-        FAISS cosine similarity. Срабатывает когда стемминг не дал
-        результата (опечатки, варианты написания).
-
-  [T2] Нечёткий: rapidfuzz token_sort_ratio ≥ 0.85.
-       Самый медленный, срабатывает редко.
-
-
-  Шаг 5: Вычисление геометрии в PostGIS
-  ───────────────────────────────────────
-  Parser вызывает process_candidates() или geo_execute_scenario()
-  для вычисления геометрии на основе найденных ID гео-объектов.
-  INSERT ... SELECT CTE запрос:
-
-  WITH pc AS (
-    SELECT * FROM process_candidates($geo_ids, $scores, ...)
-  ),
-  inserted AS (
-    INSERT INTO events (...) SELECT ... FROM pc
-    ON CONFLICT (message_id) DO NOTHING
-    RETURNING ...
-  )
-  ... pg_notify ...
-
-
-  Шаг 6: PostGIS сценарии геометрии
-  ───────────────────────────────────
-  Каждый сценарий возвращает (geom, strategy, matches):
-
-  - intersection: ST_Intersection всех пар улиц
-  - nearest_point: ST_ClosestPoint к референсной точке
-  - buffer_area: ST_Buffer вокруг объединённой геометрии
-  - along_line: ST_LineInterpolatePoint вдоль линии
-  - within_polygon: ST_PointOnSurface внутри полигона
-  - pseudo_intersection: ST_ClosestPoint между близкими объектами
-  - convex_hull: ST_ConvexHull объединённой геометрии
-  - single_object: полная геометрия лучшего объекта
-  - centroid_area: ST_Centroid объединённой геометрии
-  - random: случайная точка в зоне
-
-
-  Шаг 7: WebSocket уведомление
-  ──────────────────────────────
-  Триггер notify_event_inserted() → pg_notify('events_new', GeoJSON).
-
-  core (WebSocketManager) слушает pg_notify и транслирует событие
-  всем подключённым WebSocket-клиентам в формате GeoJSON FeatureCollection.
-
-  Frontend (Leaflet PWA) получает событие, добавляет маркер на карту
-  с анимацией, отображает описание, слой (цвет маркера), фото.
-
-
-  Шаг 8: Tier-2 LLM geo-resolution (опционально)
-  ────────────────────────────────────────────────
-  Если strategy = 'random' или максимальная схожесть < 0.85:
-  parser вызывает model:8082 POST /resolve.
-
-  model-service запускает tool-calling цикл (до 5 итераций) с
-  Qwen2.5-0.5B-Instruct. Модель может вызывать инструменты для
-  уточнения геолокации. Результат сохраняется как UPDATE события.
-```
-
-### 3.2 Альтернативные потоки данных
+**Модули фронтенда:**
 
 ```
-  А. Ручное создание события с карты (фронтенд → core → postgres)
-  ────────────────────────────────────────────────────────────────
-  Пользователь на карте → клик → выбор слоя → POST /api/events
-  → core валидирует JWT → INSERT в events → pg_notify → всем WS
-
-
-  Б. Очистка событий по TTL (pg_cron → postgres)
-  ───────────────────────────────────────────────
-  pg_cron каждые 5 минут запускает очистку событий старше 60 минут.
-  Триггер очистки → pg_notify('events_cleaned') → core уведомляет WS.
-
-
-  В. Обновление справочника гео-объектов
-  ─────────────────────────────────────────
-  Вставка/обновление в geo → триггер → pg_notify('geo_updated')
-  → parser перестраивает PhoneticIndex.
+web/js/
+├── common.ts           # window.serverNow, hapticFeedback, showNotification
+├── core/
+│   ├── store.ts        # Zustand store (eventsById, filters, TTL pruning)
+│   ├── local_cache.ts  # localStorage persistence adapter
+│   ├── websocket.ts    # /ws connection + reconnect + heartbeat
+│   ├── event_manager.ts# store.subscribe → rAF scheduler
+│   ├── map.ts          # Leaflet layer creation (Circle/Polyline/Polygon)
+│   ├── ui.ts           # bootstrapUI, initializeMap, renderFromCache
+│   ├── data.ts         # Data fetching
+│   └── storage.ts      # Storage abstraction
+├── modules/
+│   ├── popups.ts       # Legend, click handlers
+│   └── notifications.ts# New-event notifications
+└── telegram/
+    └── integration.ts  # tg.WebApp wrapper, theme, haptic
 ```
+
+**8 архитектурных правил (web/CLAUDE.md):**
+1. PWA microservice — online + offline
+2. Validation gate — компоненты только после подтверждения бэкенда
+3. Incremental local cache — store = source of truth
+4. Full load on connect → live stream (boundary: `events_snapshot_end`)
+5. Haptic feedback on every notification
+6. Event TTL 60 минут (anchored к `serverNow()`)
+7. Leaflet per-feature слои + инкрементный diff (add/remove/update)
+8. Lightweight final image (multi-stage, node только в builder)
 
 ---
 
-## 4. Плюсы и минусы реализации
+## 5. Безопасность
 
-### 4.1 Плюсы (+)
-
-| № | Плюс | Описание |
-|---|------|----------|
-| 1 | **Изоляция сетей** | `db` сеть internal: true — база данных недоступна извне Docker |
-| 2 | **Idempotent INSERT** | `ON CONFLICT (message_id) DO NOTHING` — ретраи не создают дубликатов |
-| 3 | **Один roundtrip** | Геометрия вычисляется внутри CTE, INSERT, meta-update и pg_notify — один запрос к БД |
-| 4 | **Tiered matching** | 3 уровня поиска улиц (стемминг → семантика → нечёткий) + LLM Tier-2 |
-| 5 | **WebSocket realtime** | pg_notify → WebSocket — события доходят до фронта за <100ms |
-| 6 | **Graceful shutdown** | drain очередь (20s), stop_grace_period (30s) — не теряет сообщения |
-| 7 | **Hardened контейнеры** | cap_drop: ALL, no-new-privileges, tmpfs, readonly rootfs |
-| 8 | **Healthchecks** | У всех сервисов, parser использует heartbeat-файл |
-| 9 | **Без Redis** | In-memory LRU кэш в core — меньше движущихся частей |
-| 10 | **pg_notify** | Встроенный брокер сообщений без Kafka/RabbitMQ |
-| 11 | **PWA фронтенд** | Service worker, offline-first, кэширование событий на клиенте |
-| 12 | **Rate limiting** | Двухуровневый (nginx edge + app-level) |
-| 13 | **Prometheus метрики** | core экспортирует метрики, но нет сборщика |
-
-### 4.2 Минусы (-)
-
-| № | Минус | Описание | Степень |
-|---|-------|----------|---------|
-| 1 | **Нет оркестрации** | docker-compose для продакшена — нет автоскейлинга, нет rolling update, нет service discovery | Критично |
-| 2 | **Одиночный процесс parser** | 1 asyncio процесс, 8 workers — GIL ограничивает CPU | Высоко |
-| 3 | **llm-service удалён** | Классификация сценария интегрирована в parser, ресурсы оптимизированы | Устранено |
-| 4 | **Нет replica postgres** | Одна нода — нет высокой доступности | Высоко |
-| 5 | **pg_cron, не pg_partman** | TTL через pg_cron DELETE, не партиционирование | Средне |
-| 6 | **JWT секрет в памяти** | Автогенерация при старте — сброс всех токенов при рестарте core | Средне |
-| 7 | **JWT cache без хеша** | Ключ кэша — raw token, не hash | Средне |
-| 8 | **statement_timeout 30s** | Мягкий таймаут, но не настроен на уровне пользователя | Средне |
-| 9 | **No SSL/TLS** | В nginx закомментирован, нет HTTPS | Критично |
-| 10 | **Нет CI/CD** | Только .gitlab-ci.yml базовая настройка | Высоко |
-| 11 | **Parser healthcheck ненадёжен** | Heartbeat файл — может не отловить зависший event loop | Средне |
-| 12 | **llm-service удалён** | Сервис заменён на встроенную логику в parser | Устранено |
-| 13 | **Отсутствует observability** | Нет distributed tracing, нет централизованного логирования | Высоко |
-| 14 | **parser не распределён** | Один контейнер на все Telegram каналы — единая точка отказа | Высоко |
-| 15 | **X-Forwarded-For спуфинг** | nginx `set_real_ip_from` не настроен | Критично |
-| 16 | **TypeScript strict: false** | Фронтенд без строгой типизации | Средне |
+| Мера | Реализация |
+|------|------------|
+| **Изоляция сетей** | `db` internal: true |
+| **Non-root контейнеры** | parser (uid 1000), core (appuser), web (nginx) |
+| **Capabilities** | cap_drop: ALL; parser/core: none добавлено; web: NET_BIND_SERVICE |
+| **tmpfs** | parser: /tmp (100M, noexec) |
+| **Read-only fs** | core: readonly rootfs |
+| **JWT** | HS256, эфемерный secret (или env override), access 15мин |
+| **Telegram auth** | HMAC-SHA256 initData, constant-time compare, 24ч freshness |
+| **Circuit breaker** | pybreaker (fail_max=5, reset=30s) вокруг Telegram validation |
+| **CSRF** | HMAC token, 1ч TTL |
+| **Rate limiting** | nginx edge: 10r/s api, 1r/s auth; app-level: 60/мин default |
+| **set_real_ip_from** | nginx trusted proxy CIDR (10.0/8, 172.16/12, 192.168/16) |
+| **CSP** | Strict CSP для map.html: script-src 'self' https://telegram.org |
+| **Idempotent INSERT** | ON CONFLICT (message_id) DO NOTHING |
+| **Параметризованный SQL** | Все запросы через asyncpg ($1, $2, ...) |
+| **statement_timeout** | parser: 60s, core: 30s, maintenance: 300s |
+| **Log rotation** | docker json-file: max 10MB × 5 файлов на сервис |
 
 ---
 
-## 5. Рекомендации и оптимизации
+## 6. Инфраструктура
 
-### 5.1 parser
+### Docker Compose
 
-| № | Рекомендация | Приоритет | Обоснование |
-|---|-------------|-----------|-------------|
-| 1 | **Scale out: несколько инстансов parser** | P0 | Один процесс — единая точка отказа. Разделить каналы между 2-3 инстансами или использовать распределённую очередь (NATS/RabbitMQ) |
-| 2 | **Вынести stopwords/layer_keywords в core/LLM** | P1 | Синхронизация стоп-слов между parser и core через pg_notify уже есть, но layer_keywords дублируются в коде и БД |
-| 3 | **Добавить distributed tracing** | P1 | OpenTelemetry для отслеживания полного цикла сообщения через parser → PG → core → WS |
-| 4 | **Оптимизировать semantic_matcher** | P2 | ONNX модель e5-small можно квантизовать до int8 для ускорения CPU inference |
-| 5 | **Добавить circuit breaker для HTTP вызовов** | P1 | Сейчас только голый timeout для model_client. Нужен breaker с fallback |
-| 6 | **Увеличить drain_timeout** | P2 | 20s может не хватить при 1000 сообщений в очереди, увеличить до 60s |
-| 7 | **Вынести session.session в secrets** | P1 | Файл сессии монтируется в volume — должен быть Docker secret или encrypted |
-| 8 | **Убрать healthcheck через heartbeat** | P1 | Заменить на HTTP endpoint с проверкой внутреннего состояния (размер очереди, статус workers, время последней обработки) |
+| Сервис | Образ | Порт | Depends_on | Сети |
+|--------|-------|------|-----------|------|
+| postgres | survival_postgres | 5432 (internal) | — | db |
+| parser | survival_parser | — | postgres (healthy) | backend, db |
+| core | survival_core | 8080 (internal) | postgres (healthy) | frontend, backend, db |
+| web | survival_web | **80** (public) | core (healthy) | frontend |
 
-### 5.2 postgres
+> **Примечание:** модель service была удалена из docker-compose.yml. ONNX BERT type validator
+> интегрирован в parser с lazy imports — при отсутствии onnxruntime работает graceful fallback
+> на heuristic markers.
 
-| № | Рекомендация | Приоритет | Обоснование |
-|---|-------------|-----------|-------------|
-| 1 | **Настроить стриминг-реплику** | P0 | Одна нода — single point of failure. Реплика для read-only запросов core и аварийного переключения |
-| 2 | **Заменить pg_cron на pg_partman** | P1 | DELETE 60-min TTL неэффективен. Партиционирование по дням с DROP старой партиции — O(1) |
-| 3 | **Настроить statement_timeout по пользователям** | P1 | app_user (parser): 30s, ws_user (core): 10s, отдельный пользователь для model: 60s |
-| 4 | **Увеличить shared_buffers** | P1 | 256MB для 512MB контейнера — маловато. Рекомендация: 25% RAM = ~128MB для выделенного сервера, но в контейнере с лимитом 512MB можно поднять до 384MB |
-| 5 | **Добавить pg_stat_statements мониторинг** | P2 | Расширение установлено, но нет сборщика метрик. Подключить к Prometheus |
-| 6 | **Настроить autovacuum агрессивнее** | P2 | events часто вставляются и удаляются (TTL). Ускорить autovacuum для этой таблицы |
-| 7 | **Добавить индекс на (layer, event_time)** | P2 | Фронтенд фильтрует по слоям — составной индекс ускорит запросы core |
-| 8 | **Обновить конфигурацию для M1/M2** | P2 | `random_page_cost = 1.1` и `effective_cache_size = 384MB` заточены под HDD/старый SSD. Для NVMe: `random_page_cost = 1.0` |
+### Healthchecks
 
-### 5.3 model (LLM Geo-Resolution)
+| Сервис | Метод | Интервал | Start period |
+|--------|-------|----------|-------------|
+| postgres | pg_isready + recovery check | 5s | 180s |
+| parser | heartbeat file (/tmp/parser_heartbeat) | 30s | 60s |
+| core | HTTP /health (urllib) | 30s | 40s |
+| web | curl /health/ready | 15s | 30s |
 
-| № | Рекомендация | Приоритет | Обоснование |
-|---|-------------|-----------|-------------|
-| 1 | **Добавить кэширование ответов** | P1 | Одинаковые или похожие адреса будут повторяться. TTL-кэш на уровне model или parser.model_client |
-| 2 | **Увеличить MAX_TOOL_TURNS** | P2 | 5 итераций может не хватить для сложных случаев. Сделать конфигурируемым через env |
-| 3 | **Async tool execution** | P1 | Инструменты model/tools.py выполняются последовательно. Переписать на asyncio.gather для независимых вызовов |
-| 4 | **Rate limiting на model** | P1 | parser может зафлудить model при массовом поступлении сообщений. Добавить ограничение |
-| 5 | **Healthcheck через /resolve lightweight** | P2 | Текущий healthcheck через urllib — поверхностный. Добавить легковесный тест с маленьким промптом |
-| 6 | **Скачивание модели при сборке** | P1 | model_manager.py скачивает GGUF при старте — увеличивает время запуска. Перенести в Dockerfile |
+### Graceful Shutdown
 
-### 5.4 core
+- parser: stop_grace_period=60s, drain queue timeout=20s
+- core: stop_grace_period=30s, WS drain
+- web: stop_grace_period=30s
 
-| № | Рекомендация | Приоритет | Обоснование |
-|---|-------------|-----------|-------------|
-| 1 | **JWT secret в Docker secret** | P0 | Автогенерация при старте сбрасывает все токены. Вынести в BOT_TOKEN-derived или Docker secret |
-| 2 | **JWT cache key hash** | P1 | Хранить в кэше hash токена, не raw token (security best practice) |
-| 3 | **Добавить ACL для WebSocket** | P1 | Сейчас любой с валидным JWT/initData получает все события. Добавить фильтрацию по слоям |
-| 4 | **Переделать healthcheck на HTTP** | P1 | Текущий healthcheck через urllib — заменить на проверку: БД connected, WS loop active |
-| 5 | **Добавить graceful shutdown** | P1 | aiohttp TCPSite не дожидается завершения WS-соединений при SIGTERM |
-| 6 | **Оптимизировать rate limiter** | P2 | Fixed-window не идеален. Sliding-window или token bucket для более равномерного ограничения |
-| 7 | **Убрать blocking CSV I/O** | P1 | db/db_geo.py читает CSV синхронно в async коде. Обернуть в asyncio.to_thread или читать при старте |
-| 8 | **Добавить Pydantic field constraints** | P1 | Pydantic модели в api/events.py без валидации полей (min_length, max_length, ge, le) |
-| 9 | **Заменить LRU кэш на Redis** | P2 | При нескольких инстансах core in-memory кэш не синхронизируется. Пока неактуально (1 инстанс), но на вырост |
-| 10 | **Prometheus + Grafana** | P2 | Метрики экспортируются, но нет дашборда. Добавить docker-compose сервис grafana с готовым дашбордом |
+### Dockerfile (multi-stage)
+
+| Сервис | Builder | Runtime | Итого |
+|--------|---------|---------|-------|
+| core | python:3.11 + gcc + libpq-dev | python:3.11 + libpq5 | ~163MB |
+| parser | python:3.11 + gcc | python:3.11 + procps | ~250MB |
+| postgres | — | postgis/postgis:15-3.3 + pg_cron | ~400MB |
+| web | node:20-alpine (build + typecheck) | nginx:1.27-alpine | ~30MB |
 
 ---
 
-## 6. Диаграмма зависимостей сервисов
+## 7. Оценка архитектуры
 
-```
-       web (nginx:80)
-          ↑
-       core (aiohttp:8080)
-       ┣━━ postgres (5432) — asyncpg
-       ┣━━ model (8082) — для LLM geo-resolution
-       ┗━━ ... (другие сервисы не вызывает напрямую)
+### Сильные стороны
 
-       parser (kurigram)
-       ┣━━ postgres (5432) — asyncpg INSERT + SELECT
-       ┗━━ model (8082) — POST /resolve (Tier-2)
+| # | Плюс |
+|---|------|
+| 1 | **Изоляция сетей** — db internal: true, единственный вход nginx:80 |
+| 2 | **Idempotent INSERT** — ON CONFLICT, безопасные ретраи |
+| 3 | **Один roundtrip** — геометрия внутри CTE: INSERT + pg_notify в одном запросе |
+| 4 | **Tiered matching** — 3 тира (стемминг → семантика → fuzzy) + ONNX BERT type validator |
+| 5 | **WebSocket realtime** — pg_notify → WS, <100ms latency |
+| 6 | **Graceful shutdown** — drain очереди, stop_grace_period |
+| 7 | **Hardened контейнеры** — non-root, cap_drop ALL, tmpfs, readonly rootfs |
+| 8 | **Healthchecks** — у всех сервисов |
+| 9 | **Без Redis** — in-memory LRU, меньше движущихся частей |
+| 10 | **pg_notify** — встроенный брокер, без Kafka/RabbitMQ |
+| 11 | **PWA** — service worker, offline-first |
+| 12 | **Rate limiting** — двухуровневый (nginx + app) |
+| 13 | **Prometheus** — core экспортирует метрики |
+| 14 | **TS strict** — фронтенд с полной типизацией |
+| 15 | **ONNX BERT** — zero-shot type classification без обучения |
 
-       model (aiohttp:8082)
-       ┗━━ postgres (5432) — asyncpg (справочники гео-объектов)
-```
+### Слабые стороны
+
+| # | Минус | Степень |
+|---|-------|---------|
+| 1 | **Нет оркестрации** — docker-compose, нет автоскейлинга | Высоко |
+| 2 | **Одиночный parser** — 1 process, GIL ограничивает CPU | Высоко |
+| 3 | **Нет replica postgres** — single point of failure | Высоко |
+| 4 | **pg_cron, не pg_partman** — DELETE вместо DROP партиций | Средне |
+| 5 | **JWT secret в памяти** — сброс при рестарте | Средне |
+| 6 | **JWT cache без хеша** — ключ = raw token | Средне |
+| 7 | **No TLS** — nginx без HTTPS | Критично |
+| 8 | **Нет CI/CD** — базовый .gitlab-ci.yml | Высоко |
+| 9 | **Parser healthcheck** — heartbeat файл ненадёжен | Средне |
+| 10 | **Нет observability** — нет distributed tracing | Высоко |
+| 11 | **parser не распределён** — единая точка отказа | Высоко |
 
 ---
 
-## 7. Стратегия миграции на Kubernetes
+## 8. Рекомендации
 
-При переходе на Kubernetes рекомендуется:
+### Краткосрочные (1-2 недели)
 
-1. **Заменить pg_notify на NATS JetStream** — нативный брокер для K8s, поддержка exactly-once
-2. **Parser → Deployment с HPA** — автоскейлинг по длине очереди сообщений
-3. **Postgres → StatefulSet + Patroni** — HA кластер с автоматическим failover
-4. **Core → Deployment с HPA** — автоскейлинг по WebSocket соединениям
-5. **Model → Deployment с GPU толерантностью** — если появятся GPU ноды
-6. **Web → Ingress + Cert-Manager** — TLS termination на уровне Ingress
-7. **Metrics → Prometheus Operator + Grafana** — дашборды + алерты
+1. **TLS/SSL** — Cloudflare Tunnel или Let's Encrypt (критично для production)
+2. **CI/CD pipeline** — ruff + typecheck + pytest + Docker build
+3. **Rate-limit hardening** — set_real_ip_from уже есть, проверить edge
+4. **pytest coverage** — street_matcher, process_candidates, telegram_validation
+
+### Среднесрочные (3-4 недели)
+
+5. **Prometheus + Grafana** — dashboard + alerts
+6. **pg_dump cron** — ежедневные бэкапы
+7. **JWT secret в Docker secret** — стабильность при рестартах
+8. **Parser HTTP healthcheck** — вместо heartbeat файла
+
+### Долгосрочные (5+ недель)
+
+9. **Kubernetes migration** — Deployment + HPA + Ingress
+10. **Postgres replica** — streaming replication + Patroni
+11. **NATS JetStream** — замена pg_notify для масштабирования
+12. **Distributed tracing** — OpenTelemetry
+
+---
+
+## 9. Стратегия миграции на Kubernetes
+
+| Сервис | Компонент | Стратегия |
+|--------|-----------|-----------|
+| postgres | StatefulSet | Patroni + streaming replica, PVC для данных |
+| parser | Deployment + HPA | Автоскейлинг по длине очереди (NATS JetStream) |
+| core | Deployment + HPA | Автоскейлинг по WebSocket connections |
+| web | Ingress + Cert-Manager | TLS termination, static content via CDN |
+| metrics | Prometheus Operator + Grafana | Дашборды + алерты |

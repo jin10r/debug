@@ -8,7 +8,7 @@ Telegram Mini App — интерактивная карта событий Од�
 - **Извлечение улиц** — sliding-window матчер: морфология (`mawo-pymorphy3`) +
   fuzzy-сопоставление (`rapidfuzz`) против справочника гео-объектов (postgres/data/geo.csv). Без NER/нейросетей,
   CPU-only. Детали алгоритма — [docs/parser.md](docs/parser.md).
-- **Карта** — PWA на нативном MapLibre GL JS, offline-first. Детали —
+- **Карта** — PWA на Leaflet (баземап MapLibre GL через maplibre-gl-leaflet), offline-first. Детали —
   [docs/web.md](docs/web.md)
 
 ## Архитектура

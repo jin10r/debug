@@ -1,5 +1,7 @@
 # Core microservice — логика и архитектура
 
+> Общая архитектура: [docs/ARCHITECTURE.md](ARCHITECTURE.md)
+
 Сервис `core` (контейнер из `Dockerfile.core`) — backend на `aiohttp`. Отдаёт
 REST API и WebSocket фронтенду, валидирует Telegram-сессии (JWT), и мостит
 события из PostgreSQL в реальном времени: `LISTEN/NOTIFY` → broadcast по
@@ -7,16 +9,21 @@ WebSocket. Наружу не публикуется — всё проксиру�
 
 Код — каталог `core/`. Точка входа — `main.py` → `core/app_factory.py`.
 
+---
+
 ## Технологический стек
 
 | Компонент | Назначение |
 |-----------|-----------|
-| `aiohttp` | HTTP-сервер, REST, WebSocket |
-| `asyncpg` | PostgreSQL-пул + `LISTEN/NOTIFY` |
-| `aiogram` | Telegram-бот (Mini App entry), `pydantic`-модели |
-| `pyjwt` (HS256) | access/refresh-токены сессии |
-| `prometheus-client` | метрики `/metrics` |
-| `pybreaker` | circuit breaker вокруг Telegram-валидации |
+| `aiohttp` 3.14 | HTTP-сервер, REST, WebSocket |
+| `asyncpg` 0.31 | PostgreSQL-пул (min=5, max=30) + LISTEN/NOTIFY |
+| `aiogram` 3.29 | Telegram-бот (Mini App entry) |
+| `pyjwt` 2.13 (HS256) | access/refresh-токены сессии |
+| `prometheus-client` 0.25 | метрики `/metrics` |
+| `pybreaker` 1.4 | circuit breaker вокруг Telegram-валидации |
+| `pydantic` 2.13 | валидация моделей запросов/ответов |
+
+---
 
 ## Архитектура модулей
 
@@ -54,6 +61,8 @@ core/
     └── metrics.py          # prometheus-метрики
 ```
 
+---
+
 ## Middleware-цепочка
 
 Порядок (`core/app_factory.py`), запрос проходит сверху вниз:
@@ -64,6 +73,8 @@ core/
 4. `jwt_auth_middleware` — валидация access-токена (защищённые маршруты)
 5. `rate_limiter.middleware` — fixed-window лимит (60/мин по умолчанию,
    per-endpoint override для `/api/events`, `/api/geo`; health исключён)
+
+---
 
 ## Маршруты
 
@@ -77,11 +88,16 @@ core/
 | POST | `/api/auth/refresh` | обновление access-токена |
 | POST | `/api/config` | подтверждение сессии |
 | GET | `/api/events` | snapshot событий |
-| POST | `/api/events` | инкрементальные обновления |
+| POST | `/api/events` | создание события (ручной ввод с карты) |
+| GET | `/api/events/snapshot` | полный снапшот |
 | GET | `/api/events/status`, `/api/data_status` | статус данных |
-| GET | `/api/geo` | газеттир |
-| GET | `/ws` | WebSocket (live-события) |
+| GET | `/api/geo`, `/api/geo/all` | газеттир |
+| GET | `/api/data-status` | статус данных |
+| WS | `/ws` | WebSocket (live-события) |
 | GET | `/metrics` | prometheus |
+| GET | `/media/{filename}` | раздача фото |
+
+---
 
 ## Поток live-событий (LISTEN/NOTIFY → WebSocket)
 
@@ -102,6 +118,8 @@ flowchart LR
 - Доставка best-effort: при реконнекте листенера событие может потеряться, но
   оно persist в БД, а фронт при (ре)коннекте делает полный fetch и догоняет.
 
+---
+
 ## Аутентификация
 
 - **Telegram initData** — HMAC-SHA256 по спецификации Telegram
@@ -117,6 +135,8 @@ flowchart LR
   верификации — in-memory (`_jwt_token_cache` в `core/middlewares/auth.py`).
   Внешний session/nonce store не используется (core — один процесс).
 
+---
+
 ## Конфигурация
 
 `core/settings.py` — всё, кроме секретов, захардкожено в `@dataclass`. Из env
@@ -124,9 +144,33 @@ flowchart LR
 `TELEGRAM_VALIDATION_ENABLED` (`JWT_SECRET` — опциональный override автогенерации).
 Параметры пула БД/матчера правятся прямо в `settings.py`.
 
+### Ключевые настройки (core/settings.py)
+
+| Класс | Поле | Default | Описание |
+|-------|------|---------|----------|
+| DatabaseConfig | pool_min_size | 5 | Минимум соединений в пуле |
+| DatabaseConfig | pool_max_size | 30 | Максимум соединений в пуле |
+| DatabaseConfig | command_timeout | 60 | Таймаут SQL-запроса |
+| JWTConfig | access_token_ttl | 900 | 15 минут |
+| JWTConfig | refresh_token_ttl | 86400 | 24 часа |
+| SimilarityConfig | entity_similarity_threshold | 0.82 | Порог tier-3 lemma fuzzy |
+| SimilarityConfig | phonetic_match_threshold | 0.85 | Порог tier-1 surface fuzzy |
+| SimilarityConfig | max_entities | 5 | Top-K результатов |
+| SimilarityConfig | max_sliding_window | 3 | Макс. размер окна (токенов) |
+| SimilarityConfig | max_text_length | 380 | Длиннее → random |
+| SimilarityConfig | semantic_enabled | True | ONNX BERT type validator |
+| SimilarityConfig | semantic_model | qwen2.5:0.5b | Ollama модель (опционально) |
+| ParserConfig | history_limit | 70 | Сообщений из истории при старте |
+| ParserConfig | message_queue_maxsize | 100 | Размер asyncio.Queue |
+| ParserConfig | worker_concurrency | 5 | Число воркеров очереди |
+
+---
+
 ## Health / observability
 
 - `/health/ready` — без кэша (LB не пошлёт трафик на падающую БД), проверяет
   PostgreSQL (обязателен), bot.
 - `/health` (liveness) — TTL-кэш probe БД 5 с.
 - `/metrics` — prometheus (`set_application_info(version='2.0.0')`).
+
+

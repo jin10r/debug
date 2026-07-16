@@ -132,6 +132,77 @@ window.createMultiPolygon = function(map: L.Map, coords: [number, number][][][],
     return [polygon, marker];
 };
 
+window.createMultiLineString = function(map, coords, properties) {
+    // GeoJSON MultiLineString: coords = [ line, ... ], где line = [ coord, ... ].
+    const elements = [];
+    let allLatLngs = [];
+    for (const line of coords) {
+        const latLngs = line.map(c => L.latLng(c[1], c[0]));
+        allLatLngs = allLatLngs.concat(latLngs);
+        const polyline = L.polyline(latLngs, { color: 'blue', weight: 3 });
+        polyline.bindPopup(window.createPopupContent(properties));
+        elements.push(polyline);
+    }
+    if (allLatLngs.length > 0) {
+        const center = L.latLng(
+            allLatLngs.reduce((s, ll) => s + ll.lat, 0) / allLatLngs.length,
+            allLatLngs.reduce((s, ll) => s + ll.lng, 0) / allLatLngs.length
+        );
+        const marker = window.createMarker(map, center, properties);
+        elements.push(marker);
+    }
+    return elements;
+};
+
+window.createMultiPoint = function(map, coords, properties) {
+    // GeoJSON MultiPoint: coords = [ coord, ... ].
+    const elements = [];
+    let allLatLngs = [];
+    for (const c of coords) {
+        const latLng = L.latLng(c[1], c[0]);
+        allLatLngs.push(latLng);
+        const strategy = properties.strategy;
+        const markerEls = window.createCircle(map, c, properties, strategy);
+        elements.push(...markerEls);
+    }
+    return elements;
+};
+
+window.createGeometryCollection = function(map, coords, properties) {
+    // GeoJSON GeometryCollection: coords = [ geometry, ... ].
+    const elements = [];
+    for (const geom of coords) {
+        if (!geom || !geom.type) continue;
+        const type = geom.type;
+        const c = geom.coordinates;
+        let created;
+        switch (type) {
+            case 'Point':
+                created = window.createCircle(map, c, properties, properties.strategy);
+                break;
+            case 'LineString':
+                created = window.createPolyline(map, c, properties);
+                break;
+            case 'Polygon':
+                created = window.createPolygon(map, c, properties);
+                break;
+            case 'MultiPoint':
+                created = window.createMultiPoint(map, c, properties);
+                break;
+            case 'MultiLineString':
+                created = window.createMultiLineString(map, c, properties);
+                break;
+            case 'MultiPolygon':
+                created = window.createMultiPolygon(map, c, properties);
+                break;
+            default:
+                continue;
+        }
+        if (created) elements.push(...created);
+    }
+    return elements;
+};
+
 // Оборачивает слова matched_part в <strong> в уже HTML-экранированном тексте.
 // matched_part — лемматизированный n-грамм ("молодёжный виноградово").
 // Стемный regex: первые max(4, len-2) символов слова леммы + любой суффикс

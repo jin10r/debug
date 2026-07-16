@@ -44,6 +44,29 @@ def _fuzzy_match(query: str, phrases: list, threshold: float):
 
 _STEM_MATCH_SCORE = 0.97
 
+# Прилагательные формы, которые ложно матчатся как топонимы:
+# "зелёного диктатора" → "Зелёное" (ул.), "синего человека" → "Синее" (озеро)
+# Фильтруются как кандидаты перед гео-матчем.
+_NON_GEO_ADJECTIVES: frozenset = frozenset({
+    'зелёного', 'зелёным', 'зелёные', 'зелёная', 'зелёное',
+    'синего', 'синим', 'синие', 'синяя', 'синее',
+    'чёрного', 'чёрным', 'чёрные', 'чёрная', 'чёрное',
+    'белого', 'белым', 'белые', 'белая', 'белое',
+    'красного', 'красным', 'красные', 'красная', 'красное',
+    'жёлтого', 'жёлтым', 'жёлтые', 'жёлтая', 'жёлтое',
+    'серого', 'серым', 'серые', 'серая', 'серое',
+})
+
+# Не-гео слова, которые ложно матчатся как топонимы:
+# "Копейка" (магазин сети), "Шума" (микрорайон/аэропорт),
+# "Рабина" (АЗС WOG) и т.д.
+_NON_GEO_WORDS: frozenset = frozenset({
+    'копейка', 'копейки',
+    'шума', 'шуме',
+    'рабина', 'рабине',
+    'яр', 'яра',
+})
+
 _LOC_PREPS: frozenset = frozenset({
     'на', 'по', 'в', 'у', 'до',
     'від', 'біля',
@@ -69,16 +92,20 @@ class GeoMatcher:
         self._stopwords: Set[str] = set()
         self._executor: Optional[ProcessPoolExecutor] = None
 
-    async def initialize(self, pg_pool) -> bool:
+    async def initialize(self, pg_pool, stopwords: Optional[Set[str]] = None) -> bool:
         try:
             async with pg_pool.acquire() as conn:
                 geo_rows = await conn.fetch(
                     "SELECT id, names, type, ST_GeometryType(geom) AS geom_type FROM geo WHERE geom IS NOT NULL"
                 )
-                sw_rows = await conn.fetch("SELECT word FROM stopwords")
 
             await asyncio.to_thread(self._index.build, geo_rows)
-            self._stopwords = {row['word'].strip().lower() for row in sw_rows if row['word']}
+            self._stopwords = stopwords if stopwords is not None else set()
+            # Прилагательные формы, которые ложно матчатся как топонимы
+            # ("зелёного диктатора" → "Зелёное" ул.)
+            self._stopwords.update(_NON_GEO_ADJECTIVES)
+            # Не-гео слова (магазины, микрорайоны, АЗС)
+            self._stopwords.update(_NON_GEO_WORDS)
             self._executor = ProcessPoolExecutor(max_workers=None)
             logger.info(f"[Geo] Loaded {len(self._stopwords)} stopwords, {len(geo_rows)} objects, ProcessPoolExecutor initialized")
             self._initialized = True
@@ -183,6 +210,7 @@ class GeoMatcher:
                     'geo_id': best.street_id,
                     'score': _STEM_MATCH_SCORE,
                     'matched_name': best.canonical_name,
+                    'type': best.geo_type,
                     'text': surface,
                     'type': best.geo_type,
                     'geom_type': best.geom_type,
@@ -234,6 +262,7 @@ class GeoMatcher:
                         'geo_id': entry.street_id,
                         'score': score / 100.0,
                         'matched_name': entry.canonical_name,
+                        'type': entry.geo_type,
                         'text': surface,
                         'type': entry.geo_type,
                         'geom_type': entry.geom_type,

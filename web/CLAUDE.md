@@ -10,7 +10,7 @@ Telegram palette and labels hidden. Events render as **per-feature Leaflet layer
 (markers/circles/polylines/polygons), not GeoJSON `setData` sources; `renderFromCache`
 (`js/core/ui.js`) does an incremental id-keyed diff over those layers.
 
-These 8 rules are the architectural contract. Any frontend change must keep all
+These 9 rules are the architectural contract. Any frontend change must keep all
 of them true.
 
 ## 1. PWA microservice — works online and offline
@@ -31,6 +31,20 @@ loaded until the backend confirms a valid session.** `map.html` must request
 `/api/config` first and inject app scripts only on `200`. A `401` (after one
 refresh attempt) bounces to `/index.html`, which redirects to `REDIRECT_URL`.
 Offline (network error, not `401`) is trusted and proceeds from cache.
+
+**Entry point flow (`/` → `index.html` → `gate.js`):**
+1. `gate.js` fetches `/api/validation-config` to get `telegram_validation_enabled` and `redirect_url`.
+2. If validation disabled → dev mode, redirect to `/map.html` with dev tokens.
+3. If validation enabled:
+   a. Check `window.Telegram.WebApp` exists → if not, redirect to `REDIRECT_URL`.
+   b. Check `initData` exists → if not, redirect to `REDIRECT_URL`.
+   c. POST `/api/validate-init` with `initData` → server validates HMAC signature.
+   d. If valid → store JWT tokens in `sessionStorage`, redirect to `/map.html`.
+   e. If invalid → redirect to `REDIRECT_URL`.
+
+**Server-side enforcement:** Backend validates JWT on every `/api/*` request and
+WebSocket `auth` message. Client-side gate is a UX filter; backend is the
+authority.
 
 ## 3. Incremental local cache — reactive FeatureCollection from local data
 
@@ -85,10 +99,22 @@ responsive; defer heavy work with `requestAnimationFrame`.
 | `randomMarkersGroup` | unclustered markers | events with `strategy === 'random'` |
 
 `addRenderedEvent`'s geometry `switch` must cover every type the backend can emit
-(`Point`/`LineString`/`Polygon`/`MultiPolygon`) — an unhandled type silently drops
+(`Point`/`LineString`/`Polygon`/`MultiPolygon`/`MultiLineString`/`MultiPoint`/`GeometryCollection`) — an unhandled type silently drops
 the event.
 
-## 8. Lightweight final image
+## 8. Automatic reconnection — wait and resume on connection loss
+
+When the WebSocket connection drops, the frontend must:
+1. **Show connection indicator** — display "⚠️ Нет связи с сервером" overlay.
+2. **Retry with exponential backoff** — 1s → 1.5s → 2.25s → … → 30s cap, up to 10 attempts. Jitter ±20% to prevent thundering herd.
+3. **Immediate reconnect on wake events** — `visibilitychange` (tab visible), `online` (network restored), Telegram `activated` (app foreground). These reset the backoff counter and connect immediately.
+4. **Heartbeat detection** — ping every 25s, pong timeout 15s. After 2 consecutive missed pongs, force close (code 4000) which triggers backoff reconnect.
+5. **Catch-up on reconnect** — `requestEvents()` sends `get_events` with `since_timestamp` from the store's latest event. Server sends only events newer than that timestamp as a silent batch (`events_snapshot_end` boundary).
+6. **Resume live stream** — after snapshot boundary, new events arrive as live pushes with notifications.
+
+The connection indicator hides automatically on `handleOpen`. The store persists events to `localStorage`; on boot, events are hydrated from cache before WS connects — the map renders immediately from local data, then syncs silently.
+
+## 9. Lightweight final image
 
 The Docker build is multi-stage (`Dockerfile.web`): node/npm live only in the
 builder stage. The final image is `nginx:alpine` plus static assets — no

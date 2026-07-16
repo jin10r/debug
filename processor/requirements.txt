@@ -1,0 +1,14 @@
+# Processor service — NLP pipeline (no kurigram/pyrogram)
+asyncpg~=0.29
+mawo-pymorphy3==1.0.4
+snowballstemmer~=2.2
+rapidfuzz~=3.0
+aiohttp~=3.9
+environs~=11.0
+tzdata~=2024.1
+
+# Compact LLM (optional, disabled by default)
+# Install with: pip install llama-cpp-python
+# CPU-only (AVX2): pip install llama-cpp-python
+# For OpenBLAS: CMAKE_ARGS="-DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS" pip install llama-cpp-python
+llama-cpp-python>=0.3.0

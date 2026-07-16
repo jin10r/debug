@@ -20,10 +20,11 @@ BEGIN
         v_geo_id := NEW.id;
     END IF;
 
-    -- Отправляем уведомление парсеру
+    -- Отправляем уведомление парсеру с geo_id для targeted reindex
     PERFORM pg_notify('geo_updated', jsonb_build_object(
         'operation', TG_OP,
         'table', 'geo',
+        'geo_id', v_geo_id,
         'timestamp', NOW(),
         'message', 'Geo table changed, please refresh cache'
     )::text);

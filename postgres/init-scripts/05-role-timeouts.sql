@@ -8,19 +8,19 @@
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'parser') THEN
-        CREATE ROLE parser WITH LOGIN INHERIT;
+        CREATE ROLE parser WITH LOGIN INHERIT PASSWORD 'parser';
     END IF;
     EXECUTE 'ALTER ROLE parser SET statement_timeout = ''60s''';
     EXECUTE 'ALTER ROLE parser SET lock_timeout = ''30s''';
 
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'core') THEN
-        CREATE ROLE core WITH LOGIN INHERIT;
+        CREATE ROLE core WITH LOGIN INHERIT PASSWORD 'core';
     END IF;
     EXECUTE 'ALTER ROLE core SET statement_timeout = ''30s''';
     EXECUTE 'ALTER ROLE core SET lock_timeout = ''15s''';
 
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'maintenance') THEN
-        CREATE ROLE maintenance WITH LOGIN INHERIT;
+        CREATE ROLE maintenance WITH LOGIN INHERIT PASSWORD 'maintenance';
     END IF;
     EXECUTE 'ALTER ROLE maintenance SET statement_timeout = ''300s''';
     EXECUTE 'ALTER ROLE maintenance SET lock_timeout = ''120s''';

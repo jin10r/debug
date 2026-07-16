@@ -538,6 +538,15 @@ function addRenderedEvent(id: string | number, feature: import('../types/geojson
         case 'MultiPolygon':
             elements = window.createMultiPolygon(map, (feature.geometry as unknown as import('geojson').MultiPolygon).coordinates as [number, number][][][], props);
             break;
+        case 'MultiLineString':
+            elements = window.createMultiLineString(map, feature.geometry.coordinates, feature.properties);
+            break;
+        case 'MultiPoint':
+            elements = window.createMultiPoint(map, feature.geometry.coordinates, feature.properties);
+            break;
+        case 'GeometryCollection':
+            elements = window.createGeometryCollection(map, feature.geometry.geometries, feature.properties);
+            break;
         default:
             console.warn('[renderFromCache] Unsupported geometry type:', geoType);
             return;

@@ -35,10 +35,15 @@ if "parser" not in sys.modules:
     _pkg.__path__ = [str(ROOT / "parser")]
     sys.modules["parser"] = _pkg
 
-from parser.morphology import Morphology              # noqa: E402
-from parser.phonetic_index import PhoneticIndex       # noqa: E402
-from parser.geo_matcher import GeoMatcher              # noqa: E402
-from parser.word_tokenizer import tokenize             # noqa: E402
+if "processor" not in sys.modules:
+    _pkg = types.ModuleType("processor")
+    _pkg.__path__ = [str(ROOT / "processor")]
+    sys.modules["processor"] = _pkg
+
+from processor.morphology import Morphology              # noqa: E402
+from processor.phonetic_index import PhoneticIndex       # noqa: E402
+from processor.geo_matcher import GeoMatcher              # noqa: E402
+from processor.word_tokenizer import tokenize             # noqa: E402
 from parser.text_preprocessor import (                  # noqa: E402
     preprocess_light, strip_tail, is_promotional,
 )

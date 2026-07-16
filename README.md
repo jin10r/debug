@@ -80,11 +80,11 @@ cd survival_map
    pip install kurigram qrcode
    ```
 
-3. Запустите готовый скрипт [gen_session.py](gen_session.py), передав
+3. Запустите готовый скрипт [scripts/gen_session.py](scripts/gen_session.py), передав
    `api_id`/`api_hash` аргументами:
 
    ```bash
-   python gen_session.py <api_id> <api_hash>           # вход по QR (по умолчанию)
+   python scripts/gen_session.py <api_id> <api_hash>           # вход по QR (по умолчанию)
    ```
 
    Telegram → Настройки → Устройства → «Подключить устройство» → отсканируйте

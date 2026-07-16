@@ -134,7 +134,7 @@ class SimilarityConfig:
 
 @dataclass
 class ParserConfig:
-    """Параметры parser-сервиса (monitoring.py)."""
+    """Параметры parser-сервиса (kurigram, photo download)."""
 
     # Telegram API credentials — required for pyrogram Client to connect.
     # api_id/api_hash берутся на https://my.telegram.org/apps.
@@ -143,34 +143,27 @@ class ParserConfig:
     api_hash: Optional[str] = None
 
     # Сколько сообщений тянуть из истории канала при старте парсера.
-    # Высокое значение увеличивает startup latency, низкое — пропускает старые.
-    # Это же значение — механизм recovery после краша: бэкфилл переобрабатывает
-    # последние history_limit сообщений (дедуп ON CONFLICT делает это безопасным),
-    # поэтому оно должно с запасом перекрывать окно простоя × rate сообщений.
     history_limit: int = 100
 
-    # Размер asyncio.Queue для входящих сообщений (производитель-потребитель).
-    # Запас под всплески (бэкфилл больших историй + live-пики); put() блокирует
-    # при заполнении (backpressure, без потерь), пул воркеров сливает очередь.
-    message_queue_maxsize: int = 100
-
-    # Число конкурентных воркеров очереди. Перекрывает CPU одного сообщения с
-    # DB-I/O другого на всплесках. Безопасно: вставки идемпотентны (ON CONFLICT),
-    # порядок не важен, asyncpg-pool конкурентно-безопасен, в CPU-секциях нет
-    # await. Кап ≤8 в monitoring.py, чтобы не исчерпать pool (pool_max_size=20).
-    worker_concurrency: int = 5
-
-    # Каталог хранения медиафайлов (фотографии событий). Монтируется через
-    # volume в docker-compose, путь синхронизирован с разделом volumes.
+    # Каталог хранения медиафайлов (фотографии событий).
     events_media_dir: str = "/media/events"
 
-    # SOCKS5/HTTP proxy для pyrogram (если телеграм блокируется в сети
-    # развёртывания). None = без proxy. Меняется правкой settings.py для
-    # конкретной инсталляции — не env.
+    # SOCKS5/HTTP proxy для pyrogram.
     socks5_host: Optional[str] = None
     proxy_host: Optional[str] = None
     proxy_scheme: str = "socks5"
     proxy_port: int = 1080
+
+
+@dataclass
+class ProcessorConfig:
+    """Параметры processor-сервиса (NLP pipeline)."""
+
+    # Число конкурентных воркеров, потребляющих из pending_events (SKIP LOCKED).
+    worker_concurrency: int = 5
+
+    # Polling interval (сек) при пустой очереди.
+    poll_interval: float = 0.5
 
 
 @dataclass
@@ -232,6 +225,27 @@ class OllamaConfig:
 
 
 @dataclass
+class LlamaConfig:
+    """Локальная LLM через llama-cpp-python (замена Ollama).
+
+    Модель Qwen2.5-0.5B Q4_K_M (~300 MB) запускается in-process —
+    без внешнего сервера, без HTTP. KV-cache системного промпта
+    переиспользуется между вызовами.
+
+    Если enabled=False или модель не найдена — грациозный fallback
+    к текущему пайплайну (Ollama или pre-filter rules).
+    """
+    enabled: bool = False
+    model_path: str = '/app/models/qwen2.5-0.5b-q4_k_m.gguf'
+    n_ctx: int = 2048
+    batch_size: int = 8
+    batch_timeout_ms: int = 50
+    n_threads: int = 4
+    n_gpu_layers: int = 0
+    verbose: bool = False
+
+
+@dataclass
 class Settings:
     app: AppConfig
     db: DatabaseConfig
@@ -240,8 +254,10 @@ class Settings:
     similarity: SimilarityConfig = field(default_factory=SimilarityConfig)
     layers: LayerConfig = field(default_factory=LayerConfig)
     parser: ParserConfig = field(default_factory=ParserConfig)
+    processor: ProcessorConfig = field(default_factory=ProcessorConfig)
     question_overlay: QuestionOverlayConfig = field(default_factory=QuestionOverlayConfig)
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
+    llama: LlamaConfig = field(default_factory=LlamaConfig)
 
 
 def _resolve_jwt_secret(env: Env) -> str:
@@ -321,7 +337,11 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
                     "TELEGRAM_VALIDATION_ENABLED", default=True
                 ),
             ),
-            db=DatabaseConfig(),
+            db=DatabaseConfig(
+                user=env.str("POSTGRES_USER", "postgres"),
+                password=env.str("POSTGRES_PASSWORD", "postgres"),
+                database=env.str("POSTGRES_DB", "postgres"),
+            ),
             bot=BotConfig(
                 token=env.str("BOT_TOKEN", ""),
                 webapp_url=env.str("WEBAPP_URL", None),

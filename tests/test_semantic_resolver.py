@@ -21,7 +21,12 @@ if "parser" not in sys.modules:
     _pkg.__path__ = [str(ROOT / "parser")]
     sys.modules["parser"] = _pkg
 
-from parser.semantic_resolver import SemanticResolver  # noqa: E402
+if "processor" not in sys.modules:
+    _pkg = types.ModuleType("processor")
+    _pkg.__path__ = [str(ROOT / "processor")]
+    sys.modules["processor"] = _pkg
+
+from processor.semantic_resolver import SemanticResolver  # noqa: E402
 
 
 @pytest.fixture
@@ -42,47 +47,49 @@ def _make_candidates(*specs):
 
 
 class TestPreFilterPrepositional:
-    """Правило 1: предлоги направления → midpoint."""
+    """Правило 1: предлоги направления → midpoint (только village/town)."""
 
     async def test_ot_do_midpoint(self, resolver):
-        """'от X до Y' → midpoint (только street/market/station/park/landmark)."""
+        """'от X до Y' → midpoint (только village/town, не street)."""
         cand = _make_candidates(
             (1, "Дерибасовская", "street"),
             (4, "Ришельевская", "street"),
         )
         result = resolver._pre_filter("от Дерибасовской до Ришельевской пробка", cand)
-        assert result is not None
-        assert result['strategy'] == 'midpoint'
+        # street не входит в _MIDPOINT_TYPES → pre-filter пропускает
+        assert result is None
 
-    async def test_midpoint_only_street_types(self, resolver):
-        """midpoint только для street/park/market/station/landmark."""
+    async def test_midpoint_only_settlement_types(self, resolver):
+        """midpoint только для village/town."""
         cand = _make_candidates(
             (1, "Александровка", "village"),
             (4, "Ильичёвск", "town"),
         )
         result = resolver._pre_filter("от Александровки до Ильичёвска", cand)
-        # village/town не входит в _MIDPOINT_TYPES → pre-filter пропускает
-        assert result is None
+        # village/town входит в _MIDPOINT_TYPES → midpoint
+        assert result is not None
+        assert result['strategy'] == 'midpoint'
 
     async def test_mezhdu_midpoint(self, resolver):
-        """'между X и Y' → midpoint."""
+        """'между X и Y' → midpoint (только village/town)."""
         cand = _make_candidates(
             (10, "Дерибасовская", "street"),
             (20, "Ришельевская", "street"),
         )
         result = resolver._pre_filter("между Дерибасовской и Ришельевской пробка", cand)
-        assert result is not None
-        assert result['strategy'] == 'midpoint'
+        # street не входит в _MIDPOINT_TYPES → pre-filter пропускает
+        assert result is None
 
     async def test_between_landmark_midpoint(self, resolver):
-        """midpoint для park."""
+        """midpoint только для village/town, не park."""
         cand = _make_candidates(
             (30, "Горького", "park"),
             (40, "Шевченко", "park"),
         )
-        result = resolver._pre_filter("между парком Горького и парком Шевченко", cand)
-        assert result is not None
-        assert result['strategy'] == 'midpoint'
+        # Используем текст без ключевых слов типа "парк", чтобы не срабатывало правило 2
+        result = resolver._pre_filter("между Горького и Шевченко пробка", cand)
+        # park не входит в _MIDPOINT_TYPES → pre-filter пропускает
+        assert result is None
 
 
 class TestPreFilterTypeHint:
@@ -189,7 +196,7 @@ class TestBuildPrompt:
     """Проверка формирования промпта (только структура)."""
 
     def test_prompt_contains_text_and_candidates(self):
-        from parser.semantic_resolver import _build_prompt
+        from processor.semantic_resolver import _build_prompt
 
         prompt = _build_prompt("Александровка блокпост", [
             {"geo_id": 1, "matched_name": "Александровка", "type": "village"},

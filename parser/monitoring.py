@@ -176,17 +176,13 @@ class ParserBot:
                 f"{proxy_config['hostname']}:{proxy_config['port']}"
             )
 
-        # api_id/api_hash не обязательны — session.session уже авторизована.
-        # Передаются только если заданы в env (для обновления сессии).
+        # Сессия уже авторизована (gen_session.py). api_id/api_hash не используются (G-15).
         client_kwargs = {
             'name': 'session',
             'workdir': '/app/parser',
         }
         if proxy_config:
             client_kwargs['proxy'] = proxy_config
-        if settings.parser.api_id and settings.parser.api_hash:
-            client_kwargs['api_id'] = settings.parser.api_id
-            client_kwargs['api_hash'] = settings.parser.api_hash
 
         try:
             self.app = Client(**client_kwargs)

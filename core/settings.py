@@ -134,19 +134,23 @@ class SimilarityConfig:
 
 @dataclass
 class ParserConfig:
-    """Параметры parser-сервиса (kurigram, photo download)."""
+    """Параметры parser-сервиса (kurigram, photo download).
 
-    # Telegram API credentials — required for pyrogram Client to connect.
-    # api_id/api_hash берутся на https://my.telegram.org/apps.
-    # Передаются через env (PARSER_API_ID / PARSER_API_HASH), НЕ в кодовой базе.
-    api_id: Optional[int] = None
-    api_hash: Optional[str] = None
+    api_id/api_hash НЕ хранятся здесь — они используются ТОЛЬКО в gen_session.py
+    для одноразовой генерации session.session (G-15).
+    """
 
     # Сколько сообщений тянуть из истории канала при старте парсера.
     history_limit: int = 100
 
     # Каталог хранения медиафайлов (фотографии событий).
     events_media_dir: str = "/media/events"
+
+    # Размер очереди сообщений (максимум сообщений в asyncio.Queue).
+    message_queue_maxsize: int = 500
+
+    # Число воркеров, обрабатывающих очередь сообщений.
+    worker_concurrency: int = 5
 
     # SOCKS5/HTTP proxy для pyrogram.
     socks5_host: Optional[str] = None
@@ -210,38 +214,21 @@ class LayerConfig:
 
 
 @dataclass
-class OllamaConfig:
-    """Ollama LLM geo-resolution (Tier-2 fallback).
-
-    Всегда активен (enabled=True), но НЕ обязателен — при недоступности хоста
-    приложение продолжает работу без ошибок. Хост переопределяется через env
-    OLLAMA_HOST (по умолчанию http://host.docker.internal:11434).
-    """
-    enabled: bool = False
-    base_url: str = 'http://host.docker.internal:11434'
-    model: str = 'qwen2.5:0.5b'
-    timeout_s: int = 15
-    max_tokens: int = 128
-
-
-@dataclass
 class LlamaConfig:
-    """Локальная LLM через llama-cpp-python (замена Ollama).
+    """Локальная LLM через ONNX Runtime (optimum).
 
-    Модель Qwen2.5-0.5B Q4_K_M (~300 MB) запускается in-process —
-    без внешнего сервера, без HTTP. KV-cache системного промпта
-    переиспользуется между вызовами.
+    Модель Qwen2.5-0.5B-Instruct ONNX (~300 MB) запускается in-process —
+    без внешнего сервера, без HTTP.
 
     Если enabled=False или модель не найдена — грациозный fallback
-    к текущему пайплайну (Ollama или pre-filter rules).
+    к текущему пайплайну (pre-filter rules).
     """
     enabled: bool = False
-    model_path: str = '/app/models/qwen2.5-0.5b-q4_k_m.gguf'
+    model_path: str = '/app/models/qwen2.5-0.5b-instruct-onnx'
     n_ctx: int = 2048
     batch_size: int = 8
     batch_timeout_ms: int = 50
     n_threads: int = 4
-    n_gpu_layers: int = 0
     verbose: bool = False
 
 
@@ -256,7 +243,6 @@ class Settings:
     parser: ParserConfig = field(default_factory=ParserConfig)
     processor: ProcessorConfig = field(default_factory=ProcessorConfig)
     question_overlay: QuestionOverlayConfig = field(default_factory=QuestionOverlayConfig)
-    ollama: OllamaConfig = field(default_factory=OllamaConfig)
     llama: LlamaConfig = field(default_factory=LlamaConfig)
 
 
@@ -323,14 +309,6 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
             if require_jwt else None
         )
 
-        ollama_host = env.str("OLLAMA_HOST", None)
-
-        # parser API credentials — handle empty-string from docker-compose ${VAR:-}
-        _api_id_raw = os.environ.get('PARSER_API_ID', '').strip()
-        _api_hash_raw = os.environ.get('PARSER_API_HASH', '').strip()
-        api_id_val = int(_api_id_raw) if _api_id_raw else None
-        api_hash_val = _api_hash_raw or None
-
         return Settings(
             app=AppConfig(
                 telegram_validation_enabled=env.bool(
@@ -354,12 +332,16 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
                 socks5_host=env.str("PROXY_HOST", None),
                 proxy_port=env.int("PROXY_PORT", 1080),
                 proxy_scheme=env.str("PROXY_SCHEME", "socks5"),
-                api_id=api_id_val,
-                api_hash=api_hash_val,
             ),
             question_overlay=QuestionOverlayConfig(),
-            ollama=OllamaConfig(
-                base_url=ollama_host or 'http://host.docker.internal:11434',
+            llama=LlamaConfig(
+                enabled=env.bool("LLAMA_ENABLED", default=False),
+                model_path=env.str("LLAMA_MODEL_PATH", "/app/models/qwen2.5-0.5b-instruct-onnx"),
+                n_ctx=env.int("LLAMA_N_CTX", default=2048),
+                batch_size=env.int("LLAMA_BATCH_SIZE", default=8),
+                batch_timeout_ms=env.int("LLAMA_BATCH_TIMEOUT_MS", default=50),
+                n_threads=env.int("LLAMA_N_THREADS", default=4),
+                verbose=env.bool("LLAMA_VERBOSE", default=False),
             ),
         )
     except Exception as e:

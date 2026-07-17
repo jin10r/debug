@@ -2,7 +2,7 @@
 # Multi-stage build для минимизации размера образа
 
 # =============================================================================
-# Stage 1: Builder (установка зависимостей + smoke-test)
+# Stage 1: Builder (установка зависимостей)
 # =============================================================================
 FROM python:3.11.10-slim-bookworm AS builder
 
@@ -11,14 +11,11 @@ WORKDIR /build
 RUN --mount=type=cache,target=/var/cache/apt,id=processor-apt \
     apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
-        cmake \
         pkg-config \
-        libopenblas-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY processor/requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
-    CMAKE_ARGS="-DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS" \
     pip install --user -r requirements.txt && \
     find /root/.local -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true && \
     find /root/.local -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true && \
@@ -43,7 +40,7 @@ ENV PATH="/home/processor/.local/bin:$PATH"
 COPY --from=builder /root/.local /home/processor/.local
 
 RUN --mount=type=cache,target=/var/cache/apt,id=processor-runtime \
-    apt-get update && apt-get install -y --no-install-recommends procps libgomp1 libopenblas0 \
+    apt-get update && apt-get install -y --no-install-recommends procps libgomp1 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -54,10 +51,8 @@ RUN useradd -m -u 1000 processor && \
 COPY --chown=processor:processor processor/ ./processor/
 COPY --chown=processor:processor core/ ./core/
 
-# LLM model directory — mount or COPY from project root.
-# Place model file at /app/models/qwen2.5-0.5b-q4_k_m.gguf
-# Example:  docker run -v $(pwd)/models:/app/models ...
-RUN mkdir -p /app/models && chown -R processor:processor /app/models
+# LLM model — локальная ONNX модель из проекта (G-14, исключение: не скачивается, а копируется из контекста)
+COPY --chown=processor:processor models/ ./models/
 
 USER processor
 

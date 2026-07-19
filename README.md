@@ -195,13 +195,12 @@ docker compose down -v     # + удалить тома (БД, медиа)
 core/        backend сервиса `core` (aiohttp app, API, БД-адаптеры, settings)
 parser/      сервис `parser` (kurigram + sliding-window матчер)
 postgres/    init-скрипты схемы и данные (geo.csv, stopwords.csv)
+scripts/     вспомогательные скрипты (генерация сессии, бэкап, слияние geo)
 web/         фронтенд сервиса `web` (TypeScript + MapLibre GL, webpack)
-docs/        по одному файлу на микросервис (core, parser, web, postgres)
+docs/        документация микросервисов
 ```
 
 ## Документация
-
-По документу на каждый микросервис:
 
 - [docs/core.md](docs/core.md) — backend: REST + WebSocket API, JWT/Telegram, middleware, БД-адаптеры
 - [docs/parser.md](docs/parser.md) — алгоритм парсера (sliding-window, тиры матча)

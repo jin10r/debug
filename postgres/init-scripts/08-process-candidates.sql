@@ -59,6 +59,47 @@ BEGIN
     );
     v_n_candidates := COALESCE(array_length(p_geo_ids, 1), 0);
 
+    -- ── District filter: spatial boundary, never becomes result geometry ──────
+    DECLARE
+        v_dist_id   INT;
+        v_dist_geom GEOMETRY;
+    BEGIN
+        SELECT s.id, ST_MakeValid(s.geom)
+        INTO v_dist_id, v_dist_geom
+        FROM geo s
+        JOIN unnest(p_geo_ids, v_scores) AS u(id, score) ON s.id = u.id
+        WHERE s.type = 'district'
+        ORDER BY u.score DESC
+        LIMIT 1;
+
+        IF FOUND THEN
+            WITH
+            candidates AS (
+                SELECT u.id, u.score, u.part
+                FROM unnest(
+                    p_geo_ids,
+                    v_scores,
+                    COALESCE(p_matched_texts, ARRAY_FILL(NULL::text, ARRAY[v_n_candidates]))
+                ) AS u(id, score, part)
+            ),
+            filtered AS (
+                SELECT c.id, c.score, c.part
+                FROM candidates c
+                JOIN geo s ON s.id = c.id
+                WHERE s.type != 'district'
+                  AND ST_Within(ST_MakeValid(s.geom), v_dist_geom)
+            )
+            SELECT
+                array_agg(id ORDER BY score DESC),
+                array_agg(score ORDER BY score DESC),
+                array_agg(part ORDER BY score DESC)
+            INTO p_geo_ids, v_scores, p_matched_texts
+            FROM filtered;
+
+            v_n_candidates := COALESCE(array_length(p_geo_ids, 1), 0);
+        END IF;
+    END;
+
     -- ── 0 кандидатов: случайная точка ─────────────────────────────────────────
     IF v_n_candidates = 0 THEN
         RETURN QUERY SELECT

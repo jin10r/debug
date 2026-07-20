@@ -12,7 +12,6 @@ import {
     LineString,
     Polygon
 } from 'geojson';
-import type { SurvivalState } from '../core/store';
 
 /**
  * Event layer types
@@ -175,19 +174,15 @@ declare global {
     interface Window {
         // App config
         APP_CONFIG: AppConfig;
-
+        
         // App state
         APP_STATE: {
             currentTimeFilter: number;
             activeLayers: Set<string>;
             events: EventFeatureCollection;
         };
-
-        // Server clock sync (common.ts)
-        serverClockOffsetMs: number;
-        serverNow: () => number;
-
-        // Core modules
+        
+        // Core modules — see js/core/store.ts and js/core/local_cache.ts
         localCache: {
             loadEvents(): Promise<void>;
             startPersisting(): void;
@@ -195,12 +190,12 @@ declare global {
         };
 
         store: {
-            getState(): SurvivalState;
-            setState(partial: Partial<SurvivalState>): void;
+            getState(): any;
+            setState(partial: any): void;
             subscribe(listener: () => void): () => void;
-            getInitialState(): SurvivalState;
+            getInitialState(): any;
         };
-
+        
         webSocketManager: {
             connect(): void;
             disconnect(): void;
@@ -210,11 +205,11 @@ declare global {
             onConnectionStatusChange: ((isConnected: boolean) => void) | null;
             isConnected: boolean;
         };
-
+        
         eventManager: {
             render(): void;
         };
-
+        
         // Telegram
         Telegram: {
             WebApp: {
@@ -233,72 +228,21 @@ declare global {
                 colorScheme: 'light' | 'dark';
                 ready: () => void;
                 expand: () => void;
-                showAlert: (message: string, callback?: () => void) => void;
-                showPopup?: (options: { message: string; buttons: Array<{ type: string }> }, callback?: (buttonId: string) => void) => void;
-                showConfirm?: (message: string, callback: (confirmed: boolean) => void) => void;
-                isVersionAtLeast?: (version: string) => boolean;
-                onEvent: (event: string, callback: (...args: unknown[]) => void) => void;
-                offEvent: (event: string, callback: (...args: unknown[]) => void) => void;
-                themeParams: {
-                    bg_color?: string;
-                    text_color?: string;
-                    hint_color?: string;
-                    link_color?: string;
-                    button_color?: string;
-                    button_text_color?: string;
-                    secondary_bg_color?: string;
-                    header_bg_color?: string;
-                    accent_text_color?: string;
-                    section_bg_color?: string;
-                    section_header_text_color?: string;
-                    subtitle_text_color?: string;
-                    destructive_text_color?: string;
-                    section_separator_color?: string;
-                    bottom_bar_bg_color?: string;
-                };
-                isExpanded: boolean;
-                viewportHeight: number;
-                viewportStableHeight: number;
-                isFullscreen?: boolean;
-                isActive?: boolean;
-                setHeaderColor?: (color: string) => void;
-                setBottomBarColor?: (color: string) => void;
-                enableClosingConfirmation?: () => void;
-                disableClosingConfirmation?: () => void;
-                enableVerticalSwipes?: () => void;
+                showAlert: (message: string) => void;
                 HapticFeedback?: {
                     impactOccurred: (style: 'light' | 'medium' | 'heavy') => void;
                     notificationOccurred: (type: 'success' | 'warning' | 'error') => void;
                     selectionChanged: () => void;
                 };
-                CloudStorage?: {
+                DeviceStorage?: {
                     getItem: (key: string, callback: (err: string | null, value: string | null) => void) => void;
                     setItem: (key: string, value: string, callback: (err: string | null) => void) => void;
                     removeItem: (key: string, callback: (err: string | null) => void) => void;
                     getKeys: (callback: (err: string | null, keys: string[]) => void) => void;
                 };
-                LocationManager?: {
-                    getLocation: (callback: (location: { latitude: number; longitude: number } | null) => void) => void;
-                };
-                readTextFromClipboard?: (callback: (text: string | null) => void) => void;
-                switchInlineQuery?: (query: string, chatTypes?: string[]) => void;
-                shareToStory?: (mediaUrl: string, options?: Record<string, unknown>) => void;
-                shareMessage?: (text: string, url: string | null, callback?: (success: boolean) => void) => void;
-                downloadFile?: (options: { url: string; file_name: string }, callback?: (result: { status: string }) => void) => void;
-                addToHomeScreen?: () => void;
-                checkHomeScreenStatus?: (callback: (status: string) => void) => void;
-                requestFullscreen?: () => void;
-                exitFullscreen?: () => void;
-                lockOrientation?: (orientation?: string) => void;
-                unlockOrientation?: () => void;
-                openTelegramLink?: (url: string) => void;
-                openLink?: (url: string, options?: { try_instant_view?: boolean }) => void;
-                close?: () => void;
-                safeAreaInset?: { top: number; right: number; bottom: number; left: number };
-                contentSafeAreaInset?: { top: number; right: number; bottom: number; left: number };
             };
         };
-
+        
         // Validator
         telegramValidator: {
             validateAndInit(): Promise<boolean>;
@@ -307,106 +251,25 @@ declare global {
             isValid(): boolean;
             getTelegram(): unknown;
         };
-
-        // TelegramIntegration singleton
-        telegramIntegration: {
-            init(): boolean;
-            applyTheme(): void;
-            hapticFeedback(type?: string): boolean;
-            showPopup(message: string, buttons?: Array<{ type: string }>): Promise<string>;
-            showAlert(message: string): Promise<void>;
-            showConfirm(message: string): Promise<boolean>;
-            setClosingConfirmation(enabled: boolean): void;
-            readTextFromClipboard(): Promise<string | null>;
-            switchInlineQuery(query: string, chatTypes?: string[]): void;
-            cloudStorageSet(key: string, value: string): Promise<boolean>;
-            cloudStorageGet(key: string): Promise<string | null>;
-            shareToStory(mediaUrl: string, options?: Record<string, unknown>): Promise<boolean>;
-            shareMessage(text: string, url?: string | null): Promise<boolean>;
-            downloadFile(url: string, filename: string): Promise<boolean>;
-            addToHomeScreen(): Promise<boolean>;
-            checkHomeScreenStatus(): Promise<string>;
-            requestFullscreen(): boolean;
-            exitFullscreen(): boolean;
-            lockOrientation(orientation?: string): void;
-            unlockOrientation(): void;
-            requestLocation(): Promise<{ latitude: number; longitude: number; altitude?: number; accuracy?: number }>;
-            openTelegramLink(url: string): void;
-            openLink(url: string, options?: Record<string, unknown>): void;
-            close(): void;
-            on(event: string, callback: (...args: unknown[]) => void): void;
-            getPlatformInfo(): Record<string, unknown>;
-        };
-
-        // Common functions (common.ts)
-        hapticFeedback: (type?: string) => void;
-        playNotificationSound: () => boolean;
-        showNotification: (message: string, duration?: number, type?: string) => void;
-        formatDateTime: (dateTimeStr: string) => string;
-        processTelegramHTML: (text: string) => string;
-        __hapticDebugOnce?: boolean;
-
-        // Data helpers (data.ts)
-        DEFAULT_TIME_FILTER: number;
-        updateTimeFilter: (minutes: number) => void;
-        toggleLayerInStore: (layer: string) => void;
-        setMapInstance: (map: L.Map) => void;
+        
+        // Utility functions
+        updateEventsInStore: (events: EventFeatureCollection) => void;
         getFilteredDataForRendering: () => EventFeatureCollection;
-        renderDataOnMap: () => void;
-
-        // Map geometry (map.ts)
-        createIcon: (layer: string) => L.Icon | L.DivIcon;
-        createMarker: (map: L.Map, latLng: L.LatLng, properties: Record<string, unknown>) => L.Marker;
-        createCircle: (map: L.Map, coords: [number, number], properties: Record<string, unknown>, strategy?: string) => L.Layer[];
-        getPolylineMidpoint: (latLngs: L.LatLng[]) => L.LatLng | null;
-        createPolyline: (map: L.Map, coords: [number, number][], properties: Record<string, unknown>) => L.Layer[];
-        createPolygon: (map: L.Map, coords: [number, number][][] , properties: Record<string, unknown>) => L.Layer[];
-        createMultiPolygon: (map: L.Map, coords: [number, number][][][], properties: Record<string, unknown>) => L.Layer[];
-        createPopupContent: (properties: Record<string, unknown>) => string;
-        createTelegramPopup: (content: string, options?: Record<string, unknown>) => L.Popup;
-
-        // UI (ui.ts)
-        adSquares: Record<string, unknown>;
-        switchTileLayer: (tileKey: string) => void;
-        initializeMap: () => void;
         updateOnlineStatus: (isOnline: boolean) => void;
-        renderFromCache: () => void;
-        bootstrapUI: () => void;
-
-        // Popups (popups.ts)
-        showCenterPopup: (content: string) => void;
-        hideCenterPopup: () => void;
-        copyToClipboard: (text: string) => Promise<boolean>;
-        showLegendPopup: () => void;
-
-        // Notifications (notifications.ts)
-        handleNewEvents: (events: Array<{ id: string | number; layer: string; description?: string }>) => void;
-
-        // Token manager (token-manager.ts)
-        tokenManager: {
-            init(): Promise<boolean>;
-            getAccessToken(): string | null;
-            getRefreshToken(): string | null;
-            getValidToken(): Promise<string | null>;
-            storeTokens(accessToken: string, refreshToken?: string): void;
-            clearTokens(): void;
-            isTokenExpired(token: string, thresholdMs?: number): boolean;
-            getTokenExpiration(token: string): Date | null;
-            refreshAccessToken(): Promise<string | null>;
-            scheduleRefresh(): void;
-            destroy(): void;
-        };
-
-        // Initialize functions
+        renderDataOnMap: () => void;
         initializeWebSocket: () => void;
+        bootstrapUI: () => void;
         getAuthHeaders: () => Record<string, string>;
 
         // Map instances
-        currentMapInstance: L.Map | null;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        markerClusterGroup: any; // L.MarkerClusterGroup from leaflet.markercluster
-        geometryLayerGroup: L.LayerGroup | null;
-        randomMarkersGroup: L.LayerGroup | null;
+        currentMapInstance: any; // L.Map from leaflet
+        markerClusterGroup: any; // L.MarkerClusterGroup
+        geometryLayerGroup: any; // L.LayerGroup
+        randomMarkersGroup: any; // L.LayerGroup
+        
+        // Default constants
+        DEFAULT_TIME_FILTER: number;
+        DEFAULT_POPUP_OPTIONS: Record<string, unknown>;
     }
 }
 

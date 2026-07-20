@@ -3,18 +3,6 @@
 // by 'self'); runs after the leaflet/maplibre libs.
 (async function() {
   // ====================================================================
-  // Default config — применяется до ответа сервера, чтобы карта
-  // отрендерилась даже в офлайн-режиме.
-  // ====================================================================
-  window.APP_CONFIG = {
-    map_center_lat: 46.48,
-    map_center_lng: 30.73,
-    map_default_zoom: 12,
-    enable_random_points: true,
-    validation_redirect_url: 'https://google.com',
-  };
-
-  // ====================================================================
   // Rule 2 — hard validation gate.
   // No frontend component (/dist/js/*) is injected until the backend
   // confirms a valid session. An invalid session bounces to the gate
@@ -103,8 +91,8 @@
   });
 
   try {
-    const v = Date.now();
-    await loadScript(`/dist/js/telegram/integration.js?t=${v}`);
+    const fallbackV = String(Date.now());
+    await loadScript(`/js/telegram/integration.js/__v__/${fallbackV}`);
 
     if (window.telegramIntegration) {
       window.telegramIntegration.init();
@@ -115,6 +103,8 @@
       window.Telegram.WebApp.ready();
       window.Telegram.WebApp.expand();
     }
+
+    const v = Date.now();
     await loadScript(`/dist/js/common.js?t=${v}`);
     await loadScript(`/dist/js/core/store.js?t=${v}`);
     await loadScript(`/dist/js/core/local_cache.js?t=${v}`);

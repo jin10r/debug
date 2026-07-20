@@ -3,8 +3,6 @@
 import asyncio
 import json as json_lib
 import logging
-import math
-import random
 import signal
 import sys
 from datetime import datetime, timezone
@@ -37,10 +35,12 @@ from .geo_matcher import GeoMatcher
 from .semantic_resolver import SemanticResolver
 from .layer_classifier import LayerClassifier
 from .word_tokenizer import tokenize
-from .text_preprocessor import preprocess_light, strip_tail, is_promotional
-from .llm_backend import LLMBackend
-from .llm_resolver import LLMLayerResolver, UnifiedLLMResolver
-from .batcher import BatchProcessor
+from core.utils.text_preprocessor import preprocess_light, strip_tail, is_promotional
+
+try:
+    from .nominatim_client import NominatimClient
+except ImportError:
+    NominatimClient = None
 
 logger = logging.getLogger(__name__)
 
@@ -167,21 +167,18 @@ class ProcessorBot:
 
         self.morph = Morphology()
         self.index = PhoneticIndex(self.morph)
-        self._stopwords: set = set()
         self.matcher = GeoMatcher(self.morph, self.index)
         self.resolver = SemanticResolver(self.morph, self.index)
         self.layer_classifier = LayerClassifier(self.morph)
-
-        # LLM integration (optional)
-        self._llm: Optional[LLMBackend] = None
-        self._llm_layer_resolver: Optional[LLMLayerResolver] = None
-        self._unified_resolver: Optional[UnifiedLLMResolver] = None
-        self._batch_processor: Optional[BatchProcessor] = None
 
         self._worker_concurrency = max(
             1, min(_MAX_WORKER_CONCURRENCY, settings.processor.worker_concurrency)
         )
         self._poll_interval = settings.processor.poll_interval
+
+        self.nominatim: Optional[NominatimClient] = None
+        if NominatimClient is not None and settings.nominatim.enabled:
+            self.nominatim = NominatimClient(settings.nominatim)
 
     async def initialize(self) -> bool:
         try:
@@ -215,52 +212,20 @@ class ProcessorBot:
                     f"lemma_threshold={sim.entity_similarity_threshold}"
                 )
 
-            logger.info("Loading shared stopwords...")
-            async with self.db.pool.acquire() as conn:
-                sw_rows = await conn.fetch("SELECT word FROM stopwords")
-            self._stopwords = {row['word'].strip().lower() for row in sw_rows if row['word']}
-            logger.info(f"Loaded {len(self._stopwords)} stopwords")
-
             logger.info("Initializing GeoMatcher + PhoneticIndex...")
-            if not await self.matcher.initialize(self.db.pool, self._stopwords):
+            if not await self.matcher.initialize(self.db.pool):
                 logger.error("GeoMatcher initialization failed")
                 return False
 
             logger.info("Initializing SemanticResolver...")
-            await self.resolver.initialize(self.db.pool, self._stopwords)
+            await self.resolver.initialize(self.db.pool)
 
-            # ── LLM initialization (optional) ────────────────────────────────
-            llama_cfg = settings.llama if settings else None
-            if llama_cfg and llama_cfg.enabled:
-                try:
-                    self._llm = LLMBackend(
-                        model_path=llama_cfg.model_path,
-                        n_ctx=llama_cfg.n_ctx,
-                        n_threads=llama_cfg.n_threads,
-                        n_gpu_layers=llama_cfg.n_gpu_layers,
-                        verbose=llama_cfg.verbose,
-                    )
-                    self._llm_layer_resolver = LLMLayerResolver(self._llm)
-                    self._unified_resolver = UnifiedLLMResolver(self._llm)
-
-                    # Batch processor for batched inference
-                    self._batch_processor = BatchProcessor(
-                        infer_fn=self._llm.infer_batch,
-                        batch_size=llama_cfg.batch_size,
-                        timeout_ms=llama_cfg.batch_timeout_ms,
-                    )
-
-                    # Re-initialize resolver with LLM (has priority over Ollama)
-                    await self.resolver.initialize(
-                        self.db.pool, self._stopwords, llm=self._llm
-                    )
-
-                    logger.info("✅ Local LLM initialized (llama-cpp-python)")
-                except Exception as llm_err:
-                    logger.warning(f"⚠️  LLM init failed, continuing without: {llm_err}")
-                    self._llm = None
-            else:
-                logger.info("Local LLM disabled (set llama.enabled=true to enable)")
+            if self.nominatim:
+                logger.info("Connecting to Nominatim DB...")
+                if await self.nominatim.connect():
+                    logger.info("✅ Nominatim DB connected")
+                else:
+                    logger.warning("⚠️  Nominatim DB unavailable, fallback disabled")
 
             logger.info("Setting up PostgreSQL notifications...")
             await self._setup_pg_notify()
@@ -316,11 +281,6 @@ class ProcessorBot:
             loop.add_signal_handler(sig, self._request_stop)
 
         logger.info("🚀 Starting processor...")
-
-        # Start batch processor background task (if LLM is loaded)
-        if self._batch_processor is not None:
-            asyncio.create_task(self._batch_processor.run())
-            logger.info("[LLM] Batch processor started")
 
         for _ in range(self._worker_concurrency):
             self._spawn_worker()
@@ -427,139 +387,26 @@ class ProcessorBot:
                 error_msg, row_id,
             )
 
-    def _nlp_classify(self, text: str):
-        """CPU-bound NLP: tokenize → lemmatize → classify. Вызывается через to_thread."""
-        tokens = tokenize(text)
-        lemmas = self.morph.lemmatize_tokens(tokens)
-        layer = self.layer_classifier.classify(lemmas)
-        return tokens, lemmas, layer
-
     @staticmethod
-    def _is_junk(text: str) -> bool:
-        """Проверка на мусорные сообщения: слишком короткие, только эмодзи, системные."""
+    def _sanitize_text(text: Optional[str]) -> Optional[str]:
         if not text:
-            return True
-        stripped = text.strip()
-        if len(stripped) < 3:
-            return True
-        # Только эмодзи/спецсимволы (букв нет)
-        has_letter = any(ch.isalpha() for ch in stripped)
-        if not has_letter:
-            return True
-        # Системные сообщения парсера
-        _SYSTEM_MESSAGES = (
-            'слишком длинное сообщение не является релевантной локацией',
-            'без описания',
-        )
-        if stripped.lower() in _SYSTEM_MESSAGES:
-            return True
-        return False
-
-    def _has_suspicious_keywords(self, text: str) -> bool:
-        """Проверка, есть ли в тексте ключевые слова, которые могут указывать
-        на слой, отличный от 'pig' (когда LayerClassifier не смог определить).
-
-        Используется для решения: вызывать ли LLM-уточнение слоя.
-        """
-        if not self._llm_layer_resolver:
-            return False
-        text_lower = text.lower()
-        suspicious = (
-            'тцк', 'тцкашн', 'ствол', 'водопой',
-            'коп', 'мусор', 'патруль', 'блокпост',
-            'дтп', 'авария', 'пробка',
-            'бус', 'автобус', 'маршрутк',
-            'кабан', 'свинь',
-        )
-        return any(kw in text_lower for kw in suspicious)
+            return text
+        return text.encode('utf-8', errors='replace').decode('utf-8')
 
     async def _process_row(self, row) -> Optional[dict]:
         message_id = row['message_id']
         event_time = row['event_time']
         raw_text = row['text'] or ''
 
-        if self._is_junk(raw_text):
-            return None
-
-        tokens, lemmas, layer = await asyncio.to_thread(
-            self._nlp_classify, raw_text
-        )
-
-        # ── LLM: принудительно на каждое сообщение ─────────────────────────
-        llm_layer: Optional[str] = None
-        llm_geo_ids: Optional[list[int]] = None
-        llm_strategy: Optional[str] = None
+        tokens = tokenize(raw_text)
+        lemmas = self.morph.lemmatize_tokens(tokens)
+        layer = self.layer_classifier.classify(lemmas)
 
         max_text_length = (
             settings.similarity.max_text_length
             if settings and settings.similarity else 380
         )
         promotional = is_promotional(raw_text)
-        entities: list = []
-        if not promotional and raw_text and len(raw_text) <= max_text_length:
-            entities = await self.matcher.find_geo(tokens=tokens, lemmas=lemmas)
-
-        if self._unified_resolver is not None:
-            llm_result = await asyncio.to_thread(
-                self._unified_resolver.resolve, raw_text,
-                entities if entities else None,
-            )
-
-            if llm_result:
-                if llm_result.get('layer') == 'junk':
-                    logger.info(
-                        f"Message {message_id}: LLM classified as junk -> random"
-                    )
-                    return self._enrich(
-                        await self._insert_event(
-                            message_id=message_id, event_time=event_time,
-                            description=raw_text, photo_path=None,
-                            layer='junk', strategy='random',
-                            geom_wkt=self._random_point(),
-                        ),
-                        tokens=tokens, geo_ids=[],
-                    )
-
-                llm_layer = llm_result.get('layer')
-                llm_strategy = llm_result.get('strategy')
-                llm_geo_ids = llm_result.get('geo_ids')
-
-                if llm_layer and llm_layer != layer and llm_layer != 'pig':
-                    logger.info(
-                        f"Message {message_id}: layer refined by LLM: "
-                        f"{layer} -> {llm_layer} "
-                        f"({llm_result.get('reasoning', '')})"
-                    )
-                    layer = llm_layer
-        else:
-            # LLM не загружен — существующий условный вызов
-            if layer == 'pig' and self._has_suspicious_keywords(raw_text):
-                llm_result = await asyncio.to_thread(
-                    self._llm_layer_resolver.classify, raw_text
-                )
-                if llm_result and llm_result.get('layer'):
-                    llm_layer_val = llm_result['layer']
-                    if llm_layer_val == 'junk':
-                        logger.info(
-                            f"Message {message_id}: LLM classified as junk -> random"
-                        )
-                        return self._enrich(
-                            await self._insert_event(
-                                message_id=message_id, event_time=event_time,
-                                description=raw_text, photo_path=None,
-                                layer='junk', strategy='random',
-                                geom_wkt=self._random_point(),
-                            ),
-                            tokens=tokens, geo_ids=[],
-                        )
-                    if llm_layer_val != 'pig':
-                        logger.info(
-                            f"Message {message_id}: layer refined by LLM: "
-                            f"{layer} -> {llm_layer_val} "
-                            f"({llm_result.get('reasoning', '')})"
-                        )
-                        layer = llm_layer_val
-
         if promotional or not raw_text or len(raw_text) > max_text_length:
             if not raw_text:
                 description = 'без описания'
@@ -577,31 +424,62 @@ class ProcessorBot:
                 tokens=tokens, geo_ids=[],
             )
 
-        geo_ids: list = []
-        geo_scores: list = []
-        geo_texts: list = []
+        entities = await self.matcher.find_geo(tokens=tokens, lemmas=lemmas)
+
+        geo_ids = []
+        geo_scores = []
+        geo_texts = []
         for ent in entities:
             if ent['geo_id'] not in geo_ids:
                 geo_ids.append(ent['geo_id'])
                 geo_scores.append(ent['score'])
                 geo_texts.append(ent['text'])
 
-        # Если LLM дала отфильтрованный список geo_ids — используем его
-        if llm_geo_ids is not None and llm_geo_ids:
-            valid_set = set(geo_ids)
-            keep_ids = {gid for gid in llm_geo_ids if gid in valid_set}
-            if keep_ids:
-                new_ids, new_scores, new_texts = [], [], []
-                for gid, score, text in zip(geo_ids, geo_scores, geo_texts):
-                    if gid in keep_ids:
-                        new_ids.append(gid)
-                        new_scores.append(score)
-                        new_texts.append(text)
-                geo_ids = new_ids
-                geo_scores = new_scores
-                geo_texts = new_texts
-
         if not geo_ids:
+            if self.nominatim:
+                nom_entities = await self.matcher.find_geo_nominatim(
+                    tokens, self.nominatim,
+                )
+                if nom_entities:
+                    best = nom_entities[0]
+                    geom = best.get('_nominatim_geom')
+                    if geom and geom.get('type') and geom.get('coordinates'):
+                        geom_type = geom['type']
+                        coords = geom['coordinates']
+                        if geom_type == 'Point':
+                            geom_wkt = f"POINT({coords[0]} {coords[1]})"
+                        elif geom_type == 'LineString':
+                            pts = ', '.join(f"{c[0]} {c[1]}" for c in coords)
+                            geom_wkt = f"LINESTRING({pts})"
+                        elif geom_type == 'Polygon':
+                            rings = []
+                            for ring in coords:
+                                pts = ', '.join(f"{c[0]} {c[1]}" for c in ring)
+                                rings.append(f"({pts})")
+                            geom_wkt = f"POLYGON({', '.join(rings)})"
+                        elif geom_type == 'MultiPolygon':
+                            polys = []
+                            for poly in coords:
+                                rings = []
+                                for ring in poly:
+                                    pts = ', '.join(f"{c[0]} {c[1]}" for c in ring)
+                                    rings.append(f"({pts})")
+                                polys.append(f"({', '.join(rings)})")
+                            geom_wkt = f"MULTIPOLYGON({', '.join(polys)})"
+                        else:
+                            geom_wkt = None
+                        if geom_wkt:
+                            return self._enrich(
+                                await self._insert_event(
+                                    message_id=message_id, event_time=event_time,
+                                    description=raw_text, photo_path=None,
+                                    layer=layer, strategy='single_match',
+                                    geom_wkt=geom_wkt,
+                                ),
+                                tokens=tokens,
+                                geo_ids=[best['geo_id']],
+                            )
+
             return self._enrich(
                 await self._insert_event(
                     message_id=message_id, event_time=event_time,
@@ -609,14 +487,11 @@ class ProcessorBot:
                     layer=layer, strategy='random',
                     geom_wkt=self._random_point(),
                 ),
-                tokens=tokens, geo_ids=geo_ids,
+                tokens=tokens, geo_ids=[],
             )
 
-        strategy: Optional[str] = None
-        # Приоритет: стратегия от LLM > от SemanticResolver
-        if llm_strategy:
-            strategy = llm_strategy
-        elif len(geo_ids) > 1:
+        strategy = None
+        if len(geo_ids) > 1:
             resolved = await self.resolver.resolve(
                 text=raw_text, tokens=tokens, lemmas=lemmas, candidates=entities,
             )
@@ -679,6 +554,8 @@ class ProcessorBot:
         }
 
     def _random_point(self):
+        import math
+        import random
         if settings and hasattr(settings, 'question_overlay'):
             qo = settings.question_overlay
             center_lat, center_lng, radius = qo.center_lat, qo.center_lon, qo.radius
@@ -713,19 +590,14 @@ class ProcessorBot:
             except Exception:
                 pass
 
-        # Stop batch processor
-        if self._batch_processor:
-            self._batch_processor.stop()
-
         if self.matcher:
             await self.matcher.close()
         if self.resolver:
             await self.resolver.close()
+        if self.nominatim:
+            await self.nominatim.close()
         if self.db:
             await self.db.close()
-
-        if self._llm:
-            self._llm.close()
 
         logger.info(
             f"Processor stopped. Processed: {self._messages_processed}, "

@@ -4,18 +4,17 @@ const CopyPlugin = require('copy-webpack-plugin');
 module.exports = {
   // Компилируем все JS/TS модули как отдельные файлы
   entry: {
-    'js/common': './js/common.ts',
+    'js/common': './js/common.js',
     'js/core/store': './js/core/store.ts',
     'js/core/local_cache': './js/core/local_cache.ts',
     'js/core/websocket': './js/core/websocket.ts',
     'js/core/event_manager': './js/core/event_manager.ts',
-    'js/core/token-manager': './js/core/token-manager.ts',
-    'js/core/map': './js/core/map.ts',
-    'js/core/data': './js/core/data.ts',
-    'js/core/ui': './js/core/ui.ts',
-    'js/modules/popups': './js/modules/popups.ts',
-    'js/modules/notifications': './js/modules/notifications.ts',
-    'js/telegram/integration': './js/telegram/integration.ts',
+    'js/core/token-manager': './js/core/token-manager.js',
+    'js/core/map': './js/core/map.js',
+    'js/core/data': './js/core/data.js',
+    'js/core/ui': './js/core/ui.js',
+    'js/modules/popups': './js/modules/popups.js',
+    'js/modules/notifications': './js/modules/notifications.js',
   },
   output: {
     filename: '[name].js',

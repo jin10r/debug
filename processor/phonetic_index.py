@@ -19,11 +19,11 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from .morphology import Morphology
-from .text_preprocessor import clean
+from core.utils.text_preprocessor import clean
 from .word_tokenizer import tokenize
 
 try:
-    from .settings import settings
+    from core.settings import settings
 except Exception:
     settings = None
 
@@ -34,13 +34,13 @@ logger = logging.getLogger(__name__)
 class PhoneticEntry:
     """Запись индекса: geo-объект + одно из его каноничных названий + строка-вариант.
 
-    frozen=True позволяет использовать в качестве ключа хеш-таблиц.
+    Оптимизация памяти: frozen=True позволяет Python оптимизировать хранение
+    и снижает memory footprint по сравнению с обычными dataclass.
     """
+    __slots__ = ('street_id', 'canonical_name', 'variant_text')
     street_id: int
     canonical_name: str   # первое значение из geo.names — для UI/логов
     variant_text: str     # стем-строка или сырой алиас (lowercase, single-space)
-    geo_type: str = 'street'  # тип объекта: street, village, town, station, park, ...
-    geom_type: str = 'ST_Point'  # ST_GeometryType(geom) из БД: ST_Point, ST_Linestring, ...
 
 
 class PhoneticIndex:
@@ -76,7 +76,7 @@ class PhoneticIndex:
             return ()
         return tuple(s for s in self._morph.stem_tokens(tokens) if s)
 
-    def _entries_for_street(self, street_id: int, names: List[str], obj_type: str = 'street', geom_type: str = 'ST_Point') -> Tuple[
+    def _entries_for_street(self, street_id: int, names: List[str]) -> Tuple[
         List[Tuple[Tuple[str, ...], PhoneticEntry]],  # (stem_tuple, entry)
         List[Tuple[str, PhoneticEntry]],              # (surface_phrase, entry)
     ]:
@@ -98,16 +98,14 @@ class PhoneticIndex:
             if stem_tuple and stem_tuple not in seen_stem:
                 seen_stem.add(stem_tuple)
                 stem_pairs.append(
-                    (stem_tuple, PhoneticEntry(street_id, canonical, surface_phrase, obj_type, geom_type))
+                    (stem_tuple, PhoneticEntry(street_id, canonical, surface_phrase))
                 )
-
 
             if surface_phrase and surface_phrase not in seen_surface:
                 seen_surface.add(surface_phrase)
                 surface_pairs.append(
-                    (surface_phrase, PhoneticEntry(street_id, canonical, surface_phrase, obj_type, geom_type))
+                    (surface_phrase, PhoneticEntry(street_id, canonical, surface_phrase))
                 )
-
 
         return stem_pairs, surface_pairs
 
@@ -128,10 +126,8 @@ class PhoneticIndex:
         for row in rows:
             street_id = row['id']
             names = row['names'] or []
-            obj_type = row.get('type', 'street') or 'street'
-            geom_type = row.get('geom_type', 'ST_Point') or 'ST_Point'
             street_count += 1
-            st_pairs, sp_pairs = self._entries_for_street(street_id, names, obj_type, geom_type)
+            st_pairs, sp_pairs = self._entries_for_street(street_id, names)
             for stem_tup, entry in st_pairs:
                 new_stem_index.setdefault(stem_tup, []).append(entry)
                 if len(stem_tup) >= 2:
@@ -172,9 +168,7 @@ class PhoneticIndex:
 
         if row:
             names = row['names'] or []
-            obj_type = row.get('type', 'street') or 'street'
-            geom_type = row.get('geom_type', 'ST_Point') or 'ST_Point'
-            st_pairs, sp_pairs = self._entries_for_street(street_id, names, obj_type, geom_type)
+            st_pairs, sp_pairs = self._entries_for_street(street_id, names)
             for stem_tup, entry in st_pairs:
                 new_stem_index.setdefault(stem_tup, []).append(entry)
                 if len(stem_tup) >= 2:

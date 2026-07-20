@@ -5,7 +5,7 @@ import logging
 from typing import Dict, Set, Optional
 from datetime import datetime, timezone
 from aiohttp import web, WSMsgType
-from core.db.db_events import EventOperations
+from core.db.dbconnect import Request
 from core.settings import settings
 from core.middlewares.auth import verify_jwt_token
 from core.utils.telegram_validation import validate_telegram_webapp_data
@@ -22,8 +22,8 @@ SEND_TIMEOUT = 5.0
 class WebSocketManager:
     """Manages WebSocket connections and broadcasts individual features to clients."""
 
-    def __init__(self, db_events: EventOperations, cache_manager=None):
-        self.db_events = db_events
+    def __init__(self, db_request: Request, cache_manager=None):
+        self.db_request = db_request
         self.cache_manager = cache_manager
         self.connections: Set[web.WebSocketResponse] = set()
         self.broadcast_lock = asyncio.Lock()
@@ -93,7 +93,7 @@ class WebSocketManager:
         If set — send only events newer than that timestamp (catch-up after reconnect).
         """
         try:
-            events_data = await self.db_events.get_filtered_events_as_geojson(
+            events_data = await self.db_request.get_filtered_events_as_geojson(
                 time_interval_minutes=60,
                 since_timestamp=since_timestamp
             )

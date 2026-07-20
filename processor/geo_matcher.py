@@ -10,7 +10,10 @@
 import asyncio
 import logging
 from concurrent.futures import ProcessPoolExecutor
-from typing import Dict, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Set, Tuple
+
+if TYPE_CHECKING:
+    from .nominatim_client import NominatimClient
 
 from rapidfuzz import fuzz
 from rapidfuzz import process as rf_process
@@ -20,7 +23,7 @@ from .phonetic_index import PhoneticIndex
 from .word_tokenizer import Token
 
 try:
-    from .settings import settings
+    from core.settings import settings
 except Exception:
     settings = None
 
@@ -44,41 +47,10 @@ def _fuzzy_match(query: str, phrases: list, threshold: float):
 
 _STEM_MATCH_SCORE = 0.97
 
-# Прилагательные формы, которые ложно матчатся как топонимы:
-# "зелёного диктатора" → "Зелёное" (ул.), "синего человека" → "Синее" (озеро)
-# Фильтруются как кандидаты перед гео-матчем.
-_NON_GEO_ADJECTIVES: frozenset = frozenset({
-    'зелёного', 'зелёным', 'зелёные', 'зелёная', 'зелёное',
-    'синего', 'синим', 'синие', 'синяя', 'синее',
-    'чёрного', 'чёрным', 'чёрные', 'чёрная', 'чёрное',
-    'белого', 'белым', 'белые', 'белая', 'белое',
-    'красного', 'красным', 'красные', 'красная', 'красное',
-    'жёлтого', 'жёлтым', 'жёлтые', 'жёлтая', 'жёлтое',
-    'серого', 'серым', 'серые', 'серая', 'серое',
-})
-
-# Не-гео слова, которые ложно матчатся как топонимы:
-# "Копейка" (магазин сети), "Шума" (микрорайон/аэропорт),
-# "Рабина" (АЗС WOG) и т.д.
-_NON_GEO_WORDS: frozenset = frozenset({
-    'копейка', 'копейки',
-    'шума', 'шуме',
-    'рабина', 'рабине',
-    'яр', 'яра',
-})
-
 _LOC_PREPS: frozenset = frozenset({
     'на', 'по', 'в', 'у', 'до',
     'від', 'біля',
     'около', 'возле', 'вдоль',
-})
-
-# Короткие предлоги/служебные слова в конце sliding-window кандидата.
-# Если окно заканчивается на один из них ("петрова к", "ильфа по"),
-# кандидат отбрасывается — это артефакт окна, а не реальное имя.
-_WINDOW_TAIL_STOPWORDS: frozenset = frozenset({
-    'к', 'в', 'по', 'от', 'за', 'из', 'у', 'до', 'не',
-    'на', 'с', 'о', 'об', 'под', 'над', 'для', 'при',
 })
 
 # Типы в порядке приоритета: settlement выше street
@@ -92,20 +64,16 @@ class GeoMatcher:
         self._stopwords: Set[str] = set()
         self._executor: Optional[ProcessPoolExecutor] = None
 
-    async def initialize(self, pg_pool, stopwords: Optional[Set[str]] = None) -> bool:
+    async def initialize(self, pg_pool) -> bool:
         try:
             async with pg_pool.acquire() as conn:
                 geo_rows = await conn.fetch(
-                    "SELECT id, names, type, ST_GeometryType(geom) AS geom_type FROM geo WHERE geom IS NOT NULL"
+                    "SELECT id, names, type FROM geo WHERE geom IS NOT NULL"
                 )
+                sw_rows = await conn.fetch("SELECT word FROM stopwords")
 
             await asyncio.to_thread(self._index.build, geo_rows)
-            self._stopwords = stopwords if stopwords is not None else set()
-            # Прилагательные формы, которые ложно матчатся как топонимы
-            # ("зелёного диктатора" → "Зелёное" ул.)
-            self._stopwords.update(_NON_GEO_ADJECTIVES)
-            # Не-гео слова (магазины, микрорайоны, АЗС)
-            self._stopwords.update(_NON_GEO_WORDS)
+            self._stopwords = {row['word'].strip().lower() for row in sw_rows if row['word']}
             self._executor = ProcessPoolExecutor(max_workers=None)
             logger.info(f"[Geo] Loaded {len(self._stopwords)} stopwords, {len(geo_rows)} objects, ProcessPoolExecutor initialized")
             self._initialized = True
@@ -118,7 +86,7 @@ class GeoMatcher:
         try:
             async with pg_pool.acquire() as conn:
                 rows = await conn.fetch(
-                    "SELECT id, names, type, ST_GeometryType(geom) AS geom_type FROM geo WHERE geom IS NOT NULL"
+                    "SELECT id, names, type FROM geo WHERE geom IS NOT NULL"
                 )
             count = await asyncio.to_thread(self._index.build, rows)
             logger.info(f"[Geo] Reindexed {count} variants")
@@ -131,7 +99,7 @@ class GeoMatcher:
         try:
             async with pg_pool.acquire() as conn:
                 row = await conn.fetchrow(
-                    "SELECT id, names, type, ST_GeometryType(geom) AS geom_type FROM geo WHERE id = $1 AND geom IS NOT NULL",
+                    "SELECT id, names FROM geo WHERE id = $1 AND geom IS NOT NULL",
                     geo_id,
                 )
             await asyncio.to_thread(
@@ -191,7 +159,7 @@ class GeoMatcher:
         return out
 
     async def _link_span(self, surface: str, stems: Tuple[str, ...], span: Tuple[int, int]) -> Optional[Dict]:
-        if not surface or len(surface) < 3:
+        if not surface:
             return None
 
         # Tier 1: точный кортеж стемов — ядро распознавания.
@@ -210,10 +178,7 @@ class GeoMatcher:
                     'geo_id': best.street_id,
                     'score': _STEM_MATCH_SCORE,
                     'matched_name': best.canonical_name,
-                    'type': best.geo_type,
                     'text': surface,
-                    'type': best.geo_type,
-                    'geom_type': best.geom_type,
                     'source': source,
                     '_span': span,
                 }
@@ -223,7 +188,7 @@ class GeoMatcher:
             settings.similarity.surface_typo_threshold * 100
             if settings and settings.similarity
             and getattr(settings.similarity, 'surface_typo_threshold', None) is not None
-            else 80.0
+            else 90.0
         )
         s_phrases, s_meta = self._index.surface_phrases()
         if s_phrases and len(surface) >= 5:
@@ -262,10 +227,7 @@ class GeoMatcher:
                         'geo_id': entry.street_id,
                         'score': score / 100.0,
                         'matched_name': entry.canonical_name,
-                        'type': entry.geo_type,
                         'text': surface,
-                        'type': entry.geo_type,
-                        'geom_type': entry.geom_type,
                         'source': 'surface_typo',
                         '_span': span,
                     }
@@ -296,6 +258,43 @@ class GeoMatcher:
             f"{[(r['matched_name'], round(r['score'], 2), r['source']) for r in results]}"
         )
         return results
+
+    async def find_geo_nominatim(
+        self,
+        tokens: List[Token],
+        nominatim_client: "NominatimClient",
+    ) -> List[Dict]:
+        """Fallback-поиск через Nominatim, когда локальный индекс пуст.
+
+        Склеивает токены в строку запроса, отправляет в Nominatim.
+        Возвращает тот же формат что find_geo().
+        """
+        if not tokens:
+            return []
+        query = ' '.join(t.text.lower() for t in tokens if t.text)
+        if len(query) < 3:
+            return []
+        nom_results = await nominatim_client.geocode(query)
+        if not nom_results:
+            return []
+        results = []
+        for nr in nom_results:
+            gid = -(nr.get('place_id', 0) or 0)
+            if gid == 0:
+                continue
+            results.append({
+                'geo_id': gid,
+                'score': nr.get('importance', 0.5),
+                'matched_name': nr.get('name', query),
+                'text': query,
+                'source': 'nominatim',
+                '_nominatim_geom': nr.get('geojson'),
+            })
+        results.sort(key=lambda x: x['score'], reverse=True)
+        return results[:(
+            settings.similarity.max_entities
+            if settings and settings.similarity else 5
+        )]
 
     async def find_geo(
         self,
@@ -332,11 +331,6 @@ class GeoMatcher:
         best_by_geo: Dict[int, Dict] = {}
         for surface, stem_tuple, start_i, end_i, _size, _gap, is_anchored in candidates:
             if surface in self._stopwords:
-                continue
-            # Отбрасываем кандидаты, оканчивающиеся на короткий предлог:
-            # "петрова к" → ложное совпадение с "Петровка" и т.п.
-            tail_tokens = surface.rsplit(' ', 1)
-            if len(tail_tokens) > 1 and tail_tokens[1] in _WINDOW_TAIL_STOPWORDS:
                 continue
             result = await self._link_span(surface, stem_tuple, (start_i, end_i))
             if result is None:

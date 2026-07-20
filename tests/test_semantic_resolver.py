@@ -47,49 +47,47 @@ def _make_candidates(*specs):
 
 
 class TestPreFilterPrepositional:
-    """Правило 1: предлоги направления → midpoint (только village/town)."""
+    """Правило 1: предлоги направления → midpoint."""
 
     async def test_ot_do_midpoint(self, resolver):
-        """'от X до Y' → midpoint (только village/town, не street)."""
+        """'от X до Y' → midpoint (только street/market/station/park/landmark)."""
         cand = _make_candidates(
             (1, "Дерибасовская", "street"),
             (4, "Ришельевская", "street"),
         )
         result = resolver._pre_filter("от Дерибасовской до Ришельевской пробка", cand)
-        # street не входит в _MIDPOINT_TYPES → pre-filter пропускает
-        assert result is None
+        assert result is not None
+        assert result['strategy'] == 'midpoint'
 
-    async def test_midpoint_only_settlement_types(self, resolver):
-        """midpoint только для village/town."""
+    async def test_midpoint_only_street_types(self, resolver):
+        """midpoint только для street/park/market/station/landmark."""
         cand = _make_candidates(
             (1, "Александровка", "village"),
             (4, "Ильичёвск", "town"),
         )
         result = resolver._pre_filter("от Александровки до Ильичёвска", cand)
-        # village/town входит в _MIDPOINT_TYPES → midpoint
-        assert result is not None
-        assert result['strategy'] == 'midpoint'
+        # village/town не входит в _MIDPOINT_TYPES → pre-filter пропускает
+        assert result is None
 
     async def test_mezhdu_midpoint(self, resolver):
-        """'между X и Y' → midpoint (только village/town)."""
+        """'между X и Y' → midpoint."""
         cand = _make_candidates(
             (10, "Дерибасовская", "street"),
             (20, "Ришельевская", "street"),
         )
         result = resolver._pre_filter("между Дерибасовской и Ришельевской пробка", cand)
-        # street не входит в _MIDPOINT_TYPES → pre-filter пропускает
-        assert result is None
+        assert result is not None
+        assert result['strategy'] == 'midpoint'
 
     async def test_between_landmark_midpoint(self, resolver):
-        """midpoint только для village/town, не park."""
+        """midpoint для park."""
         cand = _make_candidates(
             (30, "Горького", "park"),
             (40, "Шевченко", "park"),
         )
-        # Используем текст без ключевых слов типа "парк", чтобы не срабатывало правило 2
-        result = resolver._pre_filter("между Горького и Шевченко пробка", cand)
-        # park не входит в _MIDPOINT_TYPES → pre-filter пропускает
-        assert result is None
+        result = resolver._pre_filter("между парком Горького и парком Шевченко", cand)
+        assert result is not None
+        assert result['strategy'] == 'midpoint'
 
 
 class TestPreFilterTypeHint:

@@ -11,7 +11,7 @@ from aiogram.client.session.aiohttp import AiohttpSession
 import aiohttp_cors
 
 from core.settings import settings
-from core.db.db_base import Database
+from core.db.dbconnect import Database, Request
 from core.utils.cache import CacheManager
 from core.handlers import basic_router
 from core.middlewares.dbmiddleware import DbMiddleware
@@ -153,7 +153,7 @@ async def on_startup(app: web.Application):
             "ОТКЛЮЧЕНА: /api/* и /ws принимают ЛЮБОГО клиента. Только для локальной "
             "разработки — НЕ включать в production."
         )
-    db_pool: Database = app['db_pool']
+    db_request: Request = app['db']
     bot: Bot = app['bot']
     dp: Dispatcher = app['dp']
 
@@ -277,13 +277,7 @@ async def create_app():
         logger.critical(f"Database connection failed after all retries: {e}")
         raise RuntimeError(f"Failed to connect to database: {e}") from e
 
-    # Initialize specialized operation handlers
-    from core.db.db_events import EventOperations
-    from core.db.db_geo import GeoOperations
-    from core.db.db_spatial import SpatialOperations
-    db_pool.events = EventOperations(db_pool)
-    db_pool.geo = GeoOperations(db_pool)
-    db_pool.spatial = SpatialOperations(db_pool)
+    db_request = Request(db_pool)
 
     cache_manager = CacheManager()
     await cache_manager.connect()
@@ -297,7 +291,7 @@ async def create_app():
 
     bot = Bot(token=settings.bot.token, default=DefaultBotProperties(), session=_bot_session)
     dp = Dispatcher()
-    dp.update.middleware(DbMiddleware(db_pool))
+    dp.update.middleware(DbMiddleware(db_request))
     dp.include_router(basic_router)
 
     rate_limiter = RateLimiter(
@@ -316,12 +310,13 @@ async def create_app():
 
     app['start_time'] = time.time()
     app['db_pool'] = db_pool
-    app['db'] = db_pool
+    app['db'] = db_request
     app['bot'] = bot
     app['dp'] = dp
     app['cache'] = cache_manager
-    app['websocket_manager'] = WebSocketManager(db_pool.events, cache_manager)
-    db_pool.events.websocket_manager = app['websocket_manager']
+    app['websocket_manager'] = WebSocketManager(db_request, cache_manager)
+    app['db'].events.websocket_manager = app['websocket_manager']
+    app['nominatim_proxy'] = f"http://nominatim:{settings.nominatim.port}"
 
     app.on_startup.append(on_startup)
     app.on_shutdown.append(on_shutdown)

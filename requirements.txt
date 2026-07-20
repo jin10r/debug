@@ -1,18 +1,21 @@
-# Main application dependencies — exact pin (==) for reproducible builds
+# Main application dependencies
 #
-# Для обновления: pip index versions <pkg> → выбрать стабильную версию →
-# обновить строку ниже. НЕ использовать ~= (compatible-release): он даёт
-# разные minor/patch при каждой сборке.
-aiohttp==3.14.1
-aiogram==3.29.1
-asyncpg==0.31.0
-aiohttp-cors==0.8.1
-environs==15.0.1
-prometheus-client==0.25.0
-pybreaker==1.4.1
-pydantic==2.13.4
+# Пиннинг — compatible-release (~=): фиксирует major.minor, пускает только
+# patch/minor в пределах major. Это убирает риск «каждая сборка тянет разную
+# major-версию», но НЕ даёт побайтовой воспроизводимости. Для полного лока
+# снять `pip freeze` из собранного образа и закоммитить как requirements.lock
+# (см. CI-шаг lock-check в .gitlab-ci.yml).
+aiohttp~=3.9
+aiogram~=3.4
+asyncpg~=0.29
+aiohttp-cors~=0.7
+environs~=11.0
+prometheus-client~=0.19
+pybreaker~=1.3
+pydantic~=2.0          # core/models.py, core/api/events.py — раньше тянулся только
+                       # транзитивно через aiogram; теперь объявлен явно.
 
 # Authentication & token signing
-pyjwt==2.13.0
+pyjwt~=2.8
 # cryptography НЕ требуется: JWT — HS256 (hmac/hashlib из stdlib), прямых импортов
 # нет. При переходе на RS256/ES256 поставить `pyjwt[crypto]` (подтянет cryptography).

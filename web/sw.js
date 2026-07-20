@@ -40,7 +40,7 @@ const SHELL_ASSETS = [
     '/dist/js/core/ui.js',
     '/dist/js/modules/popups.js',
     '/dist/js/modules/notifications.js',
-    '/dist/js/telegram/integration.js'
+    '/js/telegram/integration.js'
 ];
 
 self.addEventListener('install', (event) => {

@@ -1,29 +1,18 @@
 -- =============================================================================
 -- process_candidates.sql
 --
--- Вычисляет геометрию события по списку кандидатов от GeoMatcher.
--- Стратегия определяется пространственным анализом, а не текстовыми паттернами.
---
--- Этапы:
---   1. Дедубликация кандидатов (по геометрии + по имени)
---   2. Приоритетная цепочка пространственных проверок в одном WITH:
---      intersection → area (polygon) → pseudo_intersection → proximity → centroid → single_match
---   3. Формирование matches JSON из отфильтрованных кандидатов
---
--- Параметры:
---   p_geo_ids       — ID кандидатов из таблицы geo (INT[])
---   p_scores        — scores соответствия (FLOAT[], 0-1)
---   p_matched_texts — текст, который сматчился (TEXT[])
---   p_strategy      — зарезервировано, игнорируется (всегда NULL)
---   p_geo_types     — типы геометрий (TEXT[], зарезервировано)
+-- Выполняет PostGIS-вычисления по стратегии, определённой SemanticResolver.
+-- Если p_strategy не указан (fallback) — авто-определение:
+--   0 совпадений  → random
+--   1 совпадение  → single_match (полная геометрия объекта)
+--   2+ совпадений → intersection → midpoint → single_match (best score)
 -- =============================================================================
 
 CREATE OR REPLACE FUNCTION process_candidates(
     p_geo_ids           INT[]   DEFAULT NULL,
     p_scores            FLOAT[] DEFAULT NULL,
     p_matched_texts     TEXT[]  DEFAULT NULL,
-    p_strategy          VARCHAR(40) DEFAULT NULL,
-    p_geo_types         TEXT[]  DEFAULT NULL
+    p_strategy          VARCHAR(40) DEFAULT NULL
 )
 RETURNS TABLE(
     result_geom     GEOMETRY,
@@ -33,75 +22,25 @@ RETURNS TABLE(
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_geom               GEOMETRY;
-    v_strategy           VARCHAR(40);
-    v_matches            JSONB;
-    v_scores             FLOAT[];
-    v_n_candidates       INT;
-    v_intersection_cnt   INT;
-    v_pseudo_cnt         INT;
-    v_proximity_cnt      INT;
-    v_candidate_cnt      INT;
-    v_cluster_centroid   GEOMETRY;
-    v_all_within_1km     BOOLEAN;
-    v_isect_collected    GEOMETRY;
-    v_pseudo_collected   GEOMETRY;
-    v_prox_collected     GEOMETRY;
-    v_cand_geoms         GEOMETRY;
-    v_score_min          FLOAT := 0.80;
-    v_pseudo_radius      FLOAT := 150.0;
-    v_proximity_radius   FLOAT := 500.0;
-    v_cluster_radius     FLOAT := 1000.0;
+    v_geom             GEOMETRY;
+    v_strategy         VARCHAR(40);
+    v_matches          JSONB;
+    v_scores           FLOAT[];
+    v_true_count       INT;
+    v_true_collected   GEOMETRY;
+    v_pseudo_count     INT;
+    v_pseudo_collected GEOMETRY;
+    v_score_threshold  FLOAT := 0.85;   -- geom_min_score для strong_geoms
+    v_pseudo_radius    FLOAT := 150.0;  -- м, макс. дистанция для midpoint
+    v_midpoint_types   TEXT[] := ARRAY['street', 'market', 'station', 'park', 'landmark'];
 BEGIN
     v_scores := COALESCE(
         p_scores,
         ARRAY_FILL(1.0::float, ARRAY[COALESCE(array_length(p_geo_ids, 1), 0)])
     );
-    v_n_candidates := COALESCE(array_length(p_geo_ids, 1), 0);
 
-    -- ── District filter: spatial boundary, never becomes result geometry ──────
-    DECLARE
-        v_dist_id   INT;
-        v_dist_geom GEOMETRY;
-    BEGIN
-        SELECT s.id, ST_MakeValid(s.geom)
-        INTO v_dist_id, v_dist_geom
-        FROM geo s
-        JOIN unnest(p_geo_ids, v_scores) AS u(id, score) ON s.id = u.id
-        WHERE s.type = 'district'
-        ORDER BY u.score DESC
-        LIMIT 1;
-
-        IF FOUND THEN
-            WITH
-            candidates AS (
-                SELECT u.id, u.score, u.part
-                FROM unnest(
-                    p_geo_ids,
-                    v_scores,
-                    COALESCE(p_matched_texts, ARRAY_FILL(NULL::text, ARRAY[v_n_candidates]))
-                ) AS u(id, score, part)
-            ),
-            filtered AS (
-                SELECT c.id, c.score, c.part
-                FROM candidates c
-                JOIN geo s ON s.id = c.id
-                WHERE s.type != 'district'
-                  AND ST_Within(ST_MakeValid(s.geom), v_dist_geom)
-            )
-            SELECT
-                array_agg(id ORDER BY score DESC),
-                array_agg(score ORDER BY score DESC),
-                array_agg(part ORDER BY score DESC)
-            INTO p_geo_ids, v_scores, p_matched_texts
-            FROM filtered;
-
-            v_n_candidates := COALESCE(array_length(p_geo_ids, 1), 0);
-        END IF;
-    END;
-
-    -- ── 0 кандидатов: случайная точка ─────────────────────────────────────────
-    IF v_n_candidates = 0 THEN
+    -- ── 0 совпадений: случайная точка ─────────────────────────────────────────
+    IF p_geo_ids IS NULL OR array_length(p_geo_ids, 1) = 0 THEN
         RETURN QUERY SELECT
             ST_SetSRID(ST_MakePoint(
                 30.7233 + 0.09 * (random() - 0.5),
@@ -112,201 +51,156 @@ BEGIN
         RETURN;
     END IF;
 
-    -- ── 1 кандидат: single_match ──────────────────────────────────────────────
-    IF v_n_candidates = 1 THEN
-        SELECT ST_MakeValid(geom) INTO v_geom FROM geo WHERE id = p_geo_ids[1];
-
-        SELECT jsonb_build_array(jsonb_build_object(
+    -- ── Формируем matches JSON ────────────────────────────────────────────────
+    SELECT COALESCE(jsonb_agg(
+        jsonb_build_object(
             'geo_id',       s.id,
             'name',         s.names[1],
-            'similarity',   v_scores[1],
-            'matched_text', COALESCE(p_matched_texts[1], '')
-        )) INTO v_matches
-        FROM geo s WHERE s.id = p_geo_ids[1];
+            'similarity',   u.score,
+            'matched_text', u.part
+        ) ORDER BY u.score DESC
+    ), '[]'::jsonb)
+    INTO v_matches
+    FROM geo s
+    JOIN unnest(
+        p_geo_ids,
+        v_scores,
+        COALESCE(p_matched_texts, ARRAY_FILL(NULL::text, ARRAY[array_length(p_geo_ids, 1)]))
+    ) AS u(id, score, part) ON s.id = u.id;
 
+    -- ── 1 совпадение или стратегия single_match ───────────────────────────────
+    IF array_length(p_geo_ids, 1) = 1 OR p_strategy = 'single_match' THEN
+        SELECT ST_MakeValid(geom) INTO v_geom FROM geo WHERE id = p_geo_ids[1];
         RETURN QUERY SELECT v_geom, 'single_match'::VARCHAR(40), v_matches;
         RETURN;
     END IF;
 
-    -- ── 2+ кандидатов: пространственный анализ ────────────────────────────────
-    -- Все вычисления в одном WITH: дедубликация + пересечения + matches
-    WITH
+    -- ── Стратегия midpoint (вычисление, только для разрешённых типов) ──────────
+    IF p_strategy = 'midpoint' THEN
+        WITH
+        valid_geoms AS (
+            SELECT id, ST_MakeValid(geom) AS geom,
+                   ST_Transform(ST_MakeValid(geom), 3857) AS geom_m
+            FROM geo
+            WHERE id = ANY(p_geo_ids)
+              AND geom IS NOT NULL
+              AND type = ANY(v_midpoint_types)
+        ),
+        pairs AS (
+            SELECT a.id AS id1, b.id AS id2,
+                   a.geom AS geom1, b.geom AS geom2,
+                   a.geom_m AS geom_m1, b.geom_m AS geom_m2
+            FROM valid_geoms a
+            CROSS JOIN valid_geoms b
+            WHERE a.id < b.id
+              AND ST_DWithin(a.geom_m, b.geom_m, v_pseudo_radius)
+        ),
+        midpoints AS (
+            SELECT ST_LineInterpolatePoint(
+                ST_ShortestLine(geom1, geom2), 0.5
+            ) AS point
+            FROM pairs
+        )
+        SELECT COUNT(*), ST_Collect(point)
+        INTO v_true_count, v_true_collected
+        FROM midpoints WHERE point IS NOT NULL;
 
-    -- Исходные кандидаты с геометриями и score
-    raw_candidates AS (
-        SELECT s.id, s.names[1] AS name,
-               ST_MakeValid(s.geom) AS geom,
-               ST_Transform(ST_MakeValid(s.geom), 3857) AS geom_m,
-               u.score
+        IF v_true_count > 0 THEN
+            IF v_true_count = 1 THEN
+                v_geom := ST_GeometryN(v_true_collected, 1);
+            ELSE
+                v_geom := ST_Centroid(v_true_collected);
+            END IF;
+            RETURN QUERY SELECT v_geom, 'midpoint'::VARCHAR(40), v_matches;
+            RETURN;
+        END IF;
+
+        -- Нет пар в радиусе → fallback на single_match лучшего
+        SELECT ST_MakeValid(s.geom) INTO v_geom
         FROM geo s
         JOIN unnest(p_geo_ids, v_scores) AS u(id, score) ON s.id = u.id
-        WHERE s.geom IS NOT NULL
-    ),
+        ORDER BY u.score DESC
+        LIMIT 1;
+        RETURN QUERY SELECT v_geom, 'single_match'::VARCHAR(40), v_matches;
+        RETURN;
+    END IF;
 
-    -- Шаг A: дедубликация по идентичной геометрии (SnapToGrid 0.0001° ≈ 10 м)
-    geom_dedup AS (
-        SELECT DISTINCT ON (ST_AsText(ST_SnapToGrid(geom, 0.0001)))
-            id, name, geom, geom_m, score
-        FROM raw_candidates
-        ORDER BY ST_AsText(ST_SnapToGrid(geom, 0.0001)), score DESC
+    -- ── Стратегия intersection или fallback (авто-определение) ─────────────────
+    WITH
+    unique_geoms AS (
+        SELECT DISTINCT ON (geom_hash) id, geom, geom_m
+        FROM (
+            SELECT
+                s.id,
+                ST_MakeValid(s.geom)                                   AS geom,
+                ST_Transform(ST_MakeValid(s.geom), 3857)               AS geom_m,
+                ST_AsText(ST_SnapToGrid(ST_MakeValid(s.geom), 0.0001)) AS geom_hash
+            FROM geo s
+            WHERE s.id = ANY(p_geo_ids)
+              AND s.geom IS NOT NULL
+        ) sub
+        ORDER BY geom_hash, id
     ),
-
-    -- Шаг B: дедубликация по имени
-    -- Для одноимённых кандидатов: оставить ближайший к центроиду их геометрий
-    name_centroids AS (
-        SELECT name, ST_Centroid(ST_Collect(geom_m)) AS centroid
-        FROM geom_dedup
-        GROUP BY name
+    strong_geoms AS (
+        SELECT ug.id, ug.geom, ug.geom_m
+        FROM unique_geoms ug
+        WHERE EXISTS (
+            SELECT 1 FROM unnest(p_geo_ids, v_scores) AS u(id, score)
+            WHERE u.id = ug.id AND u.score >= v_score_threshold
+        )
     ),
-    name_ranked AS (
-        SELECT cd.*, ROW_NUMBER() OVER (
-            PARTITION BY cd.name
-            ORDER BY ST_Distance(cd.geom_m, nc.centroid)
-        ) AS rn
-        FROM geom_dedup cd
-        JOIN name_centroids nc ON cd.name = nc.name
-    ),
-
-    -- Финальный набор кандидатов после полной дедубликации
-    candidates AS (
-        SELECT id, name, geom, geom_m, score
-        FROM name_ranked
-        WHERE rn = 1
-    ),
-
-    -- (1) Истинные пересечения: ST_Intersects + score >= порога
-    intersection_points AS (
-        SELECT DISTINCT ST_PointOnSurface(ST_Intersection(a.geom, b.geom)) AS point
-        FROM candidates a
-        CROSS JOIN candidates b
+    intersections AS (
+        SELECT ST_PointOnSurface(isect.g) AS point
+        FROM strong_geoms a
+        CROSS JOIN strong_geoms b
+        CROSS JOIN LATERAL (SELECT ST_Intersection(a.geom, b.geom) AS g) isect
         WHERE a.id < b.id
-          AND a.score >= v_score_min AND b.score >= v_score_min
-          AND ST_Intersects(a.geom, b.geom)
           AND ST_IsValid(a.geom) AND ST_IsValid(b.geom)
-          AND NOT ST_IsEmpty(ST_Intersection(a.geom, b.geom))
+          AND ST_Intersects(a.geom, b.geom)
+          AND NOT ST_IsEmpty(isect.g)
     ),
-
-    -- (2) Кластеризация: центроид точек пересечения для проверки area
-    intersection_cluster AS (
-        SELECT
-            COUNT(*) AS pt_count,
-            ST_Centroid(ST_Collect(point)) AS centroid,
-            ST_Collect(point) AS points
-        FROM intersection_points
-    ),
-
-    -- (3) Псевдопересечения: ST_DWithin(150 м), нет истинного пересечения
-    pseudo_points AS (
+    midpoints AS (
         SELECT ST_LineInterpolatePoint(
             ST_ShortestLine(a.geom, b.geom), 0.5
         ) AS point
-        FROM candidates a, candidates b
+        FROM strong_geoms a
+        CROSS JOIN strong_geoms b
         WHERE a.id < b.id
-          AND a.score >= v_score_min AND b.score >= v_score_min
+          AND ST_IsValid(a.geom) AND ST_IsValid(b.geom)
           AND NOT ST_Intersects(a.geom, b.geom)
           AND ST_DWithin(a.geom_m, b.geom_m, v_pseudo_radius)
-    ),
-
-    -- (4) Проксимити: ST_DWithin(500 м), не вошли в intersection/pseudo
-    proximity_points AS (
-        SELECT ST_LineInterpolatePoint(
-            ST_ShortestLine(a.geom, b.geom), 0.5
-        ) AS point
-        FROM candidates a, candidates b
-        WHERE a.id < b.id
-          AND a.score >= v_score_min AND b.score >= v_score_min
-          AND NOT ST_Intersects(a.geom, b.geom)
-          AND NOT ST_DWithin(a.geom_m, b.geom_m, v_pseudo_radius)
-          AND ST_DWithin(a.geom_m, b.geom_m, v_proximity_radius)
-    ),
-
-    -- (5) Matches JSON из дедублицированных кандидатов
-    matches_built AS (
-        SELECT COALESCE(jsonb_agg(
-            jsonb_build_object(
-                'geo_id',       s.id,
-                'name',         s.names[1],
-                'similarity',   u.score,
-                'matched_text', u.part
-            ) ORDER BY u.score DESC
-        ), '[]'::jsonb) AS matches
-        FROM geo s
-        JOIN (
-            SELECT unnest(p_geo_ids) AS id,
-                   unnest(v_scores) AS score,
-                   unnest(COALESCE(p_matched_texts,
-                       ARRAY_FILL(NULL::text, ARRAY[v_n_candidates])
-                   )) AS part
-        ) AS u(id, score, part) ON s.id = u.id
-        WHERE s.id IN (SELECT id FROM candidates)
     )
-
-    -- Собираем всё в одной выборке
     SELECT
-        COALESCE((SELECT pt_count FROM intersection_cluster), 0),
-        COALESCE((SELECT COUNT(*) FROM pseudo_points), 0),
-        COALESCE((SELECT COUNT(*) FROM proximity_points), 0),
-        (SELECT COUNT(*) FROM candidates),
-        (SELECT centroid FROM intersection_cluster WHERE pt_count > 0),
-        (SELECT ST_Collect(point) FROM intersection_points),
-        (SELECT ST_Collect(point) FROM pseudo_points),
-        (SELECT ST_Collect(point) FROM proximity_points),
-        (SELECT ST_Collect(geom) FROM candidates),
-        (SELECT matches FROM matches_built)
-    INTO
-        v_intersection_cnt, v_pseudo_cnt, v_proximity_cnt,
-        v_candidate_cnt,
-        v_cluster_centroid,
-        v_isect_collected, v_pseudo_collected, v_prox_collected,
-        v_cand_geoms, v_matches;
+        COUNT(*)        FILTER (WHERE src = 'true'   AND point IS NOT NULL)::INT,
+        ST_Collect(point) FILTER (WHERE src = 'true' AND point IS NOT NULL),
+        COUNT(*)        FILTER (WHERE src = 'pseudo'  AND point IS NOT NULL)::INT,
+        ST_Collect(point) FILTER (WHERE src = 'pseudo' AND point IS NOT NULL)
+    INTO v_true_count, v_true_collected, v_pseudo_count, v_pseudo_collected
+    FROM (
+        SELECT point, 'true'   AS src FROM intersections
+        UNION ALL
+        SELECT point, 'pseudo' AS src FROM midpoints
+    ) combined;
 
-    -- ── Приоритет 1: Истинное пересечение (одна точка) ────────────────────────
-    IF v_intersection_cnt = 1 THEN
-        v_geom := ST_GeometryN(v_isect_collected, 1);
+    -- Приоритет 1: истинные пересечения
+    IF v_true_count > 0 THEN
+        IF v_true_count = 1 THEN
+            v_geom     := ST_GeometryN(v_true_collected, 1);
+        ELSE
+            v_geom     := ST_ConvexHull(v_true_collected);
+        END IF;
         v_strategy := 'intersection';
 
-    -- ── Приоритет 2: Кластер пересечений → polygon (все точки в 1 км) ────────
-    ELSIF v_intersection_cnt >= 2 THEN
-        SELECT bool_and(
-            ST_Distance(
-                ST_Transform(ST_GeometryN(v_isect_collected, gs.n), 3857),
-                ST_Transform(v_cluster_centroid, 3857)
-            ) <= v_cluster_radius
-        ) INTO v_all_within_1km
-        FROM generate_series(1, v_intersection_cnt) AS gs(n);
-
-        IF v_all_within_1km THEN
-            v_geom := ST_ConvexHull(v_isect_collected);
-            v_strategy := 'area';
+    -- Приоритет 2: midpoints (псевдопересечения)
+    ELSIF v_pseudo_count > 0 THEN
+        IF v_pseudo_count = 1 THEN
+            v_geom     := ST_GeometryN(v_pseudo_collected, 1);
         ELSE
-            v_geom := v_cluster_centroid;
-            v_strategy := 'intersection';
+            v_geom     := ST_Centroid(v_pseudo_collected);
         END IF;
+        v_strategy := 'midpoint';
 
-    -- ── Приоритет 3: Псевдопересечение (150 м) ───────────────────────────────
-    ELSIF v_pseudo_cnt > 0 THEN
-        IF v_pseudo_cnt = 1 THEN
-            v_geom := ST_GeometryN(v_pseudo_collected, 1);
-        ELSE
-            v_geom := ST_Centroid(v_pseudo_collected);
-        END IF;
-        v_strategy := 'pseudo_intersection';
-
-    -- ── Приоритет 4: Проксимити (500 м) ──────────────────────────────────────
-    ELSIF v_proximity_cnt > 0 THEN
-        IF v_proximity_cnt = 1 THEN
-            v_geom := ST_GeometryN(v_prox_collected, 1);
-        ELSE
-            v_geom := ST_Centroid(v_prox_collected);
-        END IF;
-        v_strategy := 'proximity';
-
-    -- ── Приоритет 5: Центроид всех кандидатов ────────────────────────────────
-    ELSIF v_candidate_cnt >= 2 THEN
-        v_geom := ST_Centroid(v_cand_geoms);
-        v_strategy := 'centroid';
-
-    -- ── Приоритет 6: Лучший по score ─────────────────────────────────────────
+    -- Приоритет 3: нет пространственной связи → лучший объект по score
     ELSE
         SELECT ST_MakeValid(s.geom) INTO v_geom
         FROM geo s
@@ -316,7 +210,7 @@ BEGIN
         v_strategy := 'single_match';
     END IF;
 
-    -- ── Защитный fallback ─────────────────────────────────────────────────────
+    -- Защитный fallback
     IF v_geom IS NULL THEN
         SELECT ST_MakeValid(s.geom) INTO v_geom
         FROM geo s

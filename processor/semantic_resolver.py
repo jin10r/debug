@@ -2,52 +2,32 @@
 
 Два уровня:
   Phase 1 [Pre-filter]  — быстрые правила, без модели.
-  Phase 2 [TypeValidator] — zero-shot BERT валидация типов.
-  Phase 3 [Model]       — Ollama/llama-cpp-python для сложных конфликтов.
+  Phase 2 [Model]       — Ollama/llama-cpp-python для сложных конфликтов.
 
 Модель возвращает ТОЛЬКО стратегию + список geo_ids. PostGIS вычисляет геометрию.
 """
 
 import json
 import logging
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set
 
 try:
-    from .settings import settings
+    from core.settings import settings
 except Exception:
     settings = None
 
 logger = logging.getLogger(__name__)
 
-# Fallback defaults (overridden from DB on initialize)
-_DEFAULT_MIDPOINT_TYPES: Tuple[str, ...] = ('street', 'market', 'station', 'park', 'landmark')
-_DEFAULT_TYPE_MARKERS: Dict[str, str] = {
-    "сквер": "park",
-    "парк": "park",
-    "сад": "park",
-    "улица": "street",
-    "проспект": "street",
-    "переулок": "street",
-    "бульвар": "street",
-    "набережная": "embankment",
-    "село": "village",
-    "деревня": "village",
-    "посёлок": "village",
-    "город": "town",
-    "площадь": "square",
-    "мост": "bridge",
-    "станция": "station",
-    "остановка": "stop",
-    "рынок": "market",
-}
-_DEFAULT_TYPE_HINTS: Dict[str, str] = {
-    'село': 'village', 'селения': 'village',
-    'пгт': 'town', 'город': 'town', 'города': 'town',
-    'станция': 'station', 'станции': 'station',
-    'район': 'district', 'района': 'district',
-    'парк': 'park', 'сквер': 'park',
-    'рынок': 'market', 'рынка': 'market',
-}
+# Предлоги направления — триггер midpoint
+_DIRECTIONAL_PREPS: frozenset = frozenset({
+    'от', 'до', 'между', 'из', 'к', 'ко',
+    'по_пути', 'по дороге', 'напротив',
+})
+
+# Типы объектов, для которых разрешён midpoint
+_MIDPOINT_TYPES: frozenset = frozenset({
+    'street', 'market', 'station', 'park', 'landmark',
+})
 
 
 def _build_prompt(text: str, candidates: List[Dict]) -> str:
@@ -71,8 +51,7 @@ def _build_prompt(text: str, candidates: List[Dict]) -> str:
         "Кандидаты (id, name, type):",
     ]
     for c in candidates:
-        c_type = c.get('validated_type') or c.get('type', '?')
-        lines.append(f"  {c.get('geo_id')}: {c.get('matched_name', '?')} ({c_type})")
+        lines.append(f"  {c.get('geo_id')}: {c.get('matched_name', '?')} ({c.get('type', '?')})")
     lines.extend([
         "",
         'Ответь ТОЛЬКО JSON в одну строку:',
@@ -88,29 +67,19 @@ class SemanticResolver:
     какой SQL-метод PostGIS применить.
     """
 
-    def __init__(self, morph, index, type_validator=None):
+    def __init__(self, morph, index):
         self._morph = morph
         self._index = index
-        self._type_validator = type_validator
         self._initialized = False
         self._stopwords: Set[str] = set()
         self._ollama_base: Optional[str] = None
 
-        self._midpoint_types: Tuple[str, ...] = _DEFAULT_MIDPOINT_TYPES
-        self._type_markers: Dict[str, str] = dict(_DEFAULT_TYPE_MARKERS)
-        self._type_hints: Dict[str, str] = dict(_DEFAULT_TYPE_HINTS)
-
     async def initialize(self, pg_pool) -> None:
-        """Загрузить стоп-слова и конфигурацию из БД."""
+        """Загрузить стоп-слова (переиспользуются в pre-filter)."""
         try:
             async with pg_pool.acquire() as conn:
                 sw_rows = await conn.fetch("SELECT word FROM stopwords")
-                self._stopwords = {row['word'].strip().lower() for row in sw_rows if row['word']}
-
-                stf_rows = await conn.fetch("SELECT strategy, allowed_types FROM strategy_type_filters")
-                for row in stf_rows:
-                    if row['strategy'] == 'midpoint':
-                        self._midpoint_types = tuple(row['allowed_types'])
+            self._stopwords = {row['word'].strip().lower() for row in sw_rows if row['word']}
 
             ollama = settings.ollama if settings else None
             if ollama and ollama.enabled:
@@ -120,17 +89,10 @@ class SemanticResolver:
                 self._ollama_base = None
                 logger.info("[Resolver] Ollama disabled, pre-filter only")
 
-            if self._type_validator:
-                await self._type_validator.initialize()
-
             self._initialized = True
-            logger.info(
-                f"[Resolver] Initialized, {len(self._stopwords)} stopwords, "
-                f"{len(self._midpoint_types)} midpoint types"
-            )
+            logger.info(f"[Resolver] Initialized, {len(self._stopwords)} stopwords")
         except Exception as exc:
             logger.warning(f"[Resolver] Init failed: {exc}")
-            self._initialized = True
 
     async def resolve(
         self,
@@ -141,29 +103,17 @@ class SemanticResolver:
     ) -> Optional[Dict[str, Any]]:
         """Определить стратегию для списка кандидатов.
 
-        Args:
-            text: исходный текст
-            tokens: токены
-            lemmas: леммы
-            candidates: список кандидатов от GeoMatcher
-
         Returns:
             Dict с geo_ids, strategy, reasoning или None (fallback).
         """
         if not self._initialized or not candidates:
             return None
 
-        # Phase 0: Type validation (enrich candidates with validated type)
-        if self._type_validator:
-            candidates = self._type_validator.validate(candidates, text, tokens)
-
-        # Phase 1: Pre-filter rules
         result = self._pre_filter(text, candidates)
         if result is not None:
             logger.debug(f"[Resolver] Pre-filter: {result['strategy']} ({result.get('reasoning')})")
             return result
 
-        # Phase 2: Model call (Ollama)
         if self._ollama_base is not None:
             result = await self._model_call(text, candidates)
             if result is not None:
@@ -176,19 +126,15 @@ class SemanticResolver:
         """Быстрые правила без вызова модели."""
         text_lower = text.lower()
 
-        # Use validated_type if available, fall back to type
-        def _get_type(c):
-            return c.get('validated_type') or c.get('type', '')
-
-        candidate_types = {_get_type(c) for c in candidates}
+        candidate_types = {c.get('type', '') for c in candidates}
         candidate_names = {c.get('matched_name', '').lower() for c in candidates}
 
         # ── Правило 1: предлоги направления → midpoint ──────────────────────────
-        dir_prepositions = ('от', 'до', 'в сторону', 'по направлению к', 'из', 'в сторону от')
-        has_from_to = any(p in text_lower for p in dir_prepositions) and len(candidates) >= 2
+        # "от X до Y", "между X и Y"
+        has_from_to = any(p in text_lower for p in ('от', 'до')) and len(candidates) >= 2
         has_between = 'между' in text_lower and len(candidates) >= 2
         if has_from_to or has_between:
-            midpoint_types = set(self._midpoint_types) & candidate_types
+            midpoint_types = _MIDPOINT_TYPES & candidate_types
             if midpoint_types:
                 return {
                     'geo_ids': [c['geo_id'] for c in candidates],
@@ -197,9 +143,18 @@ class SemanticResolver:
                 }
 
         # ── Правило 2: тип объекта явно указан в тексте ─────────────────────────
-        for hint_word, target_type in self._type_hints.items():
+        # "село Александровка", "пгт Таирово", "станция"
+        type_hints = {
+            'село': 'village', 'селения': 'village',
+            'пгт': 'town', 'город': 'town', 'города': 'town',
+            'станция': 'station', 'станции': 'station',
+            'район': 'district', 'района': 'district',
+            'парк': 'park', 'сквер': 'park',
+            'рынок': 'market', 'рынка': 'market',
+        }
+        for hint_word, target_type in type_hints.items():
             if hint_word in text_lower:
-                typed = [c for c in candidates if _get_type(c) == target_type]
+                typed = [c for c in candidates if c.get('type') == target_type]
                 if len(typed) == 1:
                     return {
                         'geo_ids': [typed[0]['geo_id']],
@@ -209,39 +164,13 @@ class SemanticResolver:
                 if len(typed) > 1:
                     return {
                         'geo_ids': [c['geo_id'] for c in typed],
-                        'strategy': 'midpoint' if set(self._midpoint_types) & {target_type} else 'single_match',
+                        'strategy': 'midpoint' if _MIDPOINT_TYPES & {target_type} else 'single_match',
                         'reasoning': f'type_hint_multiple:{target_type}',
                     }
 
-        # ── Правило 3: уточнение типа по контекстным маркерам (_TYPE_MARKERS) ──
-        for marker_word, target_type in self._type_markers.items():
-            if marker_word in text_lower:
-                typed = [c for c in candidates if _get_type(c) == target_type]
-                if typed:
-                    return {
-                        'geo_ids': [c['geo_id'] for c in typed],
-                        'strategy': 'single_match' if len(typed) == 1 else 'intersection',
-                        'reasoning': f'marker_refine:{target_type}',
-                    }
-
-        # ── Правило 4a: "/" — пересечение улиц ────────────────────────────────────
-        if '/' in text:
-            parts = [p.strip() for p in text.split('/')]
-            match_values = []
-            for c in candidates:
-                match_values.append(c.get('matched_name', '').lower())
-                match_values.append(c.get('text', '').lower())
-            match_values = [v for v in match_values if v]
-            for part in parts:
-                pl = part.lower()
-                if any(mv in pl or pl in mv for mv in match_values):
-                    return {
-                        'geo_ids': [c['geo_id'] for c in candidates],
-                        'strategy': 'intersection',
-                        'reasoning': 'slash_intersection',
-                    }
-
-        # ── Правило 4b: одноимённые объекты, в тексте есть второй топоним ────────
+        # ── Правило 3: одноимённые объекты, в тексте есть второй топоним ────────
+        # Если среди кандидатов есть пары одинаковых названий с разными id,
+        # и в тексте есть третий объект — выбрать пару с мин. расстоянием.
         name_to_ids: Dict[str, List[int]] = {}
         for c in candidates:
             name = (c.get('matched_name') or '').lower()
@@ -249,7 +178,8 @@ class SemanticResolver:
 
         for name, ids in name_to_ids.items():
             if len(ids) > 1 and len(candidates) > len(ids):
-                return None
+                # Есть дубликат + ещё один кандидат → не можем решить без модели
+                return None  # Пусть модель разбирает
 
         return None
 
@@ -323,6 +253,4 @@ class SemanticResolver:
 
     async def close(self) -> None:
         self._initialized = False
-        if self._type_validator:
-            await self._type_validator.close()
         logger.info("[Resolver] Closed")

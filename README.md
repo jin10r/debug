@@ -8,7 +8,7 @@ Telegram Mini App — интерактивная карта событий Од�
 - **Извлечение улиц** — sliding-window матчер: морфология (`mawo-pymorphy3`) +
   fuzzy-сопоставление (`rapidfuzz`) против справочника гео-объектов (postgres/data/geo.csv). Без NER/нейросетей,
   CPU-only. Детали алгоритма — [docs/parser.md](docs/parser.md).
-- **Карта** — PWA на Leaflet (баземап MapLibre GL через maplibre-gl-leaflet), offline-first. Детали —
+- **Карта** — PWA на нативном MapLibre GL JS, offline-first. Детали —
   [docs/web.md](docs/web.md)
 
 ## Архитектура
@@ -195,12 +195,13 @@ docker compose down -v     # + удалить тома (БД, медиа)
 core/        backend сервиса `core` (aiohttp app, API, БД-адаптеры, settings)
 parser/      сервис `parser` (kurigram + sliding-window матчер)
 postgres/    init-скрипты схемы и данные (geo.csv, stopwords.csv)
-scripts/     вспомогательные скрипты (генерация сессии, бэкап, слияние geo)
 web/         фронтенд сервиса `web` (TypeScript + MapLibre GL, webpack)
-docs/        документация микросервисов
+docs/        по одному файлу на микросервис (core, parser, web, postgres)
 ```
 
 ## Документация
+
+По документу на каждый микросервис:
 
 - [docs/core.md](docs/core.md) — backend: REST + WebSocket API, JWT/Telegram, middleware, БД-адаптеры
 - [docs/parser.md](docs/parser.md) — алгоритм парсера (sliding-window, тиры матча)

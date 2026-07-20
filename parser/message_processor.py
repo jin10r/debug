@@ -4,7 +4,7 @@ Parser responsibility (R-P1): strip_tail → preprocess_light → INSERT INTO pe
 NLP pipeline (tokenize, lemmatize, classify, geo) is handled by processor service.
 """
 
-from .text_preprocessor import strip_tail, preprocess_light, is_promotional
+from core.utils.text_preprocessor import strip_tail, preprocess_light, is_promotional
 
 
 class MessageProcessor:

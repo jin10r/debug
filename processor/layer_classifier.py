@@ -22,79 +22,20 @@ from typing import Dict, List, Set
 from .morphology import Lemma, Morphology
 
 try:
-    from .settings import settings
+    from core.settings import settings
+    from core.settings import LAYER_PRIORITY as _LAYER_PRIORITY
 except Exception:
     settings = None
+    _LAYER_PRIORITY = ('bus', 'cops', 'traffic')
 
 logger = logging.getLogger(__name__)
 
-# ── Layer keywords — канонические словоформы (не стемы) ──────────────────────
-# Лемматизируются при инициализации LayerClassifier, поэтому все
-# падежи/числа словоформ совпадают автоматически.
-#
-# Порядок ключей задаёт приоритет классификации: первый совпавший слой
-# выигрывает (ниже в classify()). 'pig' — fallback без ключей.
-DEFAULT_LAYER_KEYWORDS: dict[str, tuple] = {
-    'bus': (
-        'автобус',
-        'бус',
-        'хайс',
-        'спринтер',
-        'рено',
-        'фольксваген',
-        'фольц',
-        'хёндай',
-        'Хундай',
-        'вито',
-        'сталкер',
-        'транспортёр',
-        'h1', 'h2', 'h3', 'h4', 'h5',
-        'т5', 'т4', 'т3', 'т2', 'т1',
-        'н1', 'н2', 'н3', 'н4', 'н5',
-        # pymorphy лемматизирует «бус»→«бусы», но «буса»/«бусик»→самостоятельные
-        # леммы ⇒ косвенные/слэнговые формы не совпадали. Добавлены явно.
-        'буса', 'бусик', 'бусинка',
-    ),
-    'cops': (
-        'коп',
-        'полиция',
-        'мусор',
-        'мусара',
-        'люстра',
-        'мигалка',
-        'патруль',
-        'экипаж',
-        'мент',
-        'менты',
-        'менти',
-        'полицейский',
-        'полицай',
-        'police',
-        'мусорня',
-        'мусорской',
-        'сирена',
-    ),
-    'traffic': (
-        'дтп',
-        'авария',
-        'пробка',
-        'затор',
-        'светофор',
-        'блокпост',
-        'пост',
-        'бп',
-        'б/п'
-    ),
-    'pig': (),
-}
-
-# Порядок приоритета (исключая fallback 'pig').
-LAYER_PRIORITY: tuple = tuple(k for k in DEFAULT_LAYER_KEYWORDS if k != 'pig')
-
 
 def _get_layer_keywords(layer: str) -> tuple:
-    """Ключевые слова слоя: DEFAULT_LAYER_KEYWORDS (этот модуль)."""
-    return DEFAULT_LAYER_KEYWORDS.get(layer, ())
+    """Ключевые слова слоя из настроек (БД или fallback из core/settings)."""
+    if settings and settings.similarity:
+        return settings.similarity.get_layer_keywords(layer)
+    return ()
 
 
 class LayerClassifier:
@@ -105,7 +46,7 @@ class LayerClassifier:
         self._morph = morph
         # {layer: множество лемматизированных ключевых слов}
         self._keyword_lemmas: Dict[str, Set[str]] = {}
-        for layer in LAYER_PRIORITY:
+        for layer in _LAYER_PRIORITY:
             self._keyword_lemmas[layer] = {
                 self._lemma(kw) for kw in _get_layer_keywords(layer) if kw
             }
@@ -132,18 +73,8 @@ class LayerClassifier:
 
         token_lemmas: Set[str] = {l.normal_form for l in lemmas if l.normal_form}
 
-        for layer in LAYER_PRIORITY:
+        for layer in _LAYER_PRIORITY:
             if self._keyword_lemmas[layer] & token_lemmas:
                 return layer
-
-        # Fuzzy fallback: for 'pig' results, try fuzzy-matching
-        # original surfaces against keyword lemmas (catches typos).
-        from rapidfuzz import fuzz
-        token_surfaces = {l.surface.lower() for l in lemmas if l.surface}
-        for layer in LAYER_PRIORITY:
-            for kw_lemma in self._keyword_lemmas[layer]:
-                for token_surface in token_surfaces:
-                    if fuzz.ratio(kw_lemma, token_surface) >= 85:
-                        return layer
 
         return 'pig'

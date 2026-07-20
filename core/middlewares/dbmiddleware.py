@@ -1,12 +1,12 @@
 from aiogram import BaseMiddleware
 from typing import Dict, Any, Callable, Awaitable
-from core.db.db_base import Database
+from core.db.dbconnect import Request
 
 class DbMiddleware(BaseMiddleware):
-    """Middleware to inject database pool into aiogram handler data."""
+    """Middleware to inject database request handler."""
     
-    def __init__(self, db_pool: Database):
-        self.db_pool = db_pool
+    def __init__(self, request: Request):
+        self.request = request
 
     async def __call__(
         self,
@@ -14,5 +14,5 @@ class DbMiddleware(BaseMiddleware):
         event: Any,
         data: Dict[str, Any]
     ) -> Any:
-        data["request"] = self.db_pool
+        data["request"] = self.request
         return await handler(event, data)

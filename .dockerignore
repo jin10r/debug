@@ -80,7 +80,7 @@ model/models/
 model/.cache/
 
 # Legacy model directory (model moved to parser/ner_loc_onnx/)
-# models/ — используется processor, не исключаем из контекста сборки
+models/
 
 # Large unquantized model — only model_quantized.onnx is used at runtime (28 MB vs 116 MB)
 parser/ner_loc_onnx/model.onnx

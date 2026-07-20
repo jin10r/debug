@@ -70,8 +70,7 @@ export class WebSocketManager {
         const initData    = window.Telegram?.WebApp?.initData;
 
         if (!accessToken && !initData) {
-            console.warn('[WS] No auth credentials available yet — retrying in 500ms');
-            setTimeout(() => this.connect(), 500);
+            console.error('[WS] No auth credentials available');
             return;
         }
 

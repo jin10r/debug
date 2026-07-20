@@ -2,14 +2,70 @@ from dataclasses import dataclass, field
 from environs import Env
 from typing import Optional
 import logging
-import os
 import secrets
 
 logger = logging.getLogger(__name__)
 
-# NOTE: DEFAULT_LAYER_KEYWORDS and LAYER_PRIORITY are defined in
-# parser/layer_classifier.py — the only consumer. core/settings.py
-# keeps only the LayerConfig dataclass for the /api/config endpoint.
+# Ключевые слова слоёв — канонические словоформы (не стемы).
+# LayerClassifier лемматизирует и ключи, и токены сообщения через mawo_pymorphy3,
+# поэтому все падежи/числа словоформ совпадают автоматически.
+#
+# Порядок ключей задаёт приоритет классификации: первый совпавший слой
+# выигрывает (см. parser/layer_classifier.py). 'pig' — fallback без ключей.
+DEFAULT_LAYER_KEYWORDS: dict[str, tuple] = {
+    'bus': (
+        'автобус',
+        'бус',
+        'хайс',
+        'спринтер',
+        'рено',
+        'фольксваген',
+        'хёндай',
+        'Хундай',
+        'вито',
+        'сталкер',
+        'транспортёр',
+        'h1', 'h2', 'h3', 'h4', 'h5',
+        'т5', 'т4', 'т3', 'т2', 'т1',
+        'н1', 'н2', 'н3', 'н4', 'н5',
+        # pymorphy лемматизирует «бус»→«бусы», но «буса»/«бусик»→самостоятельные
+        # леммы ⇒ косвенные/слэнговые формы не совпадали. Добавлены явно.
+        'буса', 'бусик',
+    ),
+    'cops': (
+        'коп',
+        'полиция',
+        'мусор',
+        'мусара',
+        'люстра',
+        'мигалка',
+        'патруль',
+        'экипаж',
+        'мент',
+        'менты',
+        'полицейский',
+        'полицай',
+        'police',
+        'мусорня',
+        'мусорской'
+        
+    ),
+    'traffic': (
+        'дтп',
+        'авария',
+        'пробка',
+        'затор',
+        'светофор',
+        'блокпост',
+        'пост',
+        'бп',
+        'б/п'
+    ),
+    'pig': (),
+}
+
+# Порядок приоритета (исключая fallback 'pig').
+LAYER_PRIORITY: tuple = tuple(k for k in DEFAULT_LAYER_KEYWORDS if k != 'pig')
 
 
 @dataclass
@@ -94,7 +150,7 @@ class SimilarityConfig:
     # Высокий — это ИСПРАВЛЕНИЕ опечаток (DL 1-2), а не семантический матч:
     # отсекает "среди"/"Средняя" (разные слова), пропускает "чепаевская"/
     # "чапаевская". Падежи ловит стем-индекс (Tier 1), не fuzzy.
-    surface_typo_threshold: float = 0.85
+    surface_typo_threshold: float = 0.90
 
     # Sliding-window: максимальный размер окна (токенов) при генерации кандидатов.
     # Окно 1..max_sliding_window охватывает улицы из 1, 2 или 3 слов.
@@ -107,7 +163,7 @@ class SimilarityConfig:
     # Мин. score вторичного матча для участия в ГЕОМЕТРИИ мультиматч-пересечений
     # (process_candidates). Ниже порога матч остаётся в matches (для прозрачности),
     # но не искажает intersection/polygon. single_match-fallback берёт лучший по score.
-    geometry_min_score: float = 0.80
+    geometry_min_score: float = 0.85
 
     # SemanticResolver — параметры интеллектуального анализатора geo-конфликтов.
     # Модель определяет стратегию (single_match/intersection/midpoint),
@@ -127,30 +183,19 @@ class SimilarityConfig:
         '#', '/', ',', '.', '(', ')', '!', '?', '-', '«', '»', '"', ':', ';',
     )
 
-    # NOTE: Layer keyword data is defined in parser/layer_classifier.py.
-    # SimilarityConfig no longer owns layer keywords — the parser reads its
-    # own DEFAULT_LAYER_KEYWORDS directly.
+    def get_layer_keywords(self, layer: str) -> tuple:
+        return DEFAULT_LAYER_KEYWORDS.get(layer, ())
 
 
 @dataclass
 class ParserConfig:
-    """Параметры parser-сервиса (kurigram, photo download).
-
-    api_id/api_hash НЕ хранятся здесь — они используются ТОЛЬКО в gen_session.py
-    для одноразовой генерации session.session (G-15).
-    """
+    """Параметры parser-сервиса (kurigram, photo download)."""
 
     # Сколько сообщений тянуть из истории канала при старте парсера.
     history_limit: int = 100
 
     # Каталог хранения медиафайлов (фотографии событий).
     events_media_dir: str = "/media/events"
-
-    # Размер очереди сообщений (максимум сообщений в asyncio.Queue).
-    message_queue_maxsize: int = 500
-
-    # Число воркеров, обрабатывающих очередь сообщений.
-    worker_concurrency: int = 5
 
     # SOCKS5/HTTP proxy для pyrogram.
     socks5_host: Optional[str] = None
@@ -184,52 +229,42 @@ class QuestionOverlayConfig:
 
 @dataclass
 class LayerConfig:
-    """Layer keywords for the /api/config endpoint.
-
-    These defaults mirror parser/layer_classifier.py::DEFAULT_LAYER_KEYWORDS
-    to keep the core's config endpoint independent of the parser module.
-    """
-    cops: tuple = (
-        'коп', 'полиция', 'мусор', 'мусара', 'люстра', 'мигалка',
-        'патруль', 'экипаж', 'мент', 'менты', 'менти', 'полицейский',
-        'полицай', 'police', 'мусорня', 'мусорской',
-    )
-    bus: tuple = (
-        'автобус', 'бус', 'хайс', 'спринтер', 'рено', 'фольксваген',
-        'фольц', 'хёндай', 'Хундай', 'вито', 'сталкер', 'транспортёр',
-        'h1', 'h2', 'h3', 'h4', 'h5', 'т5', 'т4', 'т3', 'т2', 'т1',
-        'н1', 'н2', 'н3', 'н4', 'н5', 'буса', 'бусик', 'бусинка',
-    )
-    traffic: tuple = (
-        'дтп', 'авария', 'пробка', 'затор', 'светофор',
-        'блокпост', 'пост', 'бп', 'б/п',
-    )
-    pig: tuple = ()
-
-    _ALL_LAYERS = ('bus', 'cops', 'traffic', 'pig')
+    cops: tuple = field(default_factory=lambda: DEFAULT_LAYER_KEYWORDS['cops'])
+    bus: tuple = field(default_factory=lambda: DEFAULT_LAYER_KEYWORDS['bus'])
+    traffic: tuple = field(default_factory=lambda: DEFAULT_LAYER_KEYWORDS['traffic'])
+    pig: tuple = field(default_factory=lambda: DEFAULT_LAYER_KEYWORDS['pig'])
 
     def as_dict(self) -> dict:
-        """Слой → tuple ключевых слов."""
-        return {layer: getattr(self, layer) for layer in self._ALL_LAYERS}
+        """Слой → tuple ключевых слов. Порядок соответствует LAYER_PRIORITY + 'pig'."""
+        return {layer: getattr(self, layer) for layer in DEFAULT_LAYER_KEYWORDS}
 
 
 @dataclass
-class LlamaConfig:
-    """Локальная LLM через ONNX Runtime (optimum).
+class NominatimConfig:
+    enabled: bool = True
+    host: str = "nominatim"
+    port: int = 8080
+    query_timeout: int = 10
+    max_results: int = 5
+    confidence_multiplier: float = 0.85
+    # API endpoint paths (стандартные для Nominatim)
+    search_path: str = "/search"
+    reverse_path: str = "/reverse"
 
-    Модель Qwen2.5-0.5B-Instruct ONNX (~300 MB) запускается in-process —
-    без внешнего сервера, без HTTP.
 
-    Если enabled=False или модель не найдена — грациозный fallback
-    к текущему пайплайну (pre-filter rules).
+@dataclass
+class OllamaConfig:
+    """Ollama LLM geo-resolution (Tier-2 fallback).
+
+    Всегда активен (enabled=True), но НЕ обязателен — при недоступности хоста
+    приложение продолжает работу без ошибок. Хост переопределяется через env
+    OLLAMA_HOST (по умолчанию http://host.docker.internal:11434).
     """
     enabled: bool = False
-    model_path: str = '/app/models/qwen2.5-0.5b-instruct-onnx'
-    n_ctx: int = 2048
-    batch_size: int = 8
-    batch_timeout_ms: int = 50
-    n_threads: int = 4
-    verbose: bool = False
+    base_url: str = 'http://host.docker.internal:11434'
+    model: str = 'qwen2.5:0.5b'
+    timeout_s: int = 15
+    max_tokens: int = 128
 
 
 @dataclass
@@ -243,7 +278,8 @@ class Settings:
     parser: ParserConfig = field(default_factory=ParserConfig)
     processor: ProcessorConfig = field(default_factory=ProcessorConfig)
     question_overlay: QuestionOverlayConfig = field(default_factory=QuestionOverlayConfig)
-    llama: LlamaConfig = field(default_factory=LlamaConfig)
+    ollama: OllamaConfig = field(default_factory=OllamaConfig)
+    nominatim: NominatimConfig = field(default_factory=NominatimConfig)
 
 
 def _resolve_jwt_secret(env: Env) -> str:
@@ -309,6 +345,8 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
             if require_jwt else None
         )
 
+        ollama_host = env.str("OLLAMA_HOST", None)
+
         return Settings(
             app=AppConfig(
                 telegram_validation_enabled=env.bool(
@@ -334,14 +372,11 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
                 proxy_scheme=env.str("PROXY_SCHEME", "socks5"),
             ),
             question_overlay=QuestionOverlayConfig(),
-            llama=LlamaConfig(
-                enabled=env.bool("LLAMA_ENABLED", default=False),
-                model_path=env.str("LLAMA_MODEL_PATH", "/app/models/qwen2.5-0.5b-instruct-onnx"),
-                n_ctx=env.int("LLAMA_N_CTX", default=2048),
-                batch_size=env.int("LLAMA_BATCH_SIZE", default=8),
-                batch_timeout_ms=env.int("LLAMA_BATCH_TIMEOUT_MS", default=50),
-                n_threads=env.int("LLAMA_N_THREADS", default=4),
-                verbose=env.bool("LLAMA_VERBOSE", default=False),
+            ollama=OllamaConfig(
+                base_url=ollama_host or 'http://host.docker.internal:11434',
+            ),
+            nominatim=NominatimConfig(
+                enabled=env.bool("NOMINATIM_ENABLED", default=True),
             ),
         )
     except Exception as e:

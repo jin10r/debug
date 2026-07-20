@@ -1,24 +1,12 @@
 # Telegram client (kurigram — поддерживаемый форк pyrogram)
-kurigram==2.2.23
-tgcrypto==1.2.5
+kurigram==2.2.9
+tgcrypto~=1.2
 
 # Database
-asyncpg==0.31.0           # PostgreSQL client (пин согласован с корневым requirements.txt)
+asyncpg~=0.29
 
-# Морфология (токенизация — собственный regex-разбивщик parser/word_tokenizer.py)
-mawo-pymorphy3==1.0.4    # Russian morphological analyzer (слои + порядковые; DAWG ~15-20 MB)
+# Configuration (через core.settings)
+environs~=11.0
 
-# Стемминг улиц — OOV-устойчивый Snowball-стем (имена улиц несловарны, pymorphy
-# на них врёт). Ядро распознавания: стем-кортеж как ключ. Чистый Python, ~50 КБ.
-snowballstemmer==3.1.1
-
-# Фуззи-матч против alias-индекса
-rapidfuzz==3.14.5          # Fast fuzzy string matching (C implementation, SIMD)
-
-# Configuration — core.settings импортирует environs; parser использует core.settings.
-# Без этого пакета parser падает при старте.
-environs==15.0.1
-
-# Timezone data — stdlib zoneinfo использует этот пакет как источник данных
-# о часовых поясах (базовый образ python:3.11-slim системную базу не содержит).
-tzdata==2025.2
+# Timezone data
+tzdata~=2024.1

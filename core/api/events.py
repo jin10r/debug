@@ -1,8 +1,11 @@
 """Events API handlers"""
+import asyncio
 import json
 import logging
 import hashlib
 from datetime import datetime
+
+import aiohttp
 from aiohttp import web
 from pydantic import ValidationError
 
@@ -14,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 async def get_events_status_handler(request: web.Request):
-    db_events = request.app['db'].events
+    db_request = request.app['db']
 
     # Поддержка как GET, так и POST запросов
     if request.method == 'POST':
@@ -23,7 +26,7 @@ async def get_events_status_handler(request: web.Request):
         except Exception:
             pass  # Игнорируем ошибки при чтении тела POST-запроса
 
-    meta = await db_events.get_events_meta()
+    meta = await db_request.get_events_meta()
 
     updated_at = meta.get('updated_at')
     updated_at_str = updated_at.isoformat() if updated_at else None
@@ -36,7 +39,7 @@ async def get_events_status_handler(request: web.Request):
 
 
 async def post_events_updates_handler(request: web.Request):
-    db_events = request.app['db'].events
+    db_request = request.app['db']
 
     try:
         data = await request.json()
@@ -56,7 +59,7 @@ async def post_events_updates_handler(request: web.Request):
         return web.json_response({'error': 'Invalid after_id'}, status=400)
 
     if after_id > 0:
-        min_id = await db_events.get_events_min_id()
+        min_id = await db_request.get_events_min_id()
         if min_id and after_id < (min_id - 1):
             return web.json_response({'resync_required': True}, status=409)
 
@@ -68,8 +71,8 @@ async def post_events_updates_handler(request: web.Request):
     except Exception:
         limit = 2000
 
-    meta = await db_events.get_events_meta()
-    geojson_data = await db_events.get_events_updates_as_geojson(after_id=after_id, limit=limit)
+    meta = await db_request.get_events_meta()
+    geojson_data = await db_request.get_events_updates_as_geojson(after_id=after_id, limit=limit)
 
     updated_at = meta.get('updated_at')
     updated_at_str = updated_at.isoformat() if updated_at else None
@@ -83,7 +86,7 @@ async def post_events_updates_handler(request: web.Request):
 
 
 async def get_events_snapshot_handler(request: web.Request):
-    db_events = request.app['db'].events
+    db_request = request.app['db']
     logger.info(f"[Events Snapshot] Request received, path: {request.path}, method: {request.method}")
 
     limit_raw = request.query.get('limit', '5000')
@@ -95,8 +98,8 @@ async def get_events_snapshot_handler(request: web.Request):
     except Exception:
         limit = 5000
 
-    meta = await db_events.get_events_meta()
-    geojson_data = await db_events.get_events_snapshot_as_geojson(limit=limit)
+    meta = await db_request.get_events_meta()
+    geojson_data = await db_request.get_events_snapshot_as_geojson(limit=limit)
     
     features_count = len(geojson_data.get('features', [])) if geojson_data else 0
     logger.info(f"[Events Snapshot] Returning {features_count} features")
@@ -117,7 +120,7 @@ async def get_events_handler(request: web.Request):
     Optimized events handler with ETag support for conditional requests.
     Reduces bandwidth by returning 304 Not Modified when data hasn't changed.
     """
-    db_events = request.app['db'].events
+    db_request = request.app['db']
     cache: CacheManager = request.app.get('cache')
     
     try:
@@ -139,7 +142,7 @@ async def get_events_handler(request: web.Request):
         # Incremental updates bypass cache and ETag
         if filters.since:
             since_dt = datetime.fromisoformat(filters.since.replace('Z', '+00:00'))
-            geojson_data = await db_events.get_incremental_events(
+            geojson_data = await db_request.get_incremental_events(
                 since=since_dt,
                 time_interval_minutes=filters.time_filter,
                 layers=filters.layers or None
@@ -153,7 +156,7 @@ async def get_events_handler(request: web.Request):
         
         # If no cache, fetch from DB
         if not cached_response:
-            geojson_data = await db_events.get_filtered_events_as_geojson(
+            geojson_data = await db_request.get_filtered_events_as_geojson(
                 time_interval_minutes=filters.time_filter,
                 layers=filters.layers or None
             )
@@ -214,9 +217,9 @@ async def get_geo_handler(request: web.Request):
             )
     
     # Fetch from DB
-    db_geo = request.app['db'].geo
+    db_request = request.app['db']
     try:
-        geojson_data = await db_geo.get_all_geo_as_geojson()
+        geojson_data = await db_request.get_all_geo_as_geojson()
         
         # Cache for 1 hour
         if cache:
@@ -235,12 +238,35 @@ async def get_geo_handler(request: web.Request):
         return web.json_response({'error': 'Internal server error'}, status=500)
 
 
+async def reverse_geocode_handler(request: web.Request):
+    proxy = request.app.get('nominatim_proxy', 'http://nominatim:8080')
+    lat = request.query.get('lat')
+    lon = request.query.get('lon')
+    if not lat or not lon:
+        return web.json_response({'error': 'lat and lon required'}, status=400)
+    try:
+        async with aiohttp.ClientSession() as session:
+            url = f"{proxy}/reverse?lat={lat}&lon={lon}&format=json&zoom=18"
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status != 200:
+                    return web.json_response(
+                        {'error': 'Nominatim error', 'status': resp.status},
+                        status=502,
+                    )
+                data = await resp.json()
+                return web.json_response(data)
+    except asyncio.TimeoutError:
+        return web.json_response({'error': 'Nominatim timeout'}, status=504)
+    except Exception as exc:
+        return web.json_response({'error': str(exc)}, status=502)
+
+
 async def get_data_status_handler(request: web.Request):
     """Проверяет статус данных - когда было последнее обновление."""
-    db_events = request.app['db'].events
+    db_request = request.app['db']
     try:
         # Получаем последнее событие из БД
-        latest_event = await db_events.get_latest_update_time()
+        latest_event = await db_request.get_latest_event_time()
         
         if not latest_event:
             return web.json_response({

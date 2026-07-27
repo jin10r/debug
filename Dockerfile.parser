@@ -1,28 +1,23 @@
-# Dockerfile.parser — Parser service (snowballstemmer + mawo-pymorphy3 + rapidfuzz, CPU-only)
+# Dockerfile.parser — Parser service (kurigram + text preprocessing + photo download)
 # Multi-stage build для минимизации размера образа
 
 # =============================================================================
-# Stage 1: Builder (установка зависимостей + smoke-test stemmer/pymorphy3/rapidfuzz)
+# Stage 1: Builder
 # =============================================================================
 FROM python:3.11.10-slim-bookworm AS builder
 
 WORKDIR /build
 
-RUN --mount=type=cache,target=/var/cache/apt,id=parser-apt \
-    apt-get update && apt-get install -y --no-install-recommends gcc \
-    && rm -rf /var/lib/apt/lists/*
-
 COPY parser/requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --user -r requirements.txt && \
+    pip install --user --no-cache-dir -r requirements.txt && \
     find /root/.local -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true && \
-    find /root/.local -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true && \
     find /root/.local -type f -name "*.pyc" -delete && \
     find /root/.local -type f -name "*.pyo" -delete && \
     find /root/.local -type f -name "*.md" -delete
 
 ENV PATH="/root/.local/bin:$PATH"
-RUN python -c "from rapidfuzz import fuzz; from mawo_pymorphy3 import MorphAnalyzer; import snowballstemmer; snowballstemmer.stemmer('russian'); print('✅ deps OK')"
+RUN python -c "from pyrogram import Client; print('✅ kurigram OK')"
 
 # =============================================================================
 # Stage 2: Runtime (минимальный образ)
@@ -49,8 +44,6 @@ RUN useradd -m -u 1000 parser && \
 
 COPY --chown=parser:parser parser/ ./parser/
 COPY --chown=parser:parser core/ ./core/
-
-# Healthcheck задаётся в docker-compose.yml (pgrep на процесс monitoring).
 
 USER parser
 

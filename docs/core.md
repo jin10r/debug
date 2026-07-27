@@ -1,11 +1,9 @@
-# Core microservice — логика и архитектура
+# Core microservice
 
 Сервис `core` (контейнер из `Dockerfile.core`) — backend на `aiohttp`. Отдаёт
-REST API и WebSocket фронтенду, валидирует Telegram-сессии (JWT), и мостит
+REST API и WebSocket фронтенду, валидирует Telegram-сессии (JWT), мостит
 события из PostgreSQL в реальном времени: `LISTEN/NOTIFY` → broadcast по
-WebSocket. Наружу не публикуется — всё проксирует сервис `web` (nginx).
-
-Код — каталог `core/`. Точка входа — `main.py` → `core/app_factory.py`.
+WebSocket. Наружу не публикуется — проксируется сервисом `web` (nginx).
 
 ## Технологический стек
 
@@ -13,7 +11,7 @@ WebSocket. Наружу не публикуется — всё проксиру�
 |-----------|-----------|
 | `aiohttp` | HTTP-сервер, REST, WebSocket |
 | `asyncpg` | PostgreSQL-пул + `LISTEN/NOTIFY` |
-| `aiogram` | Telegram-бот (Mini App entry), `pydantic`-модели |
+| `aiogram` | Telegram-бот (Mini App entry) |
 | `pyjwt` (HS256) | access/refresh-токены сессии |
 | `prometheus-client` | метрики `/metrics` |
 | `pybreaker` | circuit breaker вокруг Telegram-валидации |
@@ -31,15 +29,13 @@ core/
 │   ├── health.py           # /health, /health/ready, /health/detailed
 │   ├── auth.py             # /api/validate-init, /api/auth/refresh
 │   ├── config.py           # /api/config, /api/validation-config
-│   ├── events.py           # /api/events (snapshot + инкременты), /status
+│   ├── events.py           # /api/events (snapshot + инкременты)
 │   ├── websocket.py        # /ws — WebSocketManager (register/broadcast)
 │   └── media.py            # отдача медиа событий
 ├── middlewares/
-│   ├── logging_config.py   # structured logging
-│   ├── metrics.py          # prometheus metrics middleware + /metrics
-│   ├── csrf.py             # CSRF-защита мутаций
-│   ├── jwt_auth.py         # проверка access-токена на защищённых маршрутах
 │   ├── auth.py             # JWT issue/verify
+│   ├── jwt_auth.py         # проверка access-токена на защищённых маршрутах
+│   ├── csrf.py             # CSRF-защита мутаций
 │   ├── ratelimit.py        # fixed-window rate limiter (per ip+path)
 │   └── dbmiddleware.py     # инъекция db-адаптера в request
 ├── db/
@@ -50,83 +46,55 @@ core/
 │   └── db_spatial.py       # PostGIS-запросы
 └── utils/
     ├── cache.py            # in-memory TTL+LRU кэш событий
-    ├── telegram_validation.py  # HMAC-SHA256 валидация initData
-    └── metrics.py          # prometheus-метрики
+    ├── logging_config.py   # structured logging
+    ├── metrics.py          # prometheus-метрики
+    └── telegram_validation.py  # HMAC-SHA256 валидация initData
 ```
 
 ## Middleware-цепочка
 
-Порядок (`core/app_factory.py`), запрос проходит сверху вниз:
+Порядок (`core/app_factory.py`):
 
 1. `logging_middleware` — структурный лог запроса
 2. `metrics_middleware` — prometheus-счётчики latency/статусов
 3. `csrf_middleware` — CSRF-проверка мутирующих запросов
 4. `jwt_auth_middleware` — валидация access-токена (защищённые маршруты)
-5. `rate_limiter.middleware` — fixed-window лимит (60/мин по умолчанию,
-   per-endpoint override для `/api/events`, `/api/geo`; health исключён)
+5. `rate_limiter.middleware` — fixed-window лимит (60/мин по умолчанию)
 
 ## Маршруты
 
 | Метод | Путь | Назначение |
 |-------|------|-----------|
 | GET | `/health`, `/health/live` | liveness |
-| GET | `/health/ready` | readiness (актуальный probe БД/bot) |
+| GET | `/health/ready` | readiness (актуальный probe БД) |
 | GET | `/health/detailed` | метрики пула/кэша |
 | GET/POST | `/api/validation-config` | конфиг валидации для фронта |
 | POST | `/api/validate-init` | HMAC-проверка Telegram initData → JWT |
 | POST | `/api/auth/refresh` | обновление access-токена |
 | POST | `/api/config` | подтверждение сессии |
 | GET | `/api/events` | snapshot событий |
-| POST | `/api/events` | инкрементальные обновления |
-| GET | `/api/events/status`, `/api/data_status` | статус данных |
+| POST | `/api/events` | создание события (ручной ввод с карты) |
+| GET | `/api/events/status`, `/api/data-status` | статус данных |
 | GET | `/api/geo` | газеттир |
 | GET | `/ws` | WebSocket (live-события) |
 | GET | `/metrics` | prometheus |
 
-## Поток live-событий (LISTEN/NOTIFY → WebSocket)
+## Поток live-событий
 
-```mermaid
-flowchart LR
-    P[parser INSERT events] --> T[триггер pg_notify]
-    T -->|events_new| L[_run_pg_notify_listener<br/>core/app_factory.py]
-    C[pg_cron TTL cleanup] -->|events_cleaned| L
-    L --> WM[WebSocketManager]
-    WM -->|FeatureCollection| F[фронтенд-клиенты]
-```
-
-- Выделенное соединение `asyncpg` слушает каналы `events_new` и `events_cleaned`
-  (`conn.add_listener`, `core/app_factory.py`).
-- На NOTIFY создаётся broadcast-задача (хранится в set, чтобы не потеряться GC),
-  `WebSocketManager._broadcast_payload` рассылает всем клиентам; мёртвые
-  соединения снимаются с регистрации в процессе рассылки и в `finally`.
-- Доставка best-effort: при реконнекте листенера событие может потеряться, но
-  оно persist в БД, а фронт при (ре)коннекте делает полный fetch и догоняет.
+Выделенное соединение `asyncpg` слушает каналы `events_new` и `events_cleaned`.
+На NOTIFY создаётся broadcast-задача, `WebSocketManager._broadcast_payload`
+рассылает всем клиентам. Доставка best-effort: при реконнекте листенера
+фронт делает полный fetch.
 
 ## Аутентификация
 
 - **Telegram initData** — HMAC-SHA256 по спецификации Telegram
-  (`core/utils/telegram_validation.py`): `secret = HMAC("WebAppData", bot_token)`,
-  затем сверка `hash` через `hmac.compare_digest` (constant-time). Проверка
-  свежести `auth_date` (24 ч). Обёрнуто в circuit breaker (`pybreaker`).
-- **JWT** — HS256, access TTL 15 мин / refresh 24 ч (`core/settings.py JWTConfig`).
-  Секрет автогенерируется эфемерно в памяти при старте (`_resolve_jwt_secret`),
-  если `JWT_SECRET` не задан в env; рестарт → новый секрет → ранее выданные токены
-  инвалидируются. `JWT_SECRET` в env — опциональный override для стабильного/общего
-  (multi-replica) секрета (≥32 символов).
-- **Состояние аутентификации** — stateless: JWT проверяется по подписи, кэш
-  верификации — in-memory (`_jwt_token_cache` в `core/middlewares/auth.py`).
-  Внешний session/nonce store не используется (core — один процесс).
+  (`core/utils/telegram_validation.py`). Обёрнуто в circuit breaker (pybreaker).
+- **JWT** — HS256, access TTL 15 мин / refresh 24 ч. Секрет автогенерируется
+  эфемерно в памяти при старте, если `JWT_SECRET` не задан в env.
 
 ## Конфигурация
 
 `core/settings.py` — всё, кроме секретов, захардкожено в `@dataclass`. Из env
 читаются только: `BOT_TOKEN`, `WEBAPP_URL`, `REDIRECT_URL`,
-`TELEGRAM_VALIDATION_ENABLED` (`JWT_SECRET` — опциональный override автогенерации).
-Параметры пула БД/матчера правятся прямо в `settings.py`.
-
-## Health / observability
-
-- `/health/ready` — без кэша (LB не пошлёт трафик на падающую БД), проверяет
-  PostgreSQL (обязателен), bot.
-- `/health` (liveness) — TTL-кэш probe БД 5 с.
-- `/metrics` — prometheus (`set_application_info(version='2.0.0')`).
+`TELEGRAM_VALIDATION_ENABLED`.

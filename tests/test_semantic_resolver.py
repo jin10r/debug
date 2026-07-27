@@ -3,7 +3,7 @@
 Проверяет быстрые правила определения стратегии:
   • prepositional construction → midpoint
   • type hint in text → single_match / midpoint
-  • duplicate names → fallback to model (None)
+  • duplicate names → fallback (None)
   • single candidate → None (решается на уровень выше в message_processor)
 """
 
@@ -21,7 +21,12 @@ if "parser" not in sys.modules:
     _pkg.__path__ = [str(ROOT / "parser")]
     sys.modules["parser"] = _pkg
 
-from parser.semantic_resolver import SemanticResolver  # noqa: E402
+if "processor" not in sys.modules:
+    _pkg = types.ModuleType("processor")
+    _pkg.__path__ = [str(ROOT / "processor")]
+    sys.modules["processor"] = _pkg
+
+from processor.semantic_resolver import SemanticResolver  # noqa: E402
 
 
 @pytest.fixture
@@ -29,7 +34,6 @@ def resolver():
     r = SemanticResolver(None, None)
     r._initialized = True
     r._stopwords = {'на', 'по', 'в', 'у', 'до', 'с', 'и', 'а', 'не'}
-    r._ollama_base = None
     return r
 
 
@@ -61,7 +65,6 @@ class TestPreFilterPrepositional:
             (4, "Ильичёвск", "town"),
         )
         result = resolver._pre_filter("от Александровки до Ильичёвска", cand)
-        # village/town не входит в _MIDPOINT_TYPES → pre-filter пропускает
         assert result is None
 
     async def test_mezhdu_midpoint(self, resolver):
@@ -96,7 +99,6 @@ class TestPreFilterTypeHint:
             (3, "Александровка", "village"),
         )
         result = resolver._pre_filter("село Александровка блокпост", cand)
-        # Несколько village → всё равно pre-filter не может выбрать один
         assert result is None or len(result['geo_ids']) > 1
 
     async def test_pgt_hint(self, resolver):
@@ -137,7 +139,7 @@ class TestPreFilterDuplicateNames:
     """Правило 3: одноимённые объекты."""
 
     async def test_duplicate_names_no_other_candidate(self, resolver):
-        """Только дубликаты одного имени, без других кандидатов → None."""
+        """Только дубликаты одного имени → None."""
         cand = _make_candidates(
             (1, "Александровка", "village"),
             (2, "Александровка", "town"),
@@ -147,7 +149,7 @@ class TestPreFilterDuplicateNames:
         assert result is None
 
     async def test_duplicate_names_with_other_candidate(self, resolver):
-        """Дубликат + другой кандидат → None (пусть модель решает)."""
+        """Дубликат + другой кандидат → None."""
         cand = _make_candidates(
             (1, "Александровка", "village"),
             (2, "Александровка", "town"),
@@ -183,22 +185,3 @@ class TestResolveIntegration:
         )
         result = resolver._pre_filter("от Ланжероновской до Дерибасовской", cand)
         assert result is None or result['strategy'] in ('single_match', 'intersection', 'midpoint')
-
-
-class TestBuildPrompt:
-    """Проверка формирования промпта (только структура)."""
-
-    def test_prompt_contains_text_and_candidates(self):
-        from parser.semantic_resolver import _build_prompt
-
-        prompt = _build_prompt("Александровка блокпост", [
-            {"geo_id": 1, "matched_name": "Александровка", "type": "village"},
-            {"geo_id": 2, "matched_name": "Ильичёвск", "type": "town"},
-        ])
-        assert "Александровка" in prompt
-        assert "1" in prompt
-        assert "village" in prompt
-        assert "single_match" in prompt
-        assert "intersection" in prompt
-        assert "midpoint" in prompt
-        assert "json" in prompt.lower()

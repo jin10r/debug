@@ -1,48 +1,52 @@
-# Postgres microservice — хранилище (PostGIS)
+# Postgres microservice
 
 Сервис `postgres` (контейнер из `Dockerfile.postgres`) — PostgreSQL + PostGIS.
-Хранит газеттир улиц и геолоцированные события. Во внутренней сети
-(`db`, `internal: true`) — наружу не публикуется. Креды захардкожены
-(`postgres/postgres`), синхронизированы с `core/settings.py DatabaseConfig`.
+Хранит справочник гео-объектов, события с геометрией и очередь необработанных
+сообщений. Во внутренней сети (`db`, `internal: true`).
 
-## Схема (`postgres/init-scripts/02-tables.sql`)
+## Схема
 
 | Таблица | Назначение |
 |---------|-----------|
-| `geo` | газеттир: `names TEXT[]` (синонимы), `geom GEOMETRY(Geometry,4326)`, `type VARCHAR(20)`. Индексы: GIN по `names`, GiST по `geom`, btree по `type` |
-| `events` | события: `event_time TIMESTAMPTZ`, `layer`, `strategy` (CHECK на 4 значения), `geom`, уникальный `message_id`. Индексы по time/geom/layer |
-| `stopwords` | стоп-слова матчера |
-| `layer_keywords` | ключевые слова классификатора слоёв |
-| `events_meta`, `table_updates` | служебные метаданные/таймстемпы обновлений |
+| `geo` | Справочник: `names TEXT[]` (синонимы), `geom GEOMETRY(Geometry,4326)`, `type VARCHAR(20)` |
+| `events` | События: `event_time TIMESTAMPTZ`, `layer`, `strategy`, `geom GEOMETRY(Geometry,4326)` |
+| `pending_events` | Очередь: необработанные сообщения от parser, читается processor (SKIP LOCKED) |
+| `stopwords` | Стоп-слова матчера |
+| `layer_keywords` | Ключевые слова классификатора слоёв |
+| `events_meta` | Метаданные: version, max_event_id для синхронизации WebSocket |
 
-`strategy ∈ {random, single_match, single_intersection, polygon_intersection}` —
-ровно те значения, что выдаёт `process_candidates`.
+## Init-скрипты
 
-## Init-скрипты (выполняются при инициализации тома БД, по порядку)
+Выполняются при инициализации пустого тома БД, по порядку:
 
 | Скрипт | Назначение |
 |--------|-----------|
 | `01-extensions.sql` | PostGIS, pg_cron, pg_stat_statements |
-| `02-tables.sql` | схема таблиц + индексы |
+| `02-tables.sql` | Схема таблиц + индексы |
 | `03-functions.sql` | TTL-очистка событий (pg_cron каждые 5 мин) |
-| `04-load-data.sql` | идемпотентная загрузка `geo.csv`, `stopwords.csv` |
-| `06-notify-trigger.sql` | NOTIFY об изменении улиц (для парсера) |
-| `08-process-candidates.sql` | геолокация: кандидаты → точка/пересечение/полигон |
-| `09-event-geom-trigger.sql` | валидация geometry type ↔ strategy при INSERT/UPDATE |
-
-> Init-скрипты исполняются только при **пустом** томе. После правки
-> `geo.csv` нужно либо `docker compose down -v` (пересоздать том), либо
-> вставить запись вручную через `psql` (см. README).
+| `04-load-data.sql` | Загрузка `geo.csv`, `stopwords.csv` |
+| `05-role-timeouts.sql` | statement_timeout по ролям |
+| `06-notify-trigger.sql` | pg_notify для новых событий |
+| `07-indexes.sql` | Дополнительные индексы |
+| `08-process-candidates.sql` | Функция geo-resolution |
+| `09-event-geom-trigger.sql` | Валидация geometry ↔ strategy |
+| `10-pending-events.sql` | Таблица и триггеры pending_events |
+| `11-partition-maintenance.sql` | Обслуживание партиций |
+| `12-materialized-views.sql` | Materialized views |
 
 ## TTL событий
 
-`events.event_time TIMESTAMPTZ`; pg_cron каждые 5 минут удаляет события старше
-1 часа (`03-functions.sql`, `event_time < NOW() - INTERVAL '1 hour'`). Сравнение
-по абсолютным моментам — не зависит от session timezone.
+`pg_cron` каждые 5 минут удаляет события старше 1 часа
+(`event_time < NOW() - INTERVAL '1 hour'`).
 
 ## Live-уведомления
 
-- `parser` пишет событие → триггер шлёт `pg_notify('events_new', …)`.
-- pg_cron при очистке шлёт `events_cleaned`.
-- Слушает сервис `core` (`asyncpg add_listener`), мостит в WebSocket
-  (см. [core.md](core.md)).
+- Триггер `notify_event_inserted` → `pg_notify('events_new', GeoJSON)`
+- pg_cron при очистке → `events_cleaned`
+- Слушает сервис `core` (asyncpg add_listener) → WebSocket broadcast
+
+## Справочные данные
+
+- `postgres/data/geo.csv` — гео-объекты (улицы, сёла, станции)
+- `postgres/data/geo_additions.csv` — дополнения к справочнику
+- `postgres/data/stopwords.csv` — стоп-слова

@@ -1,0 +1,11 @@
+# Processor service — NLP pipeline (pymorphy3 + rapidfuzz + PostGIS + ONNX)
+asyncpg~=0.29
+mawo-pymorphy3==1.0.4
+snowballstemmer~=2.2
+rapidfuzz~=3.0
+aiohttp~=3.9
+environs~=11.0
+tzdata~=2024.1
+onnxruntime>=1.16.0
+tokenizers>=0.15.0
+numpy>=1.24.0

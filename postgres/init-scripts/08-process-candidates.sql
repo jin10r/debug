@@ -12,7 +12,10 @@ CREATE OR REPLACE FUNCTION process_candidates(
     p_geo_ids           INT[]   DEFAULT NULL,
     p_scores            FLOAT[] DEFAULT NULL,
     p_matched_texts     TEXT[]  DEFAULT NULL,
-    p_strategy          VARCHAR(40) DEFAULT NULL
+    p_strategy          VARCHAR(40) DEFAULT NULL,
+    p_center_lon        FLOAT   DEFAULT 30.83135,
+    p_center_lat        FLOAT   DEFAULT 46.49804,
+    p_radius            FLOAT   DEFAULT 0.045
 )
 RETURNS TABLE(
     result_geom     GEOMETRY,
@@ -26,6 +29,8 @@ DECLARE
     v_strategy         VARCHAR(40);
     v_matches          JSONB;
     v_scores           FLOAT[];
+    v_filtered_ids     INT[];
+    v_filtered_scores  FLOAT[];
     v_true_count       INT;
     v_true_collected   GEOMETRY;
     v_pseudo_count     INT;
@@ -43,8 +48,48 @@ BEGIN
     IF p_geo_ids IS NULL OR array_length(p_geo_ids, 1) = 0 THEN
         RETURN QUERY SELECT
             ST_SetSRID(ST_MakePoint(
-                30.7233 + 0.09 * (random() - 0.5),
-                46.4825 + 0.09 * (random() - 0.5)
+                p_center_lon + p_radius * sqrt(random()) * cos(2 * pi() * random()),
+                p_center_lat + p_radius * sqrt(random()) * sin(2 * pi() * random())
+            ), 4326),
+            'random'::VARCHAR(40),
+            '[]'::jsonb;
+        RETURN;
+    END IF;
+
+    -- ── Фильтрация кандидатов по району ───────────────────────────────────────
+    -- Если среди raw_candidates есть district, он служит пространственным
+    -- фильтром: остальные кандидаты должны быть ST_Within этого района.
+    -- Сам район исключается из final_candidates и не участвует в стратегии.
+    WITH
+    raw_candidates AS (
+        SELECT s.id, s.type, s.geom, u.score
+        FROM geo s
+        JOIN unnest(p_geo_ids, v_scores) AS u(id, score) ON s.id = u.id
+    ),
+    district_filter AS (
+        SELECT geom FROM raw_candidates WHERE type = 'district' LIMIT 1
+    ),
+    filtered_by_district AS (
+        SELECT rc.*
+        FROM raw_candidates rc
+        LEFT JOIN district_filter df ON TRUE
+        WHERE df.geom IS NULL
+           OR ST_Within(ST_MakeValid(rc.geom), ST_MakeValid(df.geom))
+    ),
+    final_candidates AS (
+        SELECT * FROM filtered_by_district WHERE type != 'district'
+    )
+    SELECT COALESCE(array_agg(id ORDER BY score DESC), ARRAY[]::INT[]),
+           COALESCE(array_agg(score ORDER BY score DESC), ARRAY[]::FLOAT[])
+    INTO v_filtered_ids, v_filtered_scores
+    FROM final_candidates;
+
+    -- ── 0 кандидатов после фильтрации: случайная точка ────────────────────────
+    IF COALESCE(array_length(v_filtered_ids, 1), 0) = 0 THEN
+        RETURN QUERY SELECT
+            ST_SetSRID(ST_MakePoint(
+                p_center_lon + p_radius * sqrt(random()) * cos(2 * pi() * random()),
+                p_center_lat + p_radius * sqrt(random()) * sin(2 * pi() * random())
             ), 4326),
             'random'::VARCHAR(40),
             '[]'::jsonb;
@@ -66,11 +111,12 @@ BEGIN
         p_geo_ids,
         v_scores,
         COALESCE(p_matched_texts, ARRAY_FILL(NULL::text, ARRAY[array_length(p_geo_ids, 1)]))
-    ) AS u(id, score, part) ON s.id = u.id;
+    ) AS u(id, score, part) ON s.id = u.id
+    WHERE s.id = ANY(v_filtered_ids);
 
     -- ── 1 совпадение или стратегия single_match ───────────────────────────────
-    IF array_length(p_geo_ids, 1) = 1 OR p_strategy = 'single_match' THEN
-        SELECT ST_MakeValid(geom) INTO v_geom FROM geo WHERE id = p_geo_ids[1];
+    IF array_length(v_filtered_ids, 1) = 1 OR p_strategy = 'single_match' THEN
+        SELECT ST_MakeValid(geom) INTO v_geom FROM geo WHERE id = v_filtered_ids[1];
         RETURN QUERY SELECT v_geom, 'single_match'::VARCHAR(40), v_matches;
         RETURN;
     END IF;
@@ -82,7 +128,7 @@ BEGIN
             SELECT id, ST_MakeValid(geom) AS geom,
                    ST_Transform(ST_MakeValid(geom), 3857) AS geom_m
             FROM geo
-            WHERE id = ANY(p_geo_ids)
+            WHERE id = ANY(v_filtered_ids)
               AND geom IS NOT NULL
               AND type = ANY(v_midpoint_types)
         ),
@@ -118,7 +164,7 @@ BEGIN
         -- Нет пар в радиусе → fallback на single_match лучшего
         SELECT ST_MakeValid(s.geom) INTO v_geom
         FROM geo s
-        JOIN unnest(p_geo_ids, v_scores) AS u(id, score) ON s.id = u.id
+        JOIN unnest(v_filtered_ids, v_filtered_scores) AS u(id, score) ON s.id = u.id
         ORDER BY u.score DESC
         LIMIT 1;
         RETURN QUERY SELECT v_geom, 'single_match'::VARCHAR(40), v_matches;
@@ -136,7 +182,7 @@ BEGIN
                 ST_Transform(ST_MakeValid(s.geom), 3857)               AS geom_m,
                 ST_AsText(ST_SnapToGrid(ST_MakeValid(s.geom), 0.0001)) AS geom_hash
             FROM geo s
-            WHERE s.id = ANY(p_geo_ids)
+            WHERE s.id = ANY(v_filtered_ids)
               AND s.geom IS NOT NULL
         ) sub
         ORDER BY geom_hash, id
@@ -145,7 +191,7 @@ BEGIN
         SELECT ug.id, ug.geom, ug.geom_m
         FROM unique_geoms ug
         WHERE EXISTS (
-            SELECT 1 FROM unnest(p_geo_ids, v_scores) AS u(id, score)
+            SELECT 1 FROM unnest(v_filtered_ids, v_filtered_scores) AS u(id, score)
             WHERE u.id = ug.id AND u.score >= v_score_threshold
         )
     ),
@@ -204,7 +250,7 @@ BEGIN
     ELSE
         SELECT ST_MakeValid(s.geom) INTO v_geom
         FROM geo s
-        JOIN unnest(p_geo_ids, v_scores) AS u(id, score) ON s.id = u.id
+        JOIN unnest(v_filtered_ids, v_filtered_scores) AS u(id, score) ON s.id = u.id
         ORDER BY u.score DESC
         LIMIT 1;
         v_strategy := 'single_match';
@@ -214,7 +260,7 @@ BEGIN
     IF v_geom IS NULL THEN
         SELECT ST_MakeValid(s.geom) INTO v_geom
         FROM geo s
-        JOIN unnest(p_geo_ids, v_scores) AS u(id, score) ON s.id = u.id
+        JOIN unnest(v_filtered_ids, v_filtered_scores) AS u(id, score) ON s.id = u.id
         ORDER BY u.score DESC
         LIMIT 1;
         v_strategy := 'single_match';

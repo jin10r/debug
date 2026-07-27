@@ -79,13 +79,19 @@ logs
 # Build / profiling artifacts
 optimization_results.json
 
-# Generated event exports (large, produced locally — not versioned)
-nnew_events_export.csv
-events_export.csv
+# Generated CSV exports (large, produced locally — not versioned)
+*.csv
+!postgres/data/*.csv
 
-# ONNX model files (large binaries, downloaded separately)
+# IDE / tool config
+.devin/
+
+# ONNX model files (large binaries, downloaded separately, not versioned)
 parser/models/
+processor/models/rubert-tiny2-onnx/model.onnx
+processor/models/rubert-tiny2-onnx/tokenizer.json
+processor/models/rubert-tiny2-onnx/vocab.txt
+processor/models/rubert-tiny2-onnx/config.json
+processor/models/rubert-tiny2-onnx/ort_config.json
 
-# Old local GGUF model files (replaced by external ollama)
-model/models/
-model/.cache/
+

@@ -3,14 +3,15 @@
 Два тира:
   Tier 1 [Stem exact] — точное совпадение кортежа стемов из PhoneticIndex.
   Tier 2 [Surface typo] — rapidfuzz по сырым алиасам как корректор опечаток.
+  Tier 3 [Semantic] — ONNX rubert-tiny2 для серой зоны 0.70-0.85.
 
 Порядок приоритета типов: settlement (village/town) > street > остальные.
 """
 
 import asyncio
 import logging
-from concurrent.futures import ProcessPoolExecutor
-from typing import Dict, List, Optional, Set, Tuple
+from concurrent.futures import ThreadPoolExecutor
+from typing import Dict, List, Optional, Set, Tuple, TYPE_CHECKING
 
 from rapidfuzz import fuzz
 from rapidfuzz import process as rf_process
@@ -19,6 +20,9 @@ from .morphology import Lemma, Morphology
 from .phonetic_index import PhoneticIndex
 from .word_tokenizer import Token
 
+if TYPE_CHECKING:
+    from .semantic_matcher import SemanticMatcher
+
 try:
     from .settings import settings
 except Exception:
@@ -26,18 +30,13 @@ except Exception:
 
 logger = logging.getLogger(__name__)
 
-# Candidate: (surface_text, stem_tuple, start_i, end_i, size, is_gap, is_anchored)
 Candidate = Tuple[str, Tuple[str, ...], int, int, int, bool, bool]
 
 
 def _fuzzy_match(query: str, phrases: list, threshold: float):
-    """Module-level function for fuzzy matching to enable pickling for ProcessPoolExecutor."""
     try:
         return rf_process.extractOne(
-            query,
-            phrases,
-            scorer=fuzz.ratio,
-            score_cutoff=threshold,
+            query, phrases, scorer=fuzz.ratio, score_cutoff=threshold,
         )
     except Exception:
         return None
@@ -59,7 +58,11 @@ class GeoMatcher:
         self._index = index
         self._initialized = False
         self._stopwords: Set[str] = set()
-        self._executor: Optional[ProcessPoolExecutor] = None
+        self._executor: Optional[ThreadPoolExecutor] = None
+        self._semantic_matcher: Optional["SemanticMatcher"] = None
+
+    def set_semantic_matcher(self, matcher: "SemanticMatcher") -> None:
+        self._semantic_matcher = matcher
 
     async def initialize(self, pg_pool) -> bool:
         try:
@@ -71,8 +74,8 @@ class GeoMatcher:
 
             await asyncio.to_thread(self._index.build, geo_rows)
             self._stopwords = {row['word'].strip().lower() for row in sw_rows if row['word']}
-            self._executor = ProcessPoolExecutor(max_workers=None)
-            logger.info(f"[Geo] Loaded {len(self._stopwords)} stopwords, {len(geo_rows)} objects, ProcessPoolExecutor initialized")
+            self._executor = ThreadPoolExecutor(max_workers=4)
+            logger.info(f"[Geo] Loaded {len(self._stopwords)} stopwords, {len(geo_rows)} objects, ThreadPoolExecutor initialized")
             self._initialized = True
             return True
         except Exception as exc:
@@ -108,8 +111,9 @@ class GeoMatcher:
     async def close(self) -> None:
         if self._executor:
             self._executor.shutdown(wait=True)
-            logger.info("[Geo] ProcessPoolExecutor shutdown")
+            logger.info("[Geo] ThreadPoolExecutor shutdown")
         self._executor = None
+        self._semantic_matcher = None
 
     def _punctuation_set(self) -> Set[str]:
         if settings and settings.similarity:
@@ -301,5 +305,20 @@ class GeoMatcher:
             existing = best_by_geo.get(gid)
             if existing is None or result['score'] > existing['score']:
                 best_by_geo[gid] = result
+
+        if self._semantic_matcher and best_by_geo:
+            candidates_list = list(best_by_geo.values())
+            filtered_candidates = []
+            for cand in candidates_list:
+                window_text = cand.get('text', '')
+                if not window_text:
+                    filtered_candidates.append(cand)
+                    continue
+                filtered = self._semantic_matcher.filter_candidates([cand], window_text)
+                filtered_candidates.extend(filtered)
+            best_by_geo = {c["geo_id"]: c for c in filtered_candidates}
+            logger.debug(
+                f"[Geo] Semantic filter: {len(candidates_list)} -> {len(filtered_candidates)} candidates"
+            )
 
         return self._finalize(best_by_geo)

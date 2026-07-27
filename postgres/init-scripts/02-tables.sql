@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS layer_keywords (
     keywords TEXT[] NOT NULL
 );
 
--- Основная таблица событий (партиционирована по дням)
+-- Основная таблица событий (партиционирована по часам)
+-- Realtime only: TTL 60 минут, максимум 2-3 партиции.
 -- Инварианты:
 --   layer — закрытое множество слоёв;
 --   description — ограничение 500 символов.
@@ -46,24 +47,23 @@ CREATE TABLE IF NOT EXISTS events (
     PRIMARY KEY (id, event_time)
 ) PARTITION BY RANGE (event_time);
 
--- Создаём партиции на текущий день + 2 дня вперёд
+-- Создаём партиции на текущий час + 1 час вперёд
 DO $$
 DECLARE
-    start_date DATE := date_trunc('day', NOW())::DATE;
-    part_date DATE;
+    part_hour TIMESTAMPTZ;
     part_name TEXT;
 BEGIN
-    FOR i IN 0..2 LOOP
-        part_date := start_date + i;
-        part_name := 'events_' || to_char(part_date, 'YYYY_MM_DD');
+    FOR i IN 0..1 LOOP
+        part_hour := date_trunc('hour', NOW()) + i * INTERVAL '1 hour';
+        part_name := 'events_' || to_char(part_hour, 'YYYY_MM_DD_HH24');
         IF NOT EXISTS (
             SELECT 1 FROM pg_class WHERE relname = part_name
         ) THEN
             EXECUTE format(
                 'CREATE TABLE %I PARTITION OF events FOR VALUES FROM (%L) TO (%L)',
                 part_name,
-                part_date,
-                part_date + 1
+                part_hour,
+                part_hour + INTERVAL '1 hour'
             );
         END IF;
     END LOOP;

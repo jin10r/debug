@@ -165,14 +165,6 @@ class SimilarityConfig:
     # но не искажает intersection/polygon. single_match-fallback берёт лучший по score.
     geometry_min_score: float = 0.85
 
-    # SemanticResolver — параметры интеллектуального анализатора geo-конфликтов.
-    # Модель определяет стратегию (single_match/intersection/midpoint),
-    # PostGIS вычисляет финальную геометрию.
-    semantic_enabled: bool = True
-    semantic_model: str = 'qwen2.5:0.5b'
-    semantic_temperature: float = 0.0
-    semantic_timeout_s: int = 10
-
     # Макс. дистанция (метры) для midpoint между geo-объектами.
     midpoint_max_distance_m: float = 150.0
     # Типы объектов, для которых разрешён midpoint.
@@ -189,37 +181,30 @@ class SimilarityConfig:
 
 @dataclass
 class ParserConfig:
-    """Параметры parser-сервиса (monitoring.py)."""
+    """Параметры parser-сервиса (kurigram, photo download)."""
 
     # Сколько сообщений тянуть из истории канала при старте парсера.
-    # Высокое значение увеличивает startup latency, низкое — пропускает старые.
-    # Это же значение — механизм recovery после краша: бэкфилл переобрабатывает
-    # последние history_limit сообщений (дедуп ON CONFLICT делает это безопасным),
-    # поэтому оно должно с запасом перекрывать окно простоя × rate сообщений.
-    history_limit: int = 100
+    history_limit: int = 65
 
-    # Размер asyncio.Queue для входящих сообщений (производитель-потребитель).
-    # Запас под всплески (бэкфилл больших историй + live-пики); put() блокирует
-    # при заполнении (backpressure, без потерь), пул воркеров сливает очередь.
-    message_queue_maxsize: int = 100
-
-    # Число конкурентных воркеров очереди. Перекрывает CPU одного сообщения с
-    # DB-I/O другого на всплесках. Безопасно: вставки идемпотентны (ON CONFLICT),
-    # порядок не важен, asyncpg-pool конкурентно-безопасен, в CPU-секциях нет
-    # await. Кап ≤8 в monitoring.py, чтобы не исчерпать pool (pool_max_size=20).
-    worker_concurrency: int = 5
-
-    # Каталог хранения медиафайлов (фотографии событий). Монтируется через
-    # volume в docker-compose, путь синхронизирован с разделом volumes.
+    # Каталог хранения медиафайлов (фотографии событий).
     events_media_dir: str = "/media/events"
 
-    # SOCKS5/HTTP proxy для pyrogram (если телеграм блокируется в сети
-    # развёртывания). None = без proxy. Меняется правкой settings.py для
-    # конкретной инсталляции — не env.
+    # SOCKS5/HTTP proxy для pyrogram.
     socks5_host: Optional[str] = None
     proxy_host: Optional[str] = None
     proxy_scheme: str = "socks5"
     proxy_port: int = 1080
+
+
+@dataclass
+class ProcessorConfig:
+    """Параметры processor-сервиса (NLP pipeline)."""
+
+    # Число конкурентных воркеров, потребляющих из pending_events (SKIP LOCKED).
+    worker_concurrency: int = 5
+
+    # Polling interval (сек) при пустой очереди.
+    poll_interval: float = 0.5
 
 
 @dataclass
@@ -247,21 +232,6 @@ class LayerConfig:
 
 
 @dataclass
-class OllamaConfig:
-    """Ollama LLM geo-resolution (Tier-2 fallback).
-
-    Всегда активен (enabled=True), но НЕ обязателен — при недоступности хоста
-    приложение продолжает работу без ошибок. Хост переопределяется через env
-    OLLAMA_HOST (по умолчанию http://host.docker.internal:11434).
-    """
-    enabled: bool = False
-    base_url: str = 'http://host.docker.internal:11434'
-    model: str = 'qwen2.5:0.5b'
-    timeout_s: int = 15
-    max_tokens: int = 128
-
-
-@dataclass
 class Settings:
     app: AppConfig
     db: DatabaseConfig
@@ -270,8 +240,8 @@ class Settings:
     similarity: SimilarityConfig = field(default_factory=SimilarityConfig)
     layers: LayerConfig = field(default_factory=LayerConfig)
     parser: ParserConfig = field(default_factory=ParserConfig)
+    processor: ProcessorConfig = field(default_factory=ProcessorConfig)
     question_overlay: QuestionOverlayConfig = field(default_factory=QuestionOverlayConfig)
-    ollama: OllamaConfig = field(default_factory=OllamaConfig)
 
 
 def _resolve_jwt_secret(env: Env) -> str:
@@ -337,15 +307,17 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
             if require_jwt else None
         )
 
-        ollama_host = env.str("OLLAMA_HOST", None)
-
         return Settings(
             app=AppConfig(
                 telegram_validation_enabled=env.bool(
                     "TELEGRAM_VALIDATION_ENABLED", default=True
                 ),
             ),
-            db=DatabaseConfig(),
+            db=DatabaseConfig(
+                user=env.str("POSTGRES_USER", "postgres"),
+                password=env.str("POSTGRES_PASSWORD", "postgres"),
+                database=env.str("POSTGRES_DB", "postgres"),
+            ),
             bot=BotConfig(
                 token=env.str("BOT_TOKEN", ""),
                 webapp_url=env.str("WEBAPP_URL", None),
@@ -360,9 +332,6 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
                 proxy_scheme=env.str("PROXY_SCHEME", "socks5"),
             ),
             question_overlay=QuestionOverlayConfig(),
-            ollama=OllamaConfig(
-                base_url=ollama_host or 'http://host.docker.internal:11434',
-            ),
         )
     except Exception as e:
         raise ValueError(f"Configuration error: {e}")

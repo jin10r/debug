@@ -1,0 +1,56 @@
+# Dockerfile.processor — NLP processor service (pymorphy3 + rapidfuzz + PostGIS + ONNX)
+# Multi-stage build для минимизации размера образа
+
+# =============================================================================
+# Stage 1: Builder (установка зависимостей + smoke-test)
+# =============================================================================
+FROM python:3.11.10-slim-bookworm AS builder
+
+WORKDIR /build
+
+RUN --mount=type=cache,target=/var/cache/apt,id=processor-apt \
+    apt-get update && apt-get install -y --no-install-recommends gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY processor/requirements.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --user --no-cache-dir -r requirements.txt && \
+    find /root/.local -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true && \
+    find /root/.local -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true && \
+    find /root/.local -type f -name "*.pyc" -delete && \
+    find /root/.local -type f -name "*.pyo" -delete && \
+    find /root/.local -type f -name "*.md" -delete
+
+ENV PATH="/root/.local/bin:$PATH"
+RUN python -c "from rapidfuzz import fuzz; from mawo_pymorphy3 import MorphAnalyzer; import snowballstemmer; import onnxruntime; import tokenizers; print('deps OK')"
+
+# =============================================================================
+# Stage 2: Runtime (минимальный образ)
+# =============================================================================
+FROM python:3.11.10-slim-bookworm
+
+WORKDIR /app
+
+ENV PYTHONUNBUFFERED="1"
+ENV PYTHONDONTWRITEBYTECODE="1"
+ENV PATH="/home/processor/.local/bin:$PATH"
+
+COPY --from=builder /root/.local /home/processor/.local
+
+RUN --mount=type=cache,target=/var/cache/apt,id=processor-runtime \
+    apt-get update && apt-get install -y --no-install-recommends procps curl \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -m -u 1000 processor && \
+    chmod 1777 /tmp && \
+    chown -R processor:processor /app /home/processor/.local
+
+COPY --chown=processor:processor processor/ ./processor/
+COPY --chown=processor:processor core/ ./core/
+
+COPY --chown=processor:processor processor/models/rubert-tiny2-onnx /app/models/rubert-tiny2-onnx
+
+USER processor
+
+CMD ["python", "-m", "processor.main"]

@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from .morphology import Morphology
-from .text_preprocessor import clean
+from core.text_preprocessor import clean
 from .word_tokenizer import tokenize
 
 try:

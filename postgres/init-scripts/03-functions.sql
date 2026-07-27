@@ -18,12 +18,12 @@ BEGIN
         JOIN pg_inherits i ON c.oid = i.inhrelid
         JOIN pg_class p ON i.inhparent = p.oid
         WHERE p.relname = 'events'
-          AND c.relname ~ '^events_\d{4}_\d{2}_\d{2}$'
+          AND c.relname ~ '^events_\d{4}_\d{2}_\d{2}_\d{2}$'
           AND c.relkind = 'r'
           AND to_timestamp(
-              substring(c.relname FROM 8 FOR 10),
-              'YYYY_MM_DD'
-          ) + INTERVAL '1 day' < cutoff_time
+              substring(c.relname FROM 8 FOR 13),
+              'YYYY_MM_DD_HH24'
+          ) + INTERVAL '1 hour' < cutoff_time
     LOOP
         EXECUTE format('DROP TABLE IF EXISTS %I', partition_name);
         deleted_count := deleted_count + 1;

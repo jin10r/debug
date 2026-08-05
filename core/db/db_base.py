@@ -45,33 +45,60 @@ def retry_db_condition(exception):
     return isinstance(exception, RETRYABLE_EXCEPTIONS)
 
 
+async def create_pool(
+    *,
+    min_size: Optional[int] = None,
+    max_size: Optional[int] = None,
+    command_timeout: Optional[int] = None,
+    statement_cache_size: int = 100,
+    server_settings: Optional[Dict] = None,
+    **kwargs: Any,
+) -> asyncpg.Pool:
+    """Единая фабрика asyncpg-пула для Database (core) и DBAdapter (parser/processor).
+
+    Раньше два класса дублировали создание пула (kwargs в db_base vs DSN-строка
+    в db_adapter). Теперь создание и параметры по умолчанию — в одном месте:
+      - min_size/max_size/command_timeout по умолчанию берутся из settings.db;
+      - timezone='Europe/Kiev' проставляется всегда (время событий привязано
+        к Киеву, консистентно на стороне сессии БД);
+      - statement_cache_size=100 — единое значение для всех сервисов.
+
+    Дополнительные аргументы (host/port/database/user/password и пр.)
+    передаются в asyncpg.create_pool как есть.
+    """
+    db_cfg = settings.db if settings and settings.db else None
+    pool_min = min_size if min_size is not None else (db_cfg.pool_min_size if db_cfg else 5)
+    pool_max = max_size if max_size is not None else (db_cfg.pool_max_size if db_cfg else 20)
+    cmd_timeout = (
+        command_timeout if command_timeout is not None
+        else (db_cfg.command_timeout if db_cfg else 60)
+    )
+
+    ss = dict(server_settings or {})
+    ss.setdefault('timezone', 'Europe/Kiev')
+
+    return await asyncpg.create_pool(
+        min_size=pool_min,
+        max_size=pool_max,
+        command_timeout=cmd_timeout,
+        statement_cache_size=statement_cache_size,
+        server_settings=ss,
+        **kwargs,
+    )
+
+
 class Database:
     """Low-level database connection handler with connection pooling."""
 
     def __init__(self):
+        """Инициализирует объект Database без подключения к БД."""
         self.pool: Optional[asyncpg.Pool] = None
 
     async def connect(self, max_retries: int = 10, retry_delay: float = 2.0, **kwargs) -> bool:
         """Create connection pool with manual retry logic."""
-        # Serve all event timestamps in Kiev time so client-side time filtering
-        # is anchored to Kiev regardless of the device's timezone.
-        kwargs.setdefault('server_settings', {})
-        kwargs['server_settings'].setdefault('timezone', 'Europe/Kiev')
-
-        # Pool tuning из settings (env-overrides). Fallback на defaults
-        # совпадает с hardcoded версией.
-        pool_min = settings.db.pool_min_size if settings and settings.db else 5
-        pool_max = settings.db.pool_max_size if settings and settings.db else 20
-        cmd_timeout = settings.db.command_timeout if settings and settings.db else 60
-
         for attempt in range(1, max_retries + 1):
             try:
-                self.pool = await asyncpg.create_pool(
-                    min_size=pool_min,
-                    max_size=pool_max,
-                    command_timeout=cmd_timeout,
-                    **kwargs
-                )
+                self.pool = await create_pool(**kwargs)
                 logger.info(f"Database connection pool created on attempt {attempt}/{max_retries}")
                 return True
             except RETRYABLE_EXCEPTIONS as e:
@@ -104,38 +131,48 @@ class Database:
             self.pool = None
             logger.info("Database connection pool closed")
 
-    async def execute(self, query: str, *args) -> str:
+    async def execute(self, query: str, *args, timeout: Optional[float] = None) -> str:
         """Execute SQL query and return status."""
         if not self.pool:
             raise RuntimeError("Database pool is not initialized")
         
         async with self.pool.acquire() as conn:
+            if timeout:
+                return await asyncio.wait_for(conn.execute(query, *args), timeout=timeout)
             return await conn.execute(query, *args)
 
-    async def fetch(self, query: str, *args) -> List[Dict]:
+    async def fetch(self, query: str, *args, timeout: Optional[float] = None) -> List[Dict]:
         """Fetch multiple rows as dictionaries."""
         if not self.pool:
             raise RuntimeError("Database pool is not initialized")
         
         async with self.pool.acquire() as conn:
-            records = await conn.fetch(query, *args)
+            if timeout:
+                records = await asyncio.wait_for(conn.fetch(query, *args), timeout=timeout)
+            else:
+                records = await conn.fetch(query, *args)
             return [dict(record) for record in records]
 
-    async def fetchrow(self, query: str, *args) -> Optional[Dict]:
+    async def fetchrow(self, query: str, *args, timeout: Optional[float] = None) -> Optional[Dict]:
         """Fetch single row as dictionary."""
         if not self.pool:
             raise RuntimeError("Database pool is not initialized")
         
         async with self.pool.acquire() as conn:
-            record = await conn.fetchrow(query, *args)
+            if timeout:
+                record = await asyncio.wait_for(conn.fetchrow(query, *args), timeout=timeout)
+            else:
+                record = await conn.fetchrow(query, *args)
             return dict(record) if record else None
 
-    async def fetchval(self, query: str, *args) -> Any:
+    async def fetchval(self, query: str, *args, timeout: Optional[float] = None) -> Any:
         """Fetch single value."""
         if not self.pool:
             raise RuntimeError("Database pool is not initialized")
         
         async with self.pool.acquire() as conn:
+            if timeout:
+                return await asyncio.wait_for(conn.fetchval(query, *args), timeout=timeout)
             return await conn.fetchval(query, *args)
 
     async def executemany(self, query: str, args_list: List[tuple]) -> None:

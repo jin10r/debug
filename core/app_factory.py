@@ -76,72 +76,86 @@ async def _run_bot_polling(app: web.Application):
 
 
 async def _run_pg_notify_listener(app: web.Application):
-    """PostgreSQL LISTEN/NOTIFY → WebSocket bridge for parser-originated events."""
-    conn = None
-    notify_tasks: set = set()  # отслеживаем broadcast-задачи, чтобы не терять их
-    try:
-        loop = asyncio.get_running_loop()
-        db_pool = app.get('db_pool')
-        ws_manager = app.get('websocket_manager')
-        if not db_pool or not getattr(db_pool, 'pool', None) or not ws_manager:
-            logger.warning("PG NOTIFY listener not started: missing db_pool or websocket_manager")
-            return
+    """PostgreSQL LISTEN/NOTIFY → WebSocket bridge for parser-originated events.
+    Автоматически переподключается при разрыве соединения."""
+    shutdown_event = app.get('shutdown_event')
 
-        conn = await db_pool.pool.acquire()
-        app['pg_notify_conn'] = conn
+    while not (shutdown_event and shutdown_event.is_set()):
+        conn = None
+        notify_tasks: set = set()
+        try:
+            loop = asyncio.get_running_loop()
+            db_pool = app.get('db_pool')
+            ws_manager = app.get('websocket_manager')
+            if not db_pool or not getattr(db_pool, 'pool', None) or not ws_manager:
+                logger.warning("PG NOTIFY listener not started: missing db_pool or websocket_manager")
+                await asyncio.sleep(10)
+                continue
 
-        def _spawn(coro):
-            # Отслеживаемая задача: ссылка хранится до завершения (иначе GC может
-            # отменить задачу), при shutdown — отменяется в finally.
-            task = loop.create_task(coro)
-            notify_tasks.add(task)
-            task.add_done_callback(notify_tasks.discard)
+            conn = await db_pool.pool.acquire()
+            app['pg_notify_conn'] = conn
 
-        def _on_notify(connection, pid, channel, payload):
-            try:
-                if channel == 'events_new':
-                    _spawn(ws_manager.broadcast_event(json.loads(payload)))
-                elif channel == 'events_cleaned':
-                    _spawn(ws_manager.broadcast_events_cleaned(json.loads(payload)))
-            except Exception as e:
-                logger.warning(f"Failed to process NOTIFY {channel}: {e}")
+            def _spawn(coro):
+                """Запускает корутину как отслеживаемую asyncio-задачу."""
+                task = loop.create_task(coro)
+                notify_tasks.add(task)
+                task.add_done_callback(notify_tasks.discard)
 
-        await conn.add_listener('events_new', _on_notify)
-        await conn.add_listener('events_cleaned', _on_notify)
-        logger.info("Listening for PostgreSQL NOTIFY on: events_new, events_cleaned")
+            def _on_notify(connection, pid, channel, payload):
+                """Обрабатывает PostgreSQL NOTIFY — отправляет событие через WebSocket."""
+                try:
+                    if channel == 'events_new':
+                        _spawn(ws_manager.broadcast_event(json.loads(payload)))
+                    elif channel == 'events_cleaned':
+                        _spawn(ws_manager.broadcast_events_cleaned(json.loads(payload)))
+                except Exception as e:
+                    logger.warning(f"Failed to process NOTIFY {channel}: {e}")
 
-        shutdown_event = app.get('shutdown_event')
-        if shutdown_event:
-            await shutdown_event.wait()
-    except asyncio.CancelledError:
-        raise
-    except Exception as e:
-        logger.error(f"PG NOTIFY listener crashed: {e}", exc_info=True)
-    finally:
-        for task in list(notify_tasks):
-            if not task.done():
-                task.cancel()
-        if conn is not None:
-            # Каждый шаг ограничен дедлайном: если UNLISTEN/release зависнут,
-            # они не должны затормозить shutdown. Главное — вернуть соединение
-            # в пул, иначе graceful pool.close() будет ждать его бесконечно.
-            try:
-                await asyncio.wait_for(conn.remove_listener('events_new', _on_notify), timeout=1.0)
-                await asyncio.wait_for(conn.remove_listener('events_cleaned', _on_notify), timeout=1.0)
-            except (asyncio.TimeoutError, Exception):
-                pass
-            try:
-                db_pool = app.get('db_pool')
-                if db_pool and getattr(db_pool, 'pool', None):
-                    await asyncio.wait_for(db_pool.pool.release(conn), timeout=1.0)
-            except (asyncio.TimeoutError, Exception):
-                pass
-            app['pg_notify_conn'] = None
+            await conn.add_listener('events_new', _on_notify)
+            await conn.add_listener('events_cleaned', _on_notify)
+            logger.info("Listening for PostgreSQL NOTIFY on: events_new, events_cleaned")
+
+            if shutdown_event:
+                await shutdown_event.wait()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"PG NOTIFY listener crashed: {e}. Reconnecting in 5s...")
+        finally:
+            for task in list(notify_tasks):
+                if not task.done():
+                    task.cancel()
+            if conn is not None:
+                try:
+                    await asyncio.wait_for(conn.remove_listener('events_new', _on_notify), timeout=1.0)
+                    await asyncio.wait_for(conn.remove_listener('events_cleaned', _on_notify), timeout=1.0)
+                except (asyncio.TimeoutError, Exception):
+                    pass
+                try:
+                    db_pool = app.get('db_pool')
+                    if db_pool and getattr(db_pool, 'pool', None):
+                        await asyncio.wait_for(db_pool.pool.release(conn), timeout=1.0)
+                except (asyncio.TimeoutError, Exception):
+                    pass
+                app['pg_notify_conn'] = None
+
+        if shutdown_event and not shutdown_event.is_set():
+            await asyncio.sleep(5)
 
 
 async def on_startup(app: web.Application):
     """Actions to perform on application startup."""
     logger.info("--- ON_STARTUP CALLED ---")
+
+    # Log bot token prefix for debugging (first 10 chars only, no secret exposed)
+    bot_token = getattr(settings.bot, 'token', '')
+    if bot_token:
+        logger.info(
+            "Telegram bot token configured",
+            extra={'extra_data': {'bot_token_prefix': bot_token[:10] + '...' if len(bot_token) > 10 else bot_token}}
+        )
+    else:
+        logger.error("BOT_TOKEN is EMPTY - Telegram validation will fail!")
 
     # Предохранитель: при выключенной валидации /api/* и /ws принимают любого
     # клиента (jwt_auth_middleware и _ws_authenticate уходят в dev-bypass).
@@ -199,6 +213,7 @@ async def on_shutdown(app: web.Application):
     shutdown_tasks = []
 
     async def stop_bot_polling():
+        """Останавливает polling бота и отменяет соответствующую задачу."""
         bot_polling_task = app.get('bot_polling_task')
         if bot_polling_task and not bot_polling_task.done():
             logger.info("Stopping bot polling...")
@@ -217,6 +232,7 @@ async def on_shutdown(app: web.Application):
     shutdown_tasks.append(stop_bot_polling())
 
     async def stop_pg_notify_listener():
+        """Останавливает слушатель PostgreSQL NOTIFY с таймаутом."""
         pg_task = app.get('pg_notify_task')
         if not pg_task or pg_task.done():
             return
@@ -315,7 +331,6 @@ async def create_app():
     app['dp'] = dp
     app['cache'] = cache_manager
     app['websocket_manager'] = WebSocketManager(db_request, cache_manager)
-    app['db'].events.websocket_manager = app['websocket_manager']
 
     app.on_startup.append(on_startup)
     app.on_shutdown.append(on_shutdown)

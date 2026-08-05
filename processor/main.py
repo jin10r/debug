@@ -7,6 +7,7 @@ import signal
 import sys
 from datetime import datetime, timezone
 from typing import Optional
+from enum import Enum
 
 import asyncpg
 
@@ -28,7 +29,7 @@ _handler.setFormatter(_formatter)
 logging.root.handlers = [_handler]
 logging.root.setLevel(_LOG_LEVEL)
 
-from .db_adapter import DBAdapter
+from core.db.db_adapter import DBAdapter
 from .morphology import Morphology
 from .phonetic_index import PhoneticIndex
 from .geo_matcher import GeoMatcher
@@ -52,6 +53,56 @@ _TRANSIENT_ERRORS = (
 )
 
 _MAX_WORKER_CONCURRENCY = 8
+
+
+class CircuitState(Enum):
+    """Circuit breaker состояния."""
+    CLOSED = "closed"  # Нормальная работа
+    OPEN = "open"      # Ошибки превысили порог, блокировка запросов
+    HALF_OPEN = "half_open"  # Тестирование восстановления
+
+
+class CircuitBreaker:
+    """Circuit breaker для защиты от перегрузки БД."""
+    
+    def __init__(self, failure_threshold: int = 5, timeout: float = 60.0):
+        self.failure_threshold = failure_threshold
+        self.timeout = timeout
+        self.failure_count = 0
+        self.last_failure_time: Optional[float] = None
+        self.state = CircuitState.CLOSED
+        self._lock = asyncio.Lock()
+    
+    async def call(self, func, *args, **kwargs):
+        """Execute function with circuit breaker protection."""
+        async with self._lock:
+            if self.state == CircuitState.OPEN:
+                if self.last_failure_time and \
+                   (asyncio.get_event_loop().time() - self.last_failure_time) > self.timeout:
+                    logger.info("Circuit breaker: transitioning to HALF_OPEN")
+                    self.state = CircuitState.HALF_OPEN
+                else:
+                    raise Exception("Circuit breaker is OPEN")
+        
+        try:
+            result = await func(*args, **kwargs)
+            async with self._lock:
+                if self.state == CircuitState.HALF_OPEN:
+                    logger.info("Circuit breaker: transitioning to CLOSED")
+                    self.state = CircuitState.CLOSED
+                    self.failure_count = 0
+            return result
+        except Exception as e:
+            async with self._lock:
+                self.failure_count += 1
+                self.last_failure_time = asyncio.get_event_loop().time()
+                
+                if self.failure_count >= self.failure_threshold:
+                    if self.state != CircuitState.OPEN:
+                        logger.error(f"Circuit breaker: transitioning to OPEN after {self.failure_count} failures")
+                        self.state = CircuitState.OPEN
+            raise
+
 
 _INSERT_EVENT_SIMPLE = """
     WITH inserted AS (
@@ -154,6 +205,7 @@ class ProcessorBot:
     """NLP processor: потребляет pending_events, обрабатывает, пишет в events."""
 
     def __init__(self):
+        """Инициализация процессора: подсистемы NLP, БД, health-сервер."""
         self.db: Optional[DBAdapter] = None
         self._running = False
         self._messages_processed = 0
@@ -175,8 +227,12 @@ class ProcessorBot:
             1, min(_MAX_WORKER_CONCURRENCY, settings.processor.worker_concurrency)
         )
         self._poll_interval = settings.processor.poll_interval
+        
+        # Circuit breaker для защиты БД
+        self._circuit_breaker = CircuitBreaker(failure_threshold=5, timeout=60.0)
 
     async def initialize(self) -> bool:
+        """Инициализация всех компонентов: БД, NLP, подписки PG notify."""
         try:
             if not await self._init_database():
                 return False
@@ -189,6 +245,7 @@ class ProcessorBot:
             return False
 
     async def _init_database(self) -> bool:
+        """Подключение к PostgreSQL через DBAdapter."""
         logger.info("Connecting to PostgreSQL...")
         self.db = DBAdapter()
         if not await self.db.connect():
@@ -198,6 +255,7 @@ class ProcessorBot:
         return True
 
     async def _init_nlp(self) -> bool:
+        """Загрузка и инициализация всех NLP-компонентов (матчеры, резолверы)."""
         logger.info("Initializing NLP pipeline...")
         try:
             sim = settings.similarity if settings and settings.similarity else None
@@ -242,6 +300,7 @@ class ProcessorBot:
             return False
 
     async def _setup_pg_notify(self):
+        """Подписка на канал geo_updated для автообновления индекса."""
         try:
             self._listen_conn = await self.db.pool.acquire()
             await self._listen_conn.add_listener("geo_updated", self._on_geo_updated)
@@ -250,9 +309,11 @@ class ProcessorBot:
             logger.error(f"Failed to setup pg_notify: {e}")
 
     async def _on_geo_updated(self, conn, pid, channel, payload):
+        """Обработка уведомления об изменении geo-данных."""
         logger.info("🔄 geo_updated received, reindexing...")
 
         async def _reindex(func, *args):
+            """Перестроить индекс после обновления geo-данных."""
             try:
                 await func(*args)
                 logger.info("✅ Reindexing completed")
@@ -260,6 +321,7 @@ class ProcessorBot:
                 logger.error(f"❌ Reindexing failed: {e}")
 
         def _on_reindex_done(task):
+            """Обработка результата фоновой перестройки индекса."""
             try:
                 exc = task.exception()
                 if exc is not None:
@@ -279,6 +341,7 @@ class ProcessorBot:
         task.add_done_callback(_on_reindex_done)
 
     async def run(self):
+        """Главный цикл: запуск health-сервера и воркеров."""
         self._running = True
 
         loop = asyncio.get_event_loop()
@@ -301,6 +364,7 @@ class ProcessorBot:
             await asyncio.sleep(1)
 
     def _spawn_worker(self) -> asyncio.Task:
+        """Запуск нового воркера с автонадзором."""
         worker_id = self._worker_seq
         self._worker_seq += 1
         task = asyncio.create_task(self._worker(worker_id))
@@ -309,6 +373,7 @@ class ProcessorBot:
         return task
 
     def _supervise_worker(self, task):
+        """Перезапуск упавшего воркера."""
         if not self._running:
             return
         try:
@@ -319,9 +384,22 @@ class ProcessorBot:
         self._spawn_worker()
 
     async def _worker(self, worker_id: int):
+        """Цикл обработки: выбирает pending-событие, обрабатывает, помечает done/error."""
         logger.info(f"Worker {worker_id} started")
         while self._running:
-            row = await self._fetch_pending()
+            # Circuit breaker check
+            if self._circuit_breaker.state == CircuitState.OPEN:
+                logger.warning(f"Worker {worker_id}: circuit breaker is OPEN, backing off")
+                await asyncio.sleep(self._poll_interval * 10)
+                continue
+            
+            try:
+                row = await self._circuit_breaker.call(self._fetch_pending)
+            except Exception as e:
+                logger.error(f"Worker {worker_id}: circuit breaker prevented fetch: {e}")
+                await asyncio.sleep(self._poll_interval * 5)
+                continue
+            
             if not row:
                 await asyncio.sleep(self._poll_interval)
                 continue
@@ -362,6 +440,7 @@ class ProcessorBot:
                         break
 
     async def _fetch_pending(self):
+        """Выборка одного pending-события из очереди с блокировкой."""
         async with self.db.pool.acquire() as conn:
             async with conn.transaction():
                 return await conn.fetchrow(
@@ -374,6 +453,7 @@ class ProcessorBot:
                 )
 
     async def _mark_done(self, row_id: int):
+        """Пометить pending-событие как выполненное."""
         async with self.db.pool.acquire() as conn:
             await conn.execute(
                 "UPDATE pending_events SET status = 'done', processed_at = now() "
@@ -382,6 +462,7 @@ class ProcessorBot:
             )
 
     async def _mark_error(self, row_id: int, error_msg: str):
+        """Пометить pending-событие как ошибочное."""
         async with self.db.pool.acquire() as conn:
             await conn.execute(
                 "UPDATE pending_events SET status = 'error', error_message = $1 "
@@ -391,11 +472,13 @@ class ProcessorBot:
 
     @staticmethod
     def _sanitize_text(text: Optional[str]) -> Optional[str]:
+        """Очистка текста от некорректных UTF-8 последовательностей."""
         if not text:
             return text
         return text.encode('utf-8', errors='replace').decode('utf-8')
 
     async def _process_row(self, row) -> Optional[dict]:
+        """Полный цикл обработки одного сообщения: токенизация, поиск geo, вставка."""
         message_id = row['message_id']
         event_time = row['event_time']
         raw_text = row['text'] or ''
@@ -426,7 +509,9 @@ class ProcessorBot:
                 tokens=tokens, geo_ids=[],
             )
 
-        entities = await self.matcher.find_geo(tokens=tokens, lemmas=lemmas)
+        entities = await self.matcher.find_geo(
+            tokens=tokens, lemmas=lemmas, text=raw_text,
+        )
 
         geo_ids = []
         geo_scores = []
@@ -474,6 +559,7 @@ class ProcessorBot:
 
     @staticmethod
     def _enrich(result, *, tokens, geo_ids):
+        """Добавление служебных полей в результат обработки."""
         if result is not None:
             result['tokens'] = len(tokens)
             result['geo_matched'] = len(geo_ids)
@@ -482,6 +568,7 @@ class ProcessorBot:
 
     async def _insert_event(self, *, message_id, event_time, description,
                              photo_path, layer, strategy, geom_wkt):
+        """Вставка простого события (без кандидатов) в таблицу events."""
         return await self._run_insert(
             _INSERT_EVENT_SIMPLE,
             (message_id, event_time, description, photo_path, layer, strategy, geom_wkt),
@@ -489,9 +576,10 @@ class ProcessorBot:
         )
 
     async def _insert_event_from_candidates(self, *, message_id, event_time,
-                                             description, photo_path, layer,
-                                             geo_ids, geo_scores, geo_texts,
-                                             strategy=None):
+                                              description, photo_path, layer,
+                                              geo_ids, geo_scores, geo_texts,
+                                              strategy=None):
+        """Вставка события с вызовом process_candidates для разрешения кандидатов."""
         scores_array = [float(s) for s in geo_scores]
         if settings and hasattr(settings, 'question_overlay'):
             qo = settings.question_overlay
@@ -507,6 +595,7 @@ class ProcessorBot:
         )
 
     async def _run_insert(self, sql, params, *, message_id):
+        """Выполнение SQL-запроса вставки события и возврат результата."""
         async with self.db.pool.acquire() as c:
             row = await c.fetchrow(sql, *params)
         if row is None:
@@ -518,6 +607,7 @@ class ProcessorBot:
         }
 
     def _random_point(self):
+        """Генерация случайной точки в радиусе от центра для fallback-событий."""
         import math
         import random
         if settings and hasattr(settings, 'question_overlay'):
@@ -530,10 +620,12 @@ class ProcessorBot:
         return f"POINT({center_lng + r * math.cos(theta)} {center_lat + r * math.sin(theta)})"
 
     def _request_stop(self):
+        """Установка флага остановки процессора."""
         logger.info("Stop signal received — requesting graceful shutdown")
         self._running = False
 
     async def shutdown(self):
+        """Корректное завершение: остановка воркеров, закрытие соединений."""
         if self._shutdown_started:
             return
         self._shutdown_started = True
@@ -570,6 +662,7 @@ class ProcessorBot:
 
 
 async def main():
+    """Точка входа: создание, инициализация и запуск ProcessorBot."""
     processor = ProcessorBot()
     try:
         success = await processor.initialize()

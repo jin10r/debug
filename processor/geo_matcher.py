@@ -23,10 +23,8 @@ from .word_tokenizer import Token
 if TYPE_CHECKING:
     from .semantic_matcher import SemanticMatcher
 
-try:
-    from .settings import settings
-except Exception:
-    settings = None
+from processor.metrics import record_geo_matches
+from core.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -34,9 +32,10 @@ Candidate = Tuple[str, Tuple[str, ...], int, int, int, bool, bool]
 
 
 def _fuzzy_match(query: str, phrases: list, threshold: float):
+    """Нечёткий поиск по списку фраз с пороговым значением схожести."""
     try:
         return rf_process.extractOne(
-            query, phrases, scorer=fuzz.ratio, score_cutoff=threshold,
+            query, phrases, scorer=fuzz.WRatio, score_cutoff=threshold,
         )
     except Exception:
         return None
@@ -54,6 +53,7 @@ class GeoMatcher:
     """Поиск по geo таблице: кандидаты → geo_id через surface/lemma индекс."""
 
     def __init__(self, morph: Morphology, index: PhoneticIndex) -> None:
+        """Инициализация матчера с морфологией и фонетическим индексом."""
         self._morph = morph
         self._index = index
         self._initialized = False
@@ -62,9 +62,11 @@ class GeoMatcher:
         self._semantic_matcher: Optional["SemanticMatcher"] = None
 
     def set_semantic_matcher(self, matcher: "SemanticMatcher") -> None:
+        """Подключение семантического валидатора кандидатов."""
         self._semantic_matcher = matcher
 
     async def initialize(self, pg_pool) -> bool:
+        """Загрузка geo-данных, построение индекса, инициализация стоп-слов."""
         try:
             async with pg_pool.acquire() as conn:
                 geo_rows = await conn.fetch(
@@ -83,6 +85,7 @@ class GeoMatcher:
             return False
 
     async def reindex_all(self, pg_pool) -> int:
+        """Полная перестройка индекса geo-объектов."""
         try:
             async with pg_pool.acquire() as conn:
                 rows = await conn.fetch(
@@ -96,6 +99,7 @@ class GeoMatcher:
             return 0
 
     async def reindex_geo(self, pg_pool, geo_id: int) -> None:
+        """Обновление индекса для одного geo-объекта по ID."""
         try:
             async with pg_pool.acquire() as conn:
                 row = await conn.fetchrow(
@@ -109,6 +113,7 @@ class GeoMatcher:
             logger.error(f"[Geo] reindex_geo({geo_id}) failed: {exc}")
 
     async def close(self) -> None:
+        """Завершение работы: остановка пула потоков."""
         if self._executor:
             self._executor.shutdown(wait=True)
             logger.info("[Geo] ThreadPoolExecutor shutdown")
@@ -116,11 +121,13 @@ class GeoMatcher:
         self._semantic_matcher = None
 
     def _punctuation_set(self) -> Set[str]:
+        """Набор символов пунктуации для фильтрации токенов."""
         if settings and settings.similarity:
             return set(getattr(settings.similarity, 'punctuation_tokens', ()))
         return {'#', '/', ',', '.', '(', ')', '!', '?', '-', '«', '»', '"', ':', ';'}
 
     def _strip_noise(self, tokens: List[Token], lemmas: List[Lemma]) -> Tuple[List[Token], List[Lemma]]:
+        """Удаление шумовых (пунктуационных) токенов из последовательности."""
         if len(tokens) != len(lemmas):
             n = min(len(tokens), len(lemmas))
             tokens, lemmas = tokens[:n], lemmas[:n]
@@ -137,6 +144,7 @@ class GeoMatcher:
     def _candidates_sliding_window(
         self, clean_tokens: List[Token], clean_stems: List[str], max_window: Optional[int] = None,
     ) -> List[Candidate]:
+        """Генерация всех возможных N-грамм-кандидатов для поиска geo."""
         if max_window is None:
             max_window = (
                 settings.similarity.max_sliding_window
@@ -160,6 +168,7 @@ class GeoMatcher:
         return out
 
     async def _link_span(self, surface: str, stems: Tuple[str, ...], span: Tuple[int, int]) -> Optional[Dict]:
+        """Поиск geo-объекта по тексту: Tier 1 (стемы) → Tier 2 (опечатки)."""
         if not surface:
             return None
 
@@ -235,6 +244,7 @@ class GeoMatcher:
         return None
 
     def _finalize(self, best_by_geo: Dict[int, Dict]) -> List[Dict]:
+        """Дедупликация, сортировка и возврат top-K найденных geo-объектов."""
         top_k = (
             settings.similarity.max_entities if settings and settings.similarity else 5
         )
@@ -251,6 +261,7 @@ class GeoMatcher:
         results = sorted(kept, key=lambda x: x['score'], reverse=True)[:top_k]
         for r in results:
             r.pop('_span', None)
+        record_geo_matches(results)
         source_stats = {}
         for r in results:
             source_stats[r['source']] = source_stats.get(r['source'], 0) + 1
@@ -264,8 +275,13 @@ class GeoMatcher:
         self,
         tokens: List[Token],
         lemmas: List[Lemma],
+        text: Optional[str] = None,
     ) -> List[Dict]:
         """Поиск по geo таблице. Возвращает List[Dict] с geo_id/score/matched_name.
+
+        text — ПОЛНЫЙ исходный текст сообщения: передаётся семантической модели
+        для валидации кандидатов «серой зоны» (0.70–0.85). Если не задан —
+        семантический фильтр не вызывается (режим совместимости/тестов).
 
         Результаты сортируются: сначала settlement (village/town), потом street.
         """
@@ -299,26 +315,32 @@ class GeoMatcher:
             result = await self._link_span(surface, stem_tuple, (start_i, end_i))
             if result is None:
                 continue
-            if is_anchored:
-                result['score'] = min(1.0, result['score'] + boost)
+            result['_anchored'] = is_anchored
             gid = result['geo_id']
             existing = best_by_geo.get(gid)
             if existing is None or result['score'] > existing['score']:
                 best_by_geo[gid] = result
 
-        if self._semantic_matcher and best_by_geo:
+        if self._semantic_matcher and best_by_geo and text:
+            semantic_threshold = (
+                settings.similarity.semantic_accept_threshold
+                if settings and settings.similarity else None
+            )
             candidates_list = list(best_by_geo.values())
-            filtered_candidates = []
-            for cand in candidates_list:
-                window_text = cand.get('text', '')
-                if not window_text:
-                    filtered_candidates.append(cand)
-                    continue
-                filtered = self._semantic_matcher.filter_candidates([cand], window_text)
-                filtered_candidates.extend(filtered)
+            filtered_candidates = self._semantic_matcher.filter_candidates(
+                candidates_list, text, semantic_threshold=semantic_threshold,
+            )
             best_by_geo = {c["geo_id"]: c for c in filtered_candidates}
             logger.debug(
-                f"[Geo] Semantic filter: {len(candidates_list)} -> {len(filtered_candidates)} candidates"
+                f"[Geo] Semantic filter (full text): {len(candidates_list)} -> "
+                f"{len(filtered_candidates)} candidates"
             )
+
+        # Prepositional boost — ПОСЛЕ семантической валидации: не выталкивает
+        # кандидатов серой зоны (0.70–0.85) за порог confident (0.85) до того,
+        # как их проверит модель. Сортировка и скоринг используют boosted score.
+        for r in best_by_geo.values():
+            if r.pop('_anchored', False):
+                r['score'] = min(1.0, r['score'] + boost)
 
         return self._finalize(best_by_geo)

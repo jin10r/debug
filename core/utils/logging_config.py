@@ -8,7 +8,6 @@ Structured JSON logging configuration (Docker-optimized version)
 import logging
 import json
 import sys
-import traceback
 import uuid
 import os
 from datetime import datetime

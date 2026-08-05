@@ -36,7 +36,7 @@ _handler.setFormatter(_formatter)
 logging.root.handlers = [_handler]
 logging.root.setLevel(_LOG_LEVEL)
 
-from .db_adapter import DBAdapter
+from core.db.db_adapter import DBAdapter
 from core.text_preprocessor import strip_tail, preprocess_light
 
 logger = logging.getLogger(__name__)
@@ -53,6 +53,7 @@ class ParserBot:
     """Бот для парсинга Telegram каналов — kurigram + предобработка + pending_events."""
 
     def __init__(self):
+        """Инициализация бота: подключение к БД, Telegram клиент, очереди."""
         self.db: Optional[DBAdapter] = None
         self.app: Optional[Client] = None
         self._running = False
@@ -75,8 +76,10 @@ class ParserBot:
         self._worker_seq = 0
         self._adaptive_pool_task: Optional[asyncio.Task] = None
         self._idle_seconds = 0
+        self._backpressure_active = False
 
     async def initialize(self) -> bool:
+        """Инициализировать БД и Telegram клиент."""
         try:
             if not await self._init_database():
                 return False
@@ -89,6 +92,7 @@ class ParserBot:
             return False
 
     async def _init_database(self) -> bool:
+        """Подключиться к PostgreSQL и проверить схему."""
         logger.info("Connecting to PostgreSQL...")
         self.db = DBAdapter()
         if not await self.db.connect():
@@ -103,6 +107,7 @@ class ParserBot:
         return True
 
     async def _init_telegram_client(self) -> bool:
+        """Запустить pyrogram клиент с сессией и прокси (если настроен)."""
         session_path = os.path.join("/app/parser", "session.session")
         if not os.path.exists(session_path):
             logger.error(
@@ -140,6 +145,7 @@ class ParserBot:
             return False
 
     async def _load_chat_history(self):
+        """Загрузить историю сообщений канала в очередь."""
         try:
             logger.info(f"Loading history from channel {self.channel_id}...")
             await self._warmup_peer()
@@ -159,6 +165,7 @@ class ParserBot:
             logger.error(f"Failed to load chat history: {e}")
 
     async def _warmup_peer(self) -> bool:
+        """Найти канал в списке диалогов для прогрева кэша peer."""
         target_id = int(self.channel_id)
         try:
             async for dialog in self.app.get_dialogs():
@@ -175,6 +182,7 @@ class ParserBot:
             return False
 
     async def start(self):
+        """Запустить обработку сообщений: воркеры, адаптивный пул, слушатели."""
         self._running = True
 
         loop = asyncio.get_event_loop()
@@ -191,7 +199,21 @@ class ParserBot:
         async def handle_message(client: Client, message: Message):
             if not self._running:
                 return
-            await self._pending_queue.put(message)
+            
+            # Backpressure: если очередь переполнена, пропускаем с логом
+            if self._backpressure_active:
+                try:
+                    await asyncio.wait_for(
+                        self._pending_queue.put(message), 
+                        timeout=0.1
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        f"Message {message.id} dropped: queue full (backpressure)"
+                    )
+                    return
+            else:
+                await self._pending_queue.put(message)
 
         try:
             if not self.app.is_connected:
@@ -227,6 +249,7 @@ class ParserBot:
 
     @staticmethod
     def _to_kiev(dt: Optional[datetime]) -> datetime:
+        """Привести datetime к киевскому часовому поясу."""
         if dt is None:
             return datetime.now(KIEV_TZ)
         if dt.tzinfo is None:
@@ -235,6 +258,7 @@ class ParserBot:
 
     @staticmethod
     def _write_heartbeat():
+        """Записать timestamp в /tmp/parser_heartbeat для healthcheck."""
         try:
             with open('/tmp/parser_heartbeat', 'w') as f:
                 f.write(str(int(datetime.now(timezone.utc).timestamp())))
@@ -242,6 +266,7 @@ class ParserBot:
             pass
 
     def _spawn_worker(self) -> asyncio.Task:
+        """Создать и запустить новый воркер очереди."""
         worker_id = self._worker_seq
         self._worker_seq += 1
         task = asyncio.create_task(self._pending_worker(worker_id))
@@ -250,6 +275,7 @@ class ParserBot:
         return task
 
     def _supervise_worker(self, task):
+        """Перезапустить воркер, если он упал с исключением."""
         if not self._running:
             return
         try:
@@ -260,6 +286,7 @@ class ParserBot:
         self._spawn_worker()
 
     def _remove_worker(self) -> bool:
+        """Отменить и удалить одного воркера (если превышен минимум)."""
         if len(self._worker_tasks) <= _MIN_WORKERS:
             return False
         task = self._worker_tasks.pop()
@@ -267,6 +294,7 @@ class ParserBot:
         return True
 
     async def _adaptive_pool_runner(self):
+        """Масштабировать число воркеров по размеру очереди."""
         logger.info("Adaptive pool runner started")
         while self._running:
             await asyncio.sleep(3)
@@ -274,6 +302,16 @@ class ParserBot:
                 break
             qsize = self._pending_queue.qsize()
             n_workers = len(self._worker_tasks)
+            
+            # Backpressure: если очередь почти полная, замедляем прием
+            if qsize >= 60:  # 60/65 = 92% full
+                if not self._backpressure_active:
+                    logger.warning(f"Backpressure ACTIVE: queue at {qsize}/65")
+                    self._backpressure_active = True
+            elif qsize < 40:
+                if self._backpressure_active:
+                    logger.info(f"Backpressure RELEASED: queue at {qsize}/65")
+                    self._backpressure_active = False
 
             if qsize > _SCALE_UP_QSIZE and n_workers < _MAX_WORKERS:
                 self._spawn_worker()
@@ -307,10 +345,12 @@ class ParserBot:
 
     @staticmethod
     def _extract_text(message) -> str:
+        """Извлечь текст или caption из сообщения."""
         return str(message.text or message.caption or '')
 
     @staticmethod
     def _sanitize_text(text: Optional[str]) -> Optional[str]:
+        """Заменить некорректные UTF-8 символы."""
         if not text:
             return text
         return text.encode('utf-8', errors='replace').decode('utf-8')
@@ -358,13 +398,14 @@ class ParserBot:
     async def _run_photo_download_listener(self):
         """Слушать NOTIFY photo_download и скачивать фото через pyrogram."""
         def _on_notify(connection, pid, channel, payload):
-            try:
-                data = json.loads(payload)
-                asyncio.create_task(
-                    self._download_photo_by_notify(data)
-                )
-            except Exception as e:
-                logger.warning(f"Photo download listener error: {e}")
+                """Обработать NOTIFY photo_download — запустить скачивание фото."""
+                try:
+                    data = json.loads(payload)
+                    asyncio.create_task(
+                        self._download_photo_by_notify(data)
+                    )
+                except Exception as e:
+                    logger.warning(f"Photo download listener error: {e}")
 
         backoff_schedule = [1, 5, 30]
         backoff_idx = 0
@@ -473,6 +514,7 @@ class ParserBot:
         media_dir = self.events_media_dir.rstrip('/')
 
         def _resolve_photo_path(url: str) -> Optional[str]:
+            """Преобразовать публичный URL фото в путь на ФС."""
             if not url:
                 return None
             if url.startswith('/media/events/'):
@@ -480,6 +522,7 @@ class ParserBot:
             return url
 
         def _on_notify(connection, pid, channel, payload):
+            """Обработать NOTIFY events_cleaned — удалить файлы устаревших фото."""
             try:
                 data = json.loads(payload)
                 deleted = 0
@@ -542,10 +585,12 @@ class ParserBot:
                 raise
 
     def _request_stop(self):
+        """Установить флаг остановки для graceful shutdown."""
         logger.info("Stop signal received — requesting graceful shutdown")
         self._running = False
 
     async def shutdown(self, drain_timeout: float = 20.0):
+        """Корректно остановить бота: дождаться очереди, отменить задачи, закрыть соединения."""
         if self._shutdown_started:
             return
         self._shutdown_started = True
@@ -590,6 +635,7 @@ class ParserBot:
 
 
 async def main():
+    """Точка входа: инициализировать, запустить, обработать прерывания."""
     parser = ParserBot()
     try:
         success = await parser.initialize()

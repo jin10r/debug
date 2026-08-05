@@ -1,4 +1,18 @@
-"""DB Adapter - подключение к PostgreSQL."""
+"""DBAdapter — единый адаптер подключения к PostgreSQL.
+
+Раньше parser/db_adapter.py и processor/db_adapter.py были почти побайтово
+одинаковыми классами. Теперь один класс живёт в core/, а оба сервиса
+импортируют его (контейнеры parser/processor копируют core/ в образ).
+
+Схема подключения идентична обеим старым версиям:
+  - параметры пула из централизованного settings.db;
+  - statement_cache_size=100;
+  - timezone Europe/Kiev на стороне сессии БД (время событий привязано к Киеву);
+  - проверка соединения SELECT 1 после создания пула.
+
+`ensure_schema` — parser-specific (исторические миграции events), для
+processor не вызывается, но безвреден в общем классе.
+"""
 
 import logging
 import asyncio
@@ -6,6 +20,7 @@ from typing import Optional
 
 import asyncpg
 
+from core.db.db_base import create_pool
 from core.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -34,26 +49,19 @@ class DBAdapter:
         Returns:
             True если успешно
         """
-        dsn = (
-            f"postgresql://{self._user}:{self._password}@"
-            f"{self._host}:{self._port}/{self._database}"
-        )
-
         for attempt in range(1, max_retries + 1):
             try:
                 logger.info(f"Connecting to PostgreSQL (attempt {attempt}/{max_retries})...")
-                
-                self.__pool = await asyncpg.create_pool(
-                    dsn,
-                    # Параметры пула из централизованного settings.db (раньше
-                    # были захардкожены 2/10/30 и игнорировали конфиг).
-                    min_size=settings.db.pool_min_size,
-                    max_size=settings.db.pool_max_size,
-                    command_timeout=settings.db.command_timeout,
-                    statement_cache_size=100,
-                    # Киевский пояс на стороне сессии БД — консистентно с
-                    # core/db/db_base.py; время событий хранится привязанным к Киеву.
-                    server_settings={'timezone': 'Europe/Kiev'},
+
+                # Единая фабрика пула (core/db/db_base.py): параметры по
+                # умолчанию из settings.db, timezone Europe/Kiev,
+                # statement_cache_size=100 проставляются там.
+                self.__pool = await create_pool(
+                    host=self._host,
+                    port=self._port,
+                    database=self._database,
+                    user=self._user,
+                    password=self._password,
                 )
 
                 # Проверяем подключение
@@ -73,7 +81,7 @@ class DBAdapter:
                 else:
                     logger.error(f"❌ Failed to connect to PostgreSQL after {max_retries} attempts")
                     return False
-        
+
         return False
 
     async def ensure_schema(self) -> bool:

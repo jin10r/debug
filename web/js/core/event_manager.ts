@@ -16,6 +16,7 @@ export interface EventManager {
 /** Coalesce bursts of store changes into one render per animation frame. */
 let rafPending = false;
 
+/** Coalesce store-change bursts into a single animation-frame render. */
 function scheduleRender(): void {
     if (rafPending) return;
     rafPending = true;
@@ -27,6 +28,7 @@ function scheduleRender(): void {
     });
 }
 
+/** Subscribe to store changes and return the public EventManager API. */
 function initializeEventManager(): EventManager {
     if (window.store && typeof window.store.subscribe === 'function') {
         // The ONLY store subscription that drives rendering.

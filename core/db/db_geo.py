@@ -15,6 +15,7 @@ class GeoOperations:
     """Handles geo-related database operations."""
 
     def __init__(self, db):
+        """Инициализирует обработчик гео-операций БД."""
         self.db = db
 
     async def get_geo_count(self) -> int:
@@ -26,10 +27,12 @@ class GeoOperations:
             return 0
 
     async def get_latest_update_time(self) -> Optional[Any]:
-        """Get the timestamp of the last update for the geo table."""
+        """Get the timestamp of the last update for the geo table.
+
+        Таблицы table_updates в схеме нет (init-scripts) — берём MAX(created_at).
+        """
         try:
-            query = "SELECT last_updated FROM table_updates WHERE table_name = 'geo'"
-            return await self.db.fetchval(query)
+            return await self.db.fetchval("SELECT MAX(created_at) FROM geo")
         except Exception as e:
             logger.error(f"Failed to get latest geo update time: {e}")
             return None

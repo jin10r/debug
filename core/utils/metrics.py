@@ -127,6 +127,43 @@ nlp_worker_pool_tasks = Gauge(
 )
 
 # ============================================
+# WebSocket Metrics
+# ============================================
+
+ws_connections_active = Gauge(
+    'ws_connections_active',
+    'Current number of active WebSocket connections'
+)
+
+ws_connections_rejected_total = Counter(
+    'ws_connections_rejected_total',
+    'Total WebSocket connections rejected (max limit reached)'
+)
+
+ws_ping_rate_limited_total = Counter(
+    'ws_ping_rate_limited_total',
+    'Total ping messages rejected by rate limiting'
+)
+
+ws_broadcasts_total = Counter(
+    'ws_broadcasts_total',
+    'Total WebSocket broadcasts',
+    ['message_type']  # 'feature', 'events_cleaned'
+)
+
+ws_broadcast_latency_seconds = Histogram(
+    'ws_broadcast_latency_seconds',
+    'WebSocket broadcast latency (send to all clients)',
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0)
+)
+
+ws_broadcast_errors_total = Counter(
+    'ws_broadcast_errors_total',
+    'Total individual send failures during WebSocket broadcasts'
+)
+
+
+# ============================================
 # Background Tasks Metrics
 # ============================================
 
@@ -154,6 +191,7 @@ application_info = Info(
 
 # Set application info (call this once at startup)
 def set_application_info(version: str = '1.0.0'):
+    """Устанавливает мета-информацию о приложении для Prometheus."""
     application_info.info({
         'version': version,
         'name': 'temperature_optimization'
@@ -242,24 +280,24 @@ def _normalize_endpoint(path: str) -> str:
 # ============================================
 
 def record_cache_hit(cache_type: str):
-    """Record a cache hit"""
+    """Увеличивает счётчик попаданий в кэш для указанного типа."""
     cache_hits_total.labels(cache_type=cache_type).inc()
 
 
 def record_cache_miss(cache_type: str):
-    """Record a cache miss"""
+    """Увеличивает счётчик промахов кэша для указанного типа."""
     cache_misses_total.labels(cache_type=cache_type).inc()
 
 
 def update_db_pool_metrics(stats: dict):
-    """Update database pool metrics"""
+    """Обновляет метрики пула соединений БД."""
     db_pool_size.set(stats.get('size', 0))
     db_pool_idle.set(stats.get('idle', 0))
     db_pool_in_use.set(stats.get('in_use', 0))
 
 
 def record_slow_query(query_type: str):
-    """Record a slow query"""
+    """Увеличивает счётчик медленных запросов для указанного типа."""
     db_slow_queries_total.labels(query_type=query_type).inc()
 
 
@@ -273,25 +311,36 @@ async def metrics_handler(request: web.Request):
     
     Returns metrics in Prometheus text format
     """
-    # Update DB pool metrics before exposing
-    if 'db_pool' in request.app:
+    # Update DB pool metrics before exposing.
+    # У Database (core/db/db_base.py) нет метода get_pool_stats — читаем
+    # актуальные счётчики напрямую из asyncpg-пула.
+    db_pool = request.app.get('db_pool')
+    if db_pool and getattr(db_pool, 'pool', None):
         try:
-            stats = request.app['db_pool'].get_pool_stats()
-            update_db_pool_metrics(stats)
+            pool = db_pool.pool
+            update_db_pool_metrics({
+                'size': pool.get_size(),
+                'idle': pool.get_idle_size(),
+                'in_use': pool.get_size() - pool.get_idle_size(),
+            })
         except Exception as e:
             logger.error(f"Failed to update DB pool metrics: {e}")
     
     # Generate metrics
     metrics_output = generate_latest(REGISTRY)
     
+    # CONTENT_TYPE_LATEST = 'text/plain; version=0.0.4; charset=utf-8' уже
+    # содержит charset — aiohttp web.Response добавляет свой к параметру
+    # content_type= и падает (ValueError). Задаём готовый Content-Type
+    # заголовком, без content_type=/charset= параметров.
     return web.Response(
         body=metrics_output,
-        content_type=CONTENT_TYPE_LATEST
+        headers={'Content-Type': CONTENT_TYPE_LATEST}
     )
 
 
 def setup_metrics_routes(app: web.Application):
-    """Setup metrics routes"""
+    """Регистрирует маршрут /metrics в aiohttp-приложении."""
     app.router.add_get('/metrics', metrics_handler)
     logger.info("Metrics endpoint registered at /metrics")
 

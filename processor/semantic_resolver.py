@@ -7,17 +7,9 @@ PostGIS вычисляет геометрию по выбранной страт
 import logging
 from typing import Any, Dict, List, Optional
 
-try:
-    from .settings import settings
-except Exception:
-    settings = None
+from core.settings import settings
 
 logger = logging.getLogger(__name__)
-
-_MIDPOINT_TYPES: frozenset = frozenset({
-    'street', 'market', 'station', 'park', 'landmark',
-})
-
 
 class SemanticResolver:
     """Определяет стратегию геолокации по семантике текста.
@@ -27,11 +19,13 @@ class SemanticResolver:
     """
 
     def __init__(self, morph, index):
+        """Инициализация резолвера с морфологией и индексом."""
         self._morph = morph
         self._index = index
         self._initialized = False
 
     async def initialize(self, pg_pool) -> None:
+        """Установка флага готовности резолвера."""
         self._initialized = True
         logger.info("[Resolver] Initialized (simplified: prepositional midpoint only)")
 
@@ -42,6 +36,7 @@ class SemanticResolver:
         lemmas: list,
         candidates: List[Dict],
     ) -> Optional[Dict[str, Any]]:
+        """Определение стратегии геолокации по тексту и кандидатам."""
         if not self._initialized or not candidates:
             return None
 
@@ -53,6 +48,7 @@ class SemanticResolver:
         return None
 
     def _pre_filter(self, text: str, candidates: List[Dict]) -> Optional[Dict[str, Any]]:
+        """Быстрая предфильтрация: поиск предлогов направления."""
         text_lower = text.lower()
 
         has_from_to = any(p in text_lower for p in ('от', 'до')) and len(candidates) >= 2
@@ -68,5 +64,6 @@ class SemanticResolver:
         return None
 
     async def close(self) -> None:
+        """Сброс флага инициализации резолвера."""
         self._initialized = False
         logger.info("[Resolver] Closed")

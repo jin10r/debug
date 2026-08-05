@@ -80,11 +80,13 @@ logs
 optimization_results.json
 
 # Generated CSV exports (large, produced locally — not versioned)
-*.csv
-!postgres/data/*.csv
+
+#!postgres/data/*.csv
 
 # IDE / tool config
 .devin/
+.kilo/
+review.md
 
 # ONNX model files (large binaries, downloaded separately, not versioned)
 parser/models/

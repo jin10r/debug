@@ -9,7 +9,7 @@
 const CACHE_VERSION = '__BUILD_ID__-2';
 const SHELL_CACHE = `survival-shell-${CACHE_VERSION}`;
 const TILE_CACHE = `survival-tiles-${CACHE_VERSION}`;
-const TILE_CACHE_LIMIT = 300;
+const TILE_CACHE_LIMIT = 1000;
 
 // Canonical (un-versioned) app-shell URLs to precache.
 const SHELL_ASSETS = [

@@ -97,6 +97,7 @@ function isAcceptable(feature: EventFeature): boolean {
 /** Memoized filtered-items result, keyed by every input that affects it. */
 let filterMemo: { key: string; value: EventFeatureCollection } | null = null;
 
+/** Build filtered FeatureCollection with memoization by revision/time/layers/clock. */
 function computeFiltered(state: SurvivalState): EventFeatureCollection {
     const key = `${state.revision}|${state.currentTimeFilter}|`
         + `${[...state.activeLayers].sort().join(',')}|${state.clockTick}`;
@@ -136,6 +137,7 @@ export const store = createStore<SurvivalState>()((set, get) => ({
     revision: 0,
     clockTick: 0,
 
+    /** Replace all events in the store (e.g. hydrate from cache). */
     setEvents: (features) => {
         const next = new Map<string | number, EventFeature>();
         for (const f of features) {
@@ -147,6 +149,7 @@ export const store = createStore<SurvivalState>()((set, get) => ({
         console.log('[Store] setEvents:', next.size, 'events');
     },
 
+    /** Upsert a single event; returns true if it was new. */
     addEvent: (feature) => {
         const id = getEventId(feature);
         if (id == null || !isAcceptable(feature)) return false;
@@ -158,6 +161,7 @@ export const store = createStore<SurvivalState>()((set, get) => ({
         return isNew;
     },
 
+    /** Upsert many events at once; returns the count of newly added ids. */
     addEvents: (features) => {
         if (!features || features.length === 0) return 0;
         const state = get();
@@ -182,6 +186,7 @@ export const store = createStore<SurvivalState>()((set, get) => ({
         return added;
     },
 
+    /** Change the time-filter window in minutes. */
     updateTimeFilter: (minutes) => {
         const state = get();
         if (state.currentTimeFilter === minutes) return;
@@ -189,6 +194,7 @@ export const store = createStore<SurvivalState>()((set, get) => ({
         console.log('[Store] timeFilter:', minutes, 'min');
     },
 
+    /** Toggle a layer on/off. */
     toggleLayer: (layer) => {
         const state = get();
         const next = new Set(state.activeLayers);
@@ -198,6 +204,7 @@ export const store = createStore<SurvivalState>()((set, get) => ({
         console.log('[Store] toggleLayer:', layer, '→', [...next].join(','));
     },
 
+    /** Drop events past their TTL; returns the count removed. */
     pruneExpired: () => {
         const state = get();
         const next = new Map<string | number, EventFeature>();
@@ -233,21 +240,26 @@ export const store = createStore<SurvivalState>()((set, get) => ({
         return removed;
     },
 
+    /** Remove all events from the store. */
     clearEvents: () => {
         set({ eventsById: new Map(), revision: get().revision + 1 });
     },
 
+    /** Advance the clock tick to re-evaluate time-based filtering. */
     tickClock: () => {
         set({ clockTick: get().clockTick + 1 });
     },
 
+    /** Events passing the current layer + time filter, as a FeatureCollection. */
     getFilteredItems: () => computeFiltered(get()),
 
+    /** Every stored event as a FeatureCollection (for persistence). */
     getAllEvents: () => ({
         type: 'FeatureCollection',
         features: [...get().eventsById.values()]
     }),
 
+    /** ISO-8601 timestamp of the newest event, or null when empty. */
     getLatestTimestamp: () => {
         let max: Date | null = null;
         for (const f of get().eventsById.values()) {

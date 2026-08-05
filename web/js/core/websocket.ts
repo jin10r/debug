@@ -58,6 +58,7 @@ export class WebSocketManager {
 
     // ------------------------------------------------------------------ connect
 
+    /** Open WebSocket connection with bearer or Telegram auth. */
     connect(): void {
         this.bindLifecycle();
         this.intentionallyClosed = false;
@@ -94,6 +95,7 @@ export class WebSocketManager {
 
     // --------------------------------------------------------------- handleOpen
 
+    /** Authenticate and start heartbeat on successful connection. */
     private handleOpen(): void {
         console.log('[WS] Connected');
         this.isConnected      = true;
@@ -144,21 +146,54 @@ export class WebSocketManager {
 
     // ------------------------------------------------------------- sendAuth
 
+    /** Send bearer or Telegram init-data auth to the server. */
     private sendAuth(): void {
+        // Priority 1: Use JWT access token (most common after successful gate.js auth)
         const accessToken = sessionStorage.getItem('access_token');
-        const initData    = window.Telegram?.WebApp?.initData;
-
         if (accessToken) {
-            this.sendMessage({ type: 'auth', token_type: 'bearer', token: accessToken });
-        } else if (initData) {
-            this.sendMessage({ type: 'auth', token_type: 'telegram_init_data', init_data: initData });
-        } else {
-            console.error('[WS] No auth credentials to send');
+            console.log('[WS] Auth: Using JWT access token');
+            this.sendMessage({ 
+                type: 'auth', 
+                token: accessToken 
+            });
+            return;
         }
+
+        // Priority 2: Use saved initData from gate.js (fallback for direct WS connection)
+        const savedInitData = sessionStorage.getItem('telegram_init_data');
+        if (savedInitData) {
+            console.log('[WS] Auth: Using saved initData from gate.js');
+            this.sendMessage({ 
+                type: 'auth', 
+                init_data: savedInitData 
+            });
+            return;
+        }
+
+        // Priority 3: Try to get fresh initData from Telegram WebApp (last resort)
+        const liveInitData = window.Telegram?.WebApp?.initData;
+        if (liveInitData) {
+            console.log('[WS] Auth: Using live Telegram WebApp initData');
+            this.sendMessage({ 
+                type: 'auth', 
+                init_data: liveInitData 
+            });
+            return;
+        }
+
+        // No auth credentials available - this should not happen after gate.js
+        console.error('[WS] No authentication credentials available');
+        console.error('[WS] Debug info:', {
+            hasAccessToken: !!accessToken,
+            hasSavedInitData: !!savedInitData,
+            hasLiveInitData: !!liveInitData,
+            telegramWebApp: !!window.Telegram?.WebApp
+        });
     }
 
     // ----------------------------------------------------------- handleMessage
 
+    /** Parse incoming JSON and dispatch by message type. */
     private handleMessage(event: MessageEvent): void {
         let data: Record<string, unknown>;
         try {
@@ -220,6 +255,7 @@ export class WebSocketManager {
 
     // ------------------------------------------------------------- handleClose
 
+    /** Handle connection close with auto-reconnect unless intentional. */
     private handleClose(event: CloseEvent): void {
         console.log('[WS] Closed:', event.code, event.reason);
         this.isConnected = false;
@@ -233,12 +269,14 @@ export class WebSocketManager {
         }
     }
 
+    /** Log WebSocket errors to the console. */
     private handleError(error: Event): void {
         console.error('[WS] Error:', error);
     }
 
     // --------------------------------------------------------- scheduleReconnect
 
+    /** Schedule reconnect with exponential backoff and jitter. */
     private scheduleReconnect(): void {
         if (this.reconnectTimer !== null) return;
 
@@ -333,6 +371,7 @@ export class WebSocketManager {
         }, this.PING_INTERVAL_MS);
     }
 
+    /** Reset heartbeat timers on server pong response. */
     private handlePong(): void {
         console.log('[WS] ← pong');
         if (this.pongTimer !== null) {
@@ -342,6 +381,7 @@ export class WebSocketManager {
         this.missedPongs = 0;
     }
 
+    /** Clear all heartbeat ping/pong timers. */
     private stopHeartbeat(): void {
         if (this.pingTimer !== null) {
             window.clearInterval(this.pingTimer);
@@ -355,6 +395,7 @@ export class WebSocketManager {
 
     // ---------------------------------------------------------------- sendMessage
 
+    /** Send a JSON message if the WebSocket is open. */
     sendMessage(message: Record<string, unknown>): void {
         if (this.ws?.readyState === WebSocket.OPEN) {
             this.ws.send(JSON.stringify(message));
@@ -365,6 +406,7 @@ export class WebSocketManager {
 
     // ---------------------------------------------------------------- disconnect
 
+    /** Gracefully close connection and prevent auto-reconnect. */
     disconnect(): void {
         this.intentionallyClosed = true;
         this.stopHeartbeat();
@@ -384,6 +426,7 @@ export class WebSocketManager {
         this.isConnected = false;
     }
 
+    /** Return current connection diagnostics. */
     getStats() {
         return {
             isConnected: this.isConnected,
@@ -397,7 +440,7 @@ export class WebSocketManager {
 
 window.webSocketManager = new WebSocketManager();
 
-/** Show a notification for a genuinely new live event (rule 4 + rule 5). */
+/** Fire UI notification for a newly received live event. */
 function notifyNewEvent(feature: EventFeature): void {
     if (typeof window.handleNewEvents !== 'function') return;
     const p: any = feature.properties || {};
@@ -408,6 +451,7 @@ function notifyNewEvent(feature: EventFeature): void {
     }]);
 }
 
+/** Wire WebSocketManager callbacks to the store and start connection. */
 function initializeWebSocket(): void {
     console.log('[WS] Initializing...');
 

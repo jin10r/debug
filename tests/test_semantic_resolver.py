@@ -1,13 +1,12 @@
-"""Тесты SemanticResolver — pre-filter правил без вызова модели.
+"""Тесты SemanticResolver — правила определения стратегии геолокации.
 
-Проверяет быстрые правила определения стратегии:
-  • prepositional construction → midpoint
-  • type hint in text → single_match / midpoint
-  • duplicate names → fallback (None)
-  • single candidate → None (решается на уровень выше в message_processor)
+Актуальный контракт (упрощённый резолвер, см. processor/semantic_resolver.py):
+  • 'от X до Y' или 'между X и Y' при ≥2 кандидатах → midpoint;
+  • всё остальное (type hints 'село/пгт/станция/парк', дубликаты имён,
+    single match) резолвится в PostGIS (process_candidates) и здесь
+    возвращает None.
 """
 
-import asyncio
 import sys
 import types
 from pathlib import Path
@@ -16,11 +15,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 
-if "parser" not in sys.modules:
-    _pkg = types.ModuleType("parser")
-    _pkg.__path__ = [str(ROOT / "parser")]
-    sys.modules["parser"] = _pkg
-
+# processor/__init__.py тянет тяжёлые зависимости (rapidfuzz/pymorphy3) —
+# подменяем пакет лёгким стабом, чтобы импортировать semantic_resolver напрямую.
 if "processor" not in sys.modules:
     _pkg = types.ModuleType("processor")
     _pkg.__path__ = [str(ROOT / "processor")]
@@ -31,9 +27,9 @@ from processor.semantic_resolver import SemanticResolver  # noqa: E402
 
 @pytest.fixture
 def resolver():
+    """Резолвер с выставленным флагом инициализации (без реальных БД/индексов)."""
     r = SemanticResolver(None, None)
     r._initialized = True
-    r._stopwords = {'на', 'по', 'в', 'у', 'до', 'с', 'и', 'а', 'не'}
     return r
 
 
@@ -46,10 +42,10 @@ def _make_candidates(*specs):
 
 
 class TestPreFilterPrepositional:
-    """Правило 1: предлоги направления → midpoint."""
+    """Правило: предлоги направления → midpoint (при ≥2 кандидатах)."""
 
-    async def test_ot_do_midpoint(self, resolver):
-        """'от X до Y' → midpoint (только street/market/station/park/landmark)."""
+    def test_ot_do_midpoint(self, resolver):
+        """'от X до Y' → midpoint."""
         cand = _make_candidates(
             (1, "Дерибасовская", "street"),
             (4, "Ришельевская", "street"),
@@ -57,17 +53,9 @@ class TestPreFilterPrepositional:
         result = resolver._pre_filter("от Дерибасовской до Ришельевской пробка", cand)
         assert result is not None
         assert result['strategy'] == 'midpoint'
+        assert result['geo_ids'] == [1, 4]
 
-    async def test_midpoint_only_street_types(self, resolver):
-        """midpoint только для street/park/market/station/landmark."""
-        cand = _make_candidates(
-            (1, "Александровка", "village"),
-            (4, "Ильичёвск", "town"),
-        )
-        result = resolver._pre_filter("от Александровки до Ильичёвска", cand)
-        assert result is None
-
-    async def test_mezhdu_midpoint(self, resolver):
+    def test_mezhdu_midpoint(self, resolver):
         """'между X и Y' → midpoint."""
         cand = _make_candidates(
             (10, "Дерибасовская", "street"),
@@ -77,8 +65,21 @@ class TestPreFilterPrepositional:
         assert result is not None
         assert result['strategy'] == 'midpoint'
 
-    async def test_between_landmark_midpoint(self, resolver):
-        """midpoint для park."""
+    def test_single_candidate_no_preposition(self, resolver):
+        """Один кандидат без предлогов → None (решается в PostGIS)."""
+        cand = _make_candidates((1, "Дерибасовская", "street"))
+        assert resolver._pre_filter("Дерибасовская перекрыта", cand) is None
+
+    def test_no_direction_preposition(self, resolver):
+        """Без от/до/между → None, даже при нескольких кандидатах."""
+        cand = _make_candidates(
+            (1, "Дерибасовская", "street"),
+            (4, "Ришельевская", "street"),
+        )
+        assert resolver._pre_filter("пробка на Дерибасовской и Ришельевской", cand) is None
+
+    def test_between_landmark_midpoint(self, resolver):
+        """midpoint работает и для не-street типов (парки и т.п.)."""
         cand = _make_candidates(
             (30, "Горького", "park"),
             (40, "Шевченко", "park"),
@@ -86,77 +87,6 @@ class TestPreFilterPrepositional:
         result = resolver._pre_filter("между парком Горького и парком Шевченко", cand)
         assert result is not None
         assert result['strategy'] == 'midpoint'
-
-
-class TestPreFilterTypeHint:
-    """Правило 2: явный тип объекта в тексте."""
-
-    async def test_selo_hint_single(self, resolver):
-        """'село Александровка' → single_match на объект типа village."""
-        cand = _make_candidates(
-            (1, "Александровка", "village"),
-            (2, "Александровка", "town"),
-            (3, "Александровка", "village"),
-        )
-        result = resolver._pre_filter("село Александровка блокпост", cand)
-        assert result is None or len(result['geo_ids']) > 1
-
-    async def test_pgt_hint(self, resolver):
-        """'пгт Таирово' → single_match на town."""
-        cand = _make_candidates(
-            (5, "Таирово", "village"),
-            (6, "Таирово", "town"),
-        )
-        result = resolver._pre_filter("пгт Таирово перехватчики", cand)
-        assert result is not None
-        assert result['strategy'] == 'single_match'
-        assert 6 in result['geo_ids']
-
-    async def test_station_hint(self, resolver):
-        """'станция' → single_match на station."""
-        cand = _make_candidates(
-            (7, "Одесса-Главная", "station"),
-            (8, "Одесса", "town"),
-        )
-        result = resolver._pre_filter("на станции Одесса-Главная проверка", cand)
-        assert result is not None
-        assert result['strategy'] == 'single_match'
-        assert 7 in result['geo_ids']
-
-    async def test_park_hint(self, resolver):
-        """'парк' → single_match на park."""
-        cand = _make_candidates(
-            (9, "Горького", "park"),
-            (10, "Горького", "street"),
-        )
-        result = resolver._pre_filter("в парке Горького патруль", cand)
-        assert result is not None
-        assert result['strategy'] == 'single_match'
-        assert 9 in result['geo_ids']
-
-
-class TestPreFilterDuplicateNames:
-    """Правило 3: одноимённые объекты."""
-
-    async def test_duplicate_names_no_other_candidate(self, resolver):
-        """Только дубликаты одного имени → None."""
-        cand = _make_candidates(
-            (1, "Александровка", "village"),
-            (2, "Александровка", "town"),
-            (3, "Александровка", "village"),
-        )
-        result = resolver._pre_filter("Александровка блокпост", cand)
-        assert result is None
-
-    async def test_duplicate_names_with_other_candidate(self, resolver):
-        """Дубликат + другой кандидат → None."""
-        cand = _make_candidates(
-            (1, "Александровка", "village"),
-            (2, "Александровка", "town"),
-            (3, "Ильичёвск", "town"),
-        )
-        result = resolver._pre_filter("Александровка возле Ильичёвска", cand)
-        assert result is None
 
 
 class TestResolveIntegration:
@@ -172,10 +102,22 @@ class TestResolveIntegration:
         assert result is None
 
     async def test_empty_text(self, resolver):
-        """Пустой текст → pre-filter не срабатывает → None (fallback)."""
+        """Пустой текст → pre-filter не срабатывает → None (fallback в PostGIS)."""
         cand = _make_candidates((1, "Тестовая", "street"))
         result = await resolver.resolve("", [], [], cand)
         assert result is None
+
+    async def test_midpoint_via_resolve(self, resolver):
+        """Полный цикл: предлоги → midpoint."""
+        cand = _make_candidates(
+            (1, "Ланжероновская", "street"),
+            (2, "Дерибасовская", "street"),
+        )
+        result = await resolver.resolve(
+            "от Ланжероновской до Дерибасовской", [], [], cand
+        )
+        assert result is not None
+        assert result['strategy'] == 'midpoint'
 
     async def test_unknown_strategy_not_possible(self, resolver):
         """pre-filter не возвращает неизвестных стратегий."""
@@ -184,4 +126,6 @@ class TestResolveIntegration:
             (2, "Дерибасовская", "street"),
         )
         result = resolver._pre_filter("от Ланжероновской до Дерибасовской", cand)
-        assert result is None or result['strategy'] in ('single_match', 'intersection', 'midpoint')
+        assert result is None or result['strategy'] in (
+            'single_match', 'intersection', 'midpoint'
+        )

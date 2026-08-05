@@ -1,6 +1,7 @@
 -- 11-partition-maintenance.sql
--- Partition management for hourly partitions (realtime, 60-min TTL)
--- Создаёт партиции на текущий час + 1 вперёд, удаляет старше 1 часа
+-- Partition management for hourly partitions (72-hour lookback, 48-hour TTL)
+-- Создаёт партиции на 3 суток назад + 2 часа вперёд,
+-- удаляет только партиции старше 48 часов
 
 CREATE OR REPLACE FUNCTION manage_event_partitions()
 RETURNS INTEGER AS $$
@@ -10,8 +11,8 @@ DECLARE
     created_count INTEGER := 0;
     cutoff_hour TIMESTAMPTZ;
 BEGIN
-    -- Создаём текущий час + 1 час вперёд
-    FOR i IN 0..1 LOOP
+    -- Создаём с -72 часов (3 суток истории) до +2 часа вперёд
+    FOR i IN -72..2 LOOP
         part_hour := date_trunc('hour', NOW()) + i * INTERVAL '1 hour';
         part_name := 'events_' || to_char(part_hour, 'YYYY_MM_DD_HH24');
         IF NOT EXISTS (
@@ -27,8 +28,8 @@ BEGIN
         END IF;
     END LOOP;
 
-    -- Удаляем партиции, которые целиком старше 1 часа
-    cutoff_hour := date_trunc('hour', NOW()) - INTERVAL '1 hour';
+    -- Удаляем партиции, целиком старше 48 часов (а не 1 часа)
+    cutoff_hour := date_trunc('hour', NOW()) - INTERVAL '48 hours';
     FOR part_name IN
         SELECT relname FROM pg_class
         WHERE relname ~ '^events_\d{4}_\d{2}_\d{2}_\d{2}$'
@@ -47,5 +48,5 @@ $$ LANGUAGE plpgsql;
 SELECT cron.unschedule('manage-event-partitions')
 WHERE EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'manage-event-partitions');
 
--- Создаём задание каждые 5 минут (часовые партиции создаются редко, но проверять надо чаще)
-SELECT cron.schedule('manage-event-partitions', '*/5 * * * *', 'SELECT manage_event_partitions()');
+-- Создаём задание каждую минуту (чтобы новые партиции создавались сразу)
+SELECT cron.schedule('manage-event-partitions', '* * * * *', 'SELECT manage_event_partitions()');

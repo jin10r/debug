@@ -3,3 +3,6 @@
 #   pip install -r requirements.txt -r parser/requirements.txt -r requirements-dev.txt
 #   pytest
 pytest>=8,<10
+# pytest.ini объявляет asyncio_mode = auto — без плагина все async-тесты
+# падают с "async def functions are not natively supported".
+pytest-asyncio>=0.23,<1

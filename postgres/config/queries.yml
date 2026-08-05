@@ -1,5 +1,10 @@
-# Queries for postgres_exporter (Phase 4: Monitoring)
-# Дополнительные метрики для Prometheus
+# Queries for postgres_exporter (prometheuscommunity/postgres-exporter)
+# Дополнительные метрики для Prometheus.
+# Подключается через PG_EXPORTER_EXTEND_QUERY_PATH (--extend.query-path).
+#
+# ВНИМАНИЕ: формат ниже — legacy (query+metrics). В v0.15 работает, но exporter
+# логирует deprecation-warning. При апгрейде образа сверьтесь с новым форматом
+# (master_query/query/metrics в одной секции) — иначе метрики молча пропадут.
 
 pg_stat_activity:
   query: |
@@ -51,37 +56,55 @@ pg_stat_statements_top:
         usage: COUNTER
 
 pg_bloat:
+  # Оценка «мёртвого» веса таблиц: фактические страницы против оценки
+  # минимально необходимых (по средней ширине строки и живым кортежам).
+  # Рабочая версия (исходная ссылалась на несуществующие алиасы `otta` и `t`).
   query: |
     SELECT
-      schemaname,
-      tablename,
+      c.relname AS tablename,
       ROUND(CAST(
-        (CASE WHEN otta IS NULL THEN 0 ELSE pg_relation_size(c.relid) - otta * COALESCE(pg_table_size(c.relid) - pg_relation_size(c.relid), 0) END)
-        / 1024 / 1024 AS numeric), 2) AS bloat_mb
-    FROM (
+        (pg_total_relation_size(c.oid) - pg_relation_size(c.oid))
+        / 1024 / 1024 AS numeric), 2) AS index_bloat_mb,
+      ROUND(CAST(
+        GREATEST(0, CASE
+          WHEN c.reltuples > 0 AND c.relpages > 0 THEN
+            c.relpages * 8192.0 - (c.reltuples * COALESCE(avg_row_len, 8192.0))
+          ELSE 0
+        END) / 1024 / 1024 AS numeric), 2) AS bloat_mb
+    FROM pg_catalog.pg_class c
+    JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
+    LEFT JOIN (
       SELECT
-        schemaname,
-        tablename,
-        cc.relid,
-        COALESCE(cc.relpages, 0) * 8192 AS actual_size
-      FROM pg_catalog.pg_class cc
-      JOIN pg_catalog.pg_namespace nn ON cc.relnamespace = nn.oid
-      WHERE nn.nspname = 'public'
-    ) c;
+        a.attrelid,
+        AVG(a.attlen) FILTER (WHERE a.attlen > 0) * 4 AS avg_row_len
+      FROM pg_catalog.pg_attribute a
+      WHERE a.attnum > 0
+        AND NOT a.attisdropped
+      GROUP BY a.attrelid
+    ) rl ON rl.attrelid = c.oid
+    WHERE n.nspname = 'public'
+      AND c.relkind = 'r'
+      AND c.relpages > 0
+    ORDER BY bloat_mb DESC;
   metrics:
-    - schemaname:
-        usage: LABEL
     - tablename:
         usage: LABEL
+    - index_bloat_mb:
+        usage: GAUGE
     - bloat_mb:
         usage: GAUGE
 
 pg_replication_lag:
+  # Один инстанс без реплик: in_recovery=0, replay_lag_sec=0.
+  # (Исходная версия имела WHERE без FROM — PostgreSQL отклоняет запрос.)
   query: |
     SELECT
       CASE WHEN pg_is_in_recovery() THEN 1 ELSE 0 END AS in_recovery,
-      EXTRACT(epoch FROM NOW() - pg_last_xact_replay_timestamp()) AS replay_lag_sec
-    WHERE pg_is_in_recovery();
+      CASE
+        WHEN pg_is_in_recovery() AND pg_last_xact_replay_timestamp() IS NOT NULL
+          THEN EXTRACT(EPOCH FROM (NOW() - pg_last_xact_replay_timestamp()))
+        ELSE 0
+      END AS replay_lag_sec;
   metrics:
     - in_recovery:
         usage: GAUGE

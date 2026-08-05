@@ -8,8 +8,7 @@ delegating to specialized modules for different concerns:
 - db_spatial: PostGIS spatial operations
 """
 
-import logging
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional
 from datetime import datetime
 
 from core.db.db_base import Database
@@ -17,8 +16,6 @@ from core.db.db_geo import GeoOperations
 from core.db.db_events import EventOperations
 from core.db.db_spatial import SpatialOperations
 
-
-logger = logging.getLogger(__name__)
 
 class Request:
     """Unified database operations facade.
@@ -28,21 +25,12 @@ class Request:
     """
 
     def __init__(self, db: Database):
+        """Инициализирует фасад БД с делегированием специализированным модулям."""
         self.db = db
         # Initialize specialized operation handlers
         self.geo = GeoOperations(db)
         self.events = EventOperations(db)
         self.spatial = SpatialOperations(db)
-        # Для совместимости с parser
-        self.settings = None  # settings импортируется глобально в parser
-
-    async def init_tables(self) -> None:
-        """
-        Database schema is now initialized via the /postgres/init.sql script.
-        This function is kept for compatibility but does not perform any operations.
-        """
-        logger.info("Skipping database table initialization. This is now handled by init.sql.")
-        pass
 
     async def get_geo_intersection(self, geo_id1: int, geo_id2: int) -> Optional[Dict[str, Any]]:
         """Calculate intersection of two geo records using PostGIS."""
@@ -67,15 +55,6 @@ class Request:
     async def get_latest_geo_update_time(self) -> Optional[Any]:
         """Get the timestamp of the last update for the geo table."""
         return await self.geo.get_latest_update_time()
-
-    async def add_event(
-        self, description: str, layer: str, strategy: str,
-        geometry: Dict, matches: List[Dict], event_time: datetime, photo_url: Optional[str] = None
-    ) -> Optional[int]:
-        """Add a new event to the database and return its ID."""
-        return await self.events.add_event(
-            description, layer, strategy, geometry, matches, event_time, photo_url
-        )
 
     async def get_all_geo_as_geojson(self) -> str:
         """Fetch all geo records as GeoJSON."""
@@ -121,44 +100,3 @@ class Request:
     async def get_latest_event_time(self) -> Optional[datetime]:
         """Get the timestamp of the latest event."""
         return await self.events.get_latest_update_time()
-
-    # ========================================================================
-    # Parser compatibility methods
-    # ========================================================================
-
-    async def call_process_event(
-        self,
-        timestamp: datetime,
-        description: str,
-        photo_url: Optional[str] = None
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Вызвать SQL функцию process_event().
-        
-        Args:
-            timestamp: Время события
-            description: Описание события
-            photo_url: URL фото (опционально)
-            
-        Returns:
-            Dict с event_id, layer, strategy, geom или None
-        """
-        try:
-            async with self.db.pool.acquire() as conn:
-                row = await conn.fetchrow(
-                    "SELECT * FROM process_event($1, $2, $3)",
-                    timestamp, description, photo_url
-                )
-                
-                if row:
-                    return {
-                        'event_id': row['event_id'],
-                        'layer': row['layer'],
-                        'strategy': row['strategy'],
-                        'geom': row['geom']
-                    }
-                return None
-                
-        except Exception as e:
-            logger.error(f"call_process_event error: {e}", exc_info=True)
-            return None

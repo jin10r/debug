@@ -24,6 +24,7 @@ export class LocalCache {
     private saveTimer: number | null = null;
     private unsubscribe: (() => void) | null = null;
 
+    /** Create LocalCache with an optional StorageAdapter. */
     constructor(storage?: StorageAdapter) {
         this.storage = storage || new StorageAdapter();
     }
@@ -65,6 +66,7 @@ export class LocalCache {
         }
     }
 
+    /** Debounced save trigger to coalesce rapid store changes. */
     private scheduleSave(): void {
         if (this.saveTimer !== null) return;
         this.saveTimer = window.setTimeout(() => {
@@ -73,6 +75,7 @@ export class LocalCache {
         }, SAVE_DEBOUNCE_MS);
     }
 
+    /** Persist current store events to localStorage. */
     private async save(): Promise<void> {
         try {
             const collection = window.store.getState().getAllEvents();
@@ -83,6 +86,7 @@ export class LocalCache {
         }
     }
 
+    /** Type guard — check if data is a valid GeoJSON FeatureCollection. */
     private isValidGeoJSON(data: unknown): data is EventFeatureCollection {
         return !!data
             && typeof data === 'object'

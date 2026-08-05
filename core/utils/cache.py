@@ -17,15 +17,17 @@ class CacheEntry:
     """Cache entry with expiration time and LRU tracking."""
 
     def __init__(self, value: Any, ttl_seconds: int):
+        """Создаёт запись кэша с указанным значением и TTL."""
         self.value = value
         self.expires_at = time.time() + ttl_seconds
         self.last_accessed = time.time()
 
     def is_expired(self) -> bool:
+        """Проверяет, истёк ли срок жизни записи."""
         return time.time() > self.expires_at
 
     def touch(self):
-        """Update last accessed time."""
+        """Обновляет время последнего доступа для LRU-алгоритма."""
         self.last_accessed = time.time()
 
 
@@ -42,6 +44,7 @@ class CacheManager:
     """
 
     def __init__(self, redis_url: str = None, max_size: int = 10000):
+        """Инициализирует in-memory кэш с LRU-вытеснением и поддержкой TTL."""
         # Redis URL ignored - using in-memory cache only
         # OrderedDict для LRU eviction
         self._cache: OrderedDict[str, CacheEntry] = OrderedDict()
@@ -53,20 +56,52 @@ class CacheManager:
         
         # Блокировка для потокобезопасности
         self._lock = asyncio.Lock()
+        
+        # Background cleanup task
+        self._cleanup_task: Optional[asyncio.Task] = None
 
     async def connect(self, max_retries: int = 3):
-        """No-op for in-memory cache"""
+        """Заглушка подключения для in-memory кэша (Redis не используется)."""
         self._connected = False
         logger.info(f"✅ In-memory cache initialized (max_size={self.max_size}, Redis removed)")
+        
+        # Start background cleanup task
+        if self._cleanup_task is None or self._cleanup_task.done():
+            self._cleanup_task = asyncio.create_task(self._background_cleanup())
+            logger.info("Cache background cleanup task started")
+        
         return True
 
+    async def _background_cleanup(self):
+        """Background task to cleanup expired entries periodically."""
+        while True:
+            try:
+                await asyncio.sleep(60)  # Check every minute
+                async with self._lock:
+                    expired_keys = [k for k, v in self._cache.items() if v.is_expired()]
+                    for key in expired_keys:
+                        del self._cache[key]
+                    if expired_keys:
+                        logger.debug(f"Background cleanup: removed {len(expired_keys)} expired entries")
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in cache cleanup task: {e}")
+
     async def close(self):
-        """Clear cache on shutdown"""
+        """Очищает кэш при завершении работы приложения."""
+        if self._cleanup_task and not self._cleanup_task.done():
+            self._cleanup_task.cancel()
+            try:
+                await self._cleanup_task
+            except asyncio.CancelledError:
+                pass
+        
         self._cache.clear()
         logger.info("In-memory cache cleared")
     
     def _make_key(self, prefix: str, *args, **kwargs) -> str:
-        """Generate cache key from prefix and arguments"""
+        """Генерирует ключ кэша из префикса и аргументов."""
         parts = [prefix]
         parts.extend(str(arg) for arg in args)
         parts.extend(f"{k}={v}" for k, v in sorted(kwargs.items()))
@@ -130,14 +165,14 @@ class CacheManager:
             return True
 
     async def removeItem(self, key: str) -> bool:
-        """Remove value from cache"""
+        """Удаляет значение из кэша по ключу."""
         if key in self._cache:
             del self._cache[key]
             return True
         return False
 
     async def getItemJSON(self, key: str) -> Optional[Any]:
-        """Get JSON value from cache"""
+        """Получает JSON-значение из кэша и десериализует его."""
         value = await self.getItem(key)
         if value is None:
             return None
@@ -148,7 +183,7 @@ class CacheManager:
             return None
 
     async def setItemJSON(self, key: str, value: Any, ttl: int = 3600) -> bool:
-        """Set JSON value in cache"""
+        """Сериализует и сохраняет JSON-значение в кэше."""
         try:
             json_value = json.dumps(value)
             return await self.setItem(key, json_value, ttl)
@@ -157,7 +192,7 @@ class CacheManager:
             return False
 
     async def invalidate_events_cache(self):
-        """Invalidate all events cache"""
+        """Инвалидирует все записи кэша, связанные с событиями."""
         keys_to_delete = [k for k in self._cache if k.startswith('events:')]
         for key in keys_to_delete:
             del self._cache[key]
@@ -168,29 +203,29 @@ class CacheManager:
     # =====================
 
     async def get_events_geojson(self, time_filter: int, layers: list = None) -> Optional[str]:
-        """Get cached GeoJSON events response"""
+        """Возвращает закешированный GeoJSON событий."""
         key = f"events:geojson:{time_filter}"
         if layers:
             key += f":{','.join(sorted(layers))}"
         return await self.getItem(key)
 
     async def set_events_geojson(self, time_filter: int, layers: list, data: str, ttl: int = 30) -> bool:
-        """Cache GeoJSON events response"""
+        """Кеширует GeoJSON-ответ событий с указанным TTL."""
         key = f"events:geojson:{time_filter}"
         if layers:
             key += f":{','.join(sorted(layers))}"
         return await self.setItem(key, data, ttl)
 
     async def get_geo_geojson(self) -> Optional[str]:
-        """Get cached geo GeoJSON"""
+        """Возвращает закешированный GeoJSON гео-данных."""
         return await self.getItem("geo:geojson")
 
     async def set_geo_geojson(self, data: str, ttl: int = 3600) -> bool:
-        """Cache geo GeoJSON"""
+        """Кеширует GeoJSON гео-данных с указанным TTL."""
         return await self.setItem("geo:geojson", data, ttl)
 
     async def get_stats(self) -> dict:
-        """Get cache statistics including LRU metrics."""
+        """Возвращает статистику кэша, включая LRU-метрики."""
         total = self.hits + self.misses
         return {
             'connected': self._connected,

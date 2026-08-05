@@ -20,6 +20,7 @@ PUBLIC_ENDPOINTS: Set[str] = {
     '/health/live',
     '/health/ready',
     '/health/detailed',
+    '/metrics',                # Prometheus scrape (only metric counters, no user data)
     '/api/validation-config',  # Needed to determine if validation is enabled
     '/api/validate-init',      # Used to get JWT tokens (has its own validation)
     '/api/auth/refresh',       # Used to refresh JWT tokens

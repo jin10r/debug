@@ -9,7 +9,7 @@ DECLARE
     deleted_count INTEGER := 0;
     photo_urls    TEXT[];
     partition_name TEXT;
-    cutoff_time TIMESTAMPTZ := NOW() - INTERVAL '1 hour';
+    cutoff_time TIMESTAMPTZ := NOW() - INTERVAL '48 hours';
 BEGIN
     -- Шаг 1: DROP партиций, целиком попавших в TTL
     FOR partition_name IN

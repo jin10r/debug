@@ -15,53 +15,8 @@ class EventOperations:
     """Handles event-related database operations."""
 
     def __init__(self, db):
+        """Инициализирует обработчик событий БД с ссылкой на пул соединений."""
         self.db = db
-        self.websocket_manager = None  # Будет установлено извне
-
-    async def add_event(
-        self,
-        description: str,
-        layer: str,
-        strategy: str,
-        geometry: Dict,
-        matches: List[Dict],
-        event_time: datetime,
-        photo_url: Optional[str] = None
-    ) -> Optional[int]:
-        """Add event using SQL function process_event()."""
-        try:
-            async with self.db.pool.acquire() as connection:
-                row = await connection.fetchrow(
-                    "SELECT * FROM process_event($1, $2, $3, $4)",
-                    event_time, description, layer, photo_url
-                )
-
-                if row:
-                    event_id = row['event_id']
-                    logger.info(f"Added event {event_id}: {description[:50]}...")
-
-                    # Broadcast через WebSocket
-                    if self.websocket_manager:
-                        event_geojson = {
-                            'type': 'Feature',
-                            'geometry': geometry,
-                            'properties': {
-                                'id': event_id,
-                                'description': description,
-                                'layer': row['layer'],
-                                'strategy': row['strategy'],
-                                'photo_url': photo_url,
-                                'matches': matches,
-                                'time': event_time.isoformat()
-                            }
-                        }
-                        await self.websocket_manager.broadcast_event(event_geojson)
-
-                    return event_id
-
-        except Exception as e:
-            logger.error(f"Failed to add event: {e}", exc_info=True)
-            return None
 
     async def get_filtered_events_as_geojson(
         self,
@@ -151,11 +106,16 @@ class EventOperations:
             logger.error(f"Failed to delete old events: {e}", exc_info=True)
 
     async def get_latest_update_time(self) -> Optional[datetime]:
-        """Get the timestamp of the last update for the events table."""
+        """Get the timestamp of the newest event (последняя активность).
+
+        Раньше читал таблицу table_updates, которой нет в схеме — из-за чего
+        /api/data_status всегда молча падал в 'no_data'.
+        """
         try:
             async with self.db.pool.acquire() as connection:
-                query = "SELECT last_updated FROM table_updates WHERE table_name = 'events'"
-                result = await connection.fetchval(query)
+                result = await connection.fetchval(
+                    "SELECT MAX(event_time) FROM events"
+                )
                 return result
         except Exception as e:
             logger.error(f"Failed to get latest events update time: {e}")

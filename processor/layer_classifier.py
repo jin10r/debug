@@ -21,12 +21,7 @@ from typing import Dict, List, Set
 
 from .morphology import Lemma, Morphology
 
-try:
-    from .settings import settings
-    from .settings import LAYER_PRIORITY as _LAYER_PRIORITY
-except Exception:
-    settings = None
-    _LAYER_PRIORITY = ('bus', 'cops', 'traffic')
+from core.settings import settings, LAYER_PRIORITY as _LAYER_PRIORITY
 
 logger = logging.getLogger(__name__)
 

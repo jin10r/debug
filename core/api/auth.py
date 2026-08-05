@@ -10,29 +10,40 @@ logger = logging.getLogger(__name__)
 
 async def get_validation_config_handler(request: web.Request) -> web.Response:
     """
-    GET/POST /api/validation-config
+    GET /api/validation-config
 
     Returns Telegram validation configuration.
-    Frontend calls this BEFORE loading validator.js to know if validation is enabled.
+    Frontend calls this BEFORE loading map to know access rules.
 
     Response: {
         "telegram_validation_enabled": true/false,
         "redirect_url": "..."
     }
-    """
-    # Get redirect_url - only use fallback if it's truly None or empty string
-    # Empty string means no redirect configured, not "use default"
-    redirect_url = getattr(settings.bot, 'redirect_url', None)
-    # Only use fallback if redirect_url is None or empty string
-    # But we want to return None/empty to frontend, not a fallback
-    # Frontend will use its own fallback if needed
-    if redirect_url is None or redirect_url == '':
-        redirect_url = None
 
-    return web.json_response({
-        'telegram_validation_enabled': getattr(settings.app, 'telegram_validation_enabled', True),
+    Security:
+    - telegram_validation_enabled=true: Only Telegram WebView allowed
+    - telegram_validation_enabled=false: Any webview allowed (dev mode)
+    """
+    validation_enabled = getattr(settings.app, 'telegram_validation_enabled', True)
+    redirect_url = getattr(settings.bot, 'redirect_url', None)
+    
+    # Ensure redirect_url is set when validation is enabled
+    if validation_enabled and not redirect_url:
+        # Default fallback - should be configured in production
+        redirect_url = 'https://t.me/your_bot'
+        logger.warning(
+            "[Config] REDIRECT_URL not set but validation is enabled. "
+            "Set REDIRECT_URL in .env for production."
+        )
+    
+    response_data = {
+        'telegram_validation_enabled': validation_enabled,
         'redirect_url': redirect_url
-    })
+    }
+    
+    logger.debug(f"[Config] Returning validation config: {response_data}")
+    
+    return web.json_response(response_data)
 
 
 async def validate_init_handler(request: web.Request) -> web.Response:

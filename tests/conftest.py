@@ -73,9 +73,9 @@ if _missing("pybreaker"):
 def load_module_by_path(name: str, relpath: str):
     """Import a single module file directly, bypassing its package __init__.
 
-    Needed for parser submodules: `parser/__init__.py` eagerly imports heavy
-    deps (asyncpg/rapidfuzz/pymorphy3), but word_tokenizer/text_preprocessor are
-    self-contained and must be testable without them.
+    Needed for self-contained submodules (core/text_preprocessor,
+    processor/word_tokenizer), которые тестируются без тяжёлых зависимостей,
+    подтягиваемых их пакетами (asyncpg/rapidfuzz/pymorphy3).
     """
     path = ROOT / relpath
     spec = importlib.util.spec_from_file_location(name, path)

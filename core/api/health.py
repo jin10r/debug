@@ -1,5 +1,4 @@
 """Health check endpoints for monitoring and orchestration"""
-import asyncio
 import logging
 import time
 from aiohttp import web

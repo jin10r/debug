@@ -11,11 +11,21 @@ BOT = "123456:TEST_abcDEF-ghiJKL_mnoPQR"
 
 
 def make_init_data(bot_token: str, fields: dict) -> str:
-    """Build a correctly-signed initData query string (Telegram scheme)."""
+    """Build a correctly-signed initData query string (Telegram scheme).
+
+    `fields` содержит СЫРЫЕ (URL-decoded) значения. По спецификации Telegram
+    data-check-string считается по декодированным значениям (серверный
+    validate_telegram_webapp_data декодирует через parse_qs), а в query string
+    значения передаются percent-encoded. Подписываем декодированные значения,
+    кодируем только при сборке строки.
+    """
     dcs = "\n".join(f"{k}={v}" for k, v in sorted(fields.items()))
     secret = hmac.new(b"WebAppData", bot_token.encode(), hashlib.sha256).digest()
     h = hmac.new(secret, dcs.encode(), hashlib.sha256).hexdigest()
-    return urllib.parse.urlencode(list(fields.items()) + [("hash", h)])
+    parts = [
+        f"{k}={urllib.parse.quote(str(v))}" for k, v in fields.items()
+    ] + [f"hash={h}"]
+    return "&".join(parts)
 
 
 def _fresh_fields():

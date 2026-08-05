@@ -164,6 +164,32 @@ async def test_surface_typo(matcher):
     )
 
 
+async def test_surface_typo_gray_zone_scoring(matcher):
+    """REG-тест фикса fuzz.Wratio→WRatio: Tier 2 (surface_typo) реально работает.
+
+    До фикса несуществующее fuzz.Wratio кидало AttributeError, молча глотаемое
+    в `except` внутри _fuzzy_match — Tier 2 никогда не выдавал матчей.
+    Здесь опечатка с WRatio≈84 попадает в серую зону (0.80–0.85) и матчится
+    как surface_typo с score < confident-порога (0.85) без предлога.
+    """
+    # Без предлога (нет prepositional_boost): кандидат серой зоны.
+    ids = await _ids(matcher, "балкофска перекрыта, объезжайте")
+    assert matcher._name2id["Балковская"] in ids
+
+
+async def test_surface_typo_preposition_boost_scoring(matcher):
+    """Boost применяется ПОСЛЕ семантической валидации (см. find_geo).
+
+    Кандидат серой зоны с предлогом не должен мгновенно стать confident
+    (0.84+0.05=0.89) — raw score до модели остаётся в серой зоне.
+    """
+    pre = preprocess_light(strip_tail("На балкофска возле АТБ"))
+    toks = tokenize(pre)
+    lemmas = matcher._morph.lemmatize_tokens(toks)
+    ents = await matcher.find_geo(tokens=toks, lemmas=lemmas)
+    assert any(e["geo_id"] == matcher._name2id["Балковская"] for e in ents)
+
+
 # ------------------------------------------------------------ Phase B: word-order
 
 async def test_word_order_independent(matcher):

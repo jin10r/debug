@@ -96,6 +96,7 @@ class Morphology:
     _STEM_CACHE_MAX = 20000
 
     def __init__(self) -> None:
+        """Инициализация pymorphy3 анализатора и Snowball-стеммера."""
         self._morph = pymorphy3.MorphAnalyzer()
         # Snowball (русский) — суффиксный стеммер. В ОТЛИЧИЕ от pymorphy он
         # OOV-устойчив: имена улиц — несловарные пропера, и угадыватель pymorphy

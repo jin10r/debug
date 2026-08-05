@@ -22,10 +22,7 @@ from .morphology import Morphology
 from core.text_preprocessor import clean
 from .word_tokenizer import tokenize
 
-try:
-    from .settings import settings
-except Exception:
-    settings = None
+from core.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +50,7 @@ class PhoneticIndex:
     """
 
     def __init__(self, morph: Morphology) -> None:
+        """Инициализация пустого индекса geo-объектов."""
         self._morph = morph
 
         # Стем-индекс: кортеж стемов токенов алиаса → записи (Tier 1, exact).
@@ -152,6 +150,7 @@ class PhoneticIndex:
     def replace_street(self, street_id: int, row: Optional[dict]) -> None:
         """Точечно заменить все записи одной улицы. row=None → улица удалена."""
         def _purge(idx):
+            """Удалить все записи указанной улицы из индекса."""
             out = {t: [e for e in ents if e.street_id != street_id]
                    for t, ents in idx.items()}
             return {t: ents for t, ents in out.items() if ents}
@@ -208,4 +207,5 @@ class PhoneticIndex:
 
     @property
     def is_empty(self) -> bool:
+        """Проверка, пуст ли индекс."""
         return not self._stem_index and not self._surface_phrases

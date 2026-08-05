@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 async def get_events_status_handler(request: web.Request):
+    """Возвращает мета-информацию о версии событий и максимальном ID."""
     db_request = request.app['db']
 
     # Поддержка как GET, так и POST запросов
@@ -36,6 +37,7 @@ async def get_events_status_handler(request: web.Request):
 
 
 async def post_events_updates_handler(request: web.Request):
+    """Возвращает инкрементальные обновления событий начиная с after_id."""
     db_request = request.app['db']
 
     try:
@@ -83,6 +85,7 @@ async def post_events_updates_handler(request: web.Request):
 
 
 async def get_events_snapshot_handler(request: web.Request):
+    """Возвращает полный снимок событий в формате GeoJSON."""
     db_request = request.app['db']
     logger.info(f"[Events Snapshot] Request received, path: {request.path}, method: {request.method}")
 
@@ -250,9 +253,11 @@ async def get_data_status_handler(request: web.Request):
             })
         
         # Проверяем, насколько старое последнее событие
-        from datetime import timedelta
+        from datetime import timedelta, timezone
 
-        now = datetime.utcnow()
+        # event_time — timestamptz (tz-aware от asyncpg): utcnow() (naive) дал бы
+        # TypeError при вычитании — берём timezone-aware now.
+        now = datetime.now(timezone.utc)
         time_diff = now - latest_event
         
         # Считаем данные устаревшими если последнее событие старше 5 минут

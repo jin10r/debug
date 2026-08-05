@@ -7,6 +7,7 @@ from core.api.events import (
     post_events_updates_handler,
     get_events_snapshot_handler,
     get_geo_handler,
+    reverse_geocode_handler,
     get_data_status_handler
 )
 
@@ -53,6 +54,7 @@ def setup_routes(app: web.Application):
     app.router.add_get('/api/events/status', get_events_status_handler)
     app.router.add_post('/api/events/updates', post_events_updates_handler)
     app.router.add_get('/api/geo', get_geo_handler)
+    app.router.add_get('/api/geocode/reverse', reverse_geocode_handler)
     app.router.add_get('/api/data_status', get_data_status_handler)
 
     # Configuration API (POST для безопасности — не логируются параметры)

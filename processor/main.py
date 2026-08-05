@@ -38,7 +38,7 @@ from .semantic_matcher import SemanticMatcher
 from .health import HealthServer
 from .layer_classifier import LayerClassifier
 from .word_tokenizer import tokenize
-from core.text_preprocessor import preprocess_light, strip_tail, is_promotional
+from core.utils.text_preprocessor import preprocess_light, strip_tail, is_promotional
 
 logger = logging.getLogger(__name__)
 

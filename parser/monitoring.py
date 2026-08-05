@@ -37,7 +37,7 @@ logging.root.handlers = [_handler]
 logging.root.setLevel(_LOG_LEVEL)
 
 from core.db.db_adapter import DBAdapter
-from core.text_preprocessor import strip_tail, preprocess_light
+from core.utils.text_preprocessor import strip_tail, preprocess_light
 
 logger = logging.getLogger(__name__)
 

@@ -192,7 +192,7 @@ class ParserConfig:
     """Параметры parser-сервиса (kurigram, photo download)."""
 
     # Сколько сообщений тянуть из истории канала при старте парсера.
-    history_limit: int = 65
+    history_limit: int = 100
 
     # Каталог хранения медиафайлов (фотографии событий).
     events_media_dir: str = "/media/events"
@@ -240,6 +240,34 @@ class LayerConfig:
 
 
 @dataclass
+class NominatimConfig:
+    enabled: bool = True
+    host: str = "nominatim"
+    port: int = 8080
+    query_timeout: int = 10
+    max_results: int = 5
+    confidence_multiplier: float = 0.85
+    # API endpoint paths (стандартные для Nominatim)
+    search_path: str = "/search"
+    reverse_path: str = "/reverse"
+
+
+@dataclass
+class OllamaConfig:
+    """Ollama LLM geo-resolution (Tier-2 fallback).
+
+    Всегда активен (enabled=True), но НЕ обязателен — при недоступности хоста
+    приложение продолжает работу без ошибок. Хост переопределяется через env
+    OLLAMA_HOST (по умолчанию http://host.docker.internal:11434).
+    """
+    enabled: bool = False
+    base_url: str = 'http://host.docker.internal:11434'
+    model: str = 'qwen2.5:0.5b'
+    timeout_s: int = 15
+    max_tokens: int = 128
+
+
+@dataclass
 class Settings:
     app: AppConfig
     db: DatabaseConfig
@@ -250,6 +278,8 @@ class Settings:
     parser: ParserConfig = field(default_factory=ParserConfig)
     processor: ProcessorConfig = field(default_factory=ProcessorConfig)
     question_overlay: QuestionOverlayConfig = field(default_factory=QuestionOverlayConfig)
+    ollama: OllamaConfig = field(default_factory=OllamaConfig)
+    nominatim: NominatimConfig = field(default_factory=NominatimConfig)
 
 
 def _resolve_jwt_secret(env: Env, *, warn_ephemeral: bool = False) -> str:
@@ -339,6 +369,8 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
             if require_jwt else None
         )
 
+        ollama_host = env.str("OLLAMA_HOST", None)
+
         return Settings(
             app=AppConfig(
                 telegram_validation_enabled=telegram_validation_enabled,
@@ -362,6 +394,12 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
                 proxy_scheme=env.str("PROXY_SCHEME", "socks5"),
             ),
             question_overlay=QuestionOverlayConfig(),
+            ollama=OllamaConfig(
+                base_url=ollama_host or 'http://host.docker.internal:11434',
+            ),
+            nominatim=NominatimConfig(
+                enabled=env.bool("NOMINATIM_ENABLED", default=True),
+            ),
         )
     except Exception as e:
         raise ValueError(f"Configuration error: {e}")

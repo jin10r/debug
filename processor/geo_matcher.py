@@ -11,7 +11,7 @@
 import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, List, Optional, Set, Tuple, TYPE_CHECKING
+from typing import TYPE_CHECKING, Dict, List, Optional, Set, Tuple
 
 from rapidfuzz import fuzz
 from rapidfuzz import process as rf_process
@@ -22,9 +22,14 @@ from .word_tokenizer import Token
 
 if TYPE_CHECKING:
     from .semantic_matcher import SemanticMatcher
+    from .nominatim_client import NominatimClient
 
 from processor.metrics import record_geo_matches
-from core.settings import settings
+
+try:
+    from core.settings import settings
+except Exception:
+    settings = None
 
 logger = logging.getLogger(__name__)
 
@@ -270,6 +275,43 @@ class GeoMatcher:
             f"{[(r['matched_name'], round(r['score'], 2), r['source']) for r in results]}"
         )
         return results
+
+    async def find_geo_nominatim(
+        self,
+        tokens: List[Token],
+        nominatim_client: "NominatimClient",
+    ) -> List[Dict]:
+        """Fallback-поиск через Nominatim, когда локальный индекс пуст.
+
+        Склеивает токены в строку запроса, отправляет в Nominatim.
+        Возвращает тот же формат что find_geo().
+        """
+        if not tokens:
+            return []
+        query = ' '.join(t.text.lower() for t in tokens if t.text)
+        if len(query) < 3:
+            return []
+        nom_results = await nominatim_client.geocode(query)
+        if not nom_results:
+            return []
+        results = []
+        for nr in nom_results:
+            gid = -(nr.get('place_id', 0) or 0)
+            if gid == 0:
+                continue
+            results.append({
+                'geo_id': gid,
+                'score': nr.get('importance', 0.5),
+                'matched_name': nr.get('name', query),
+                'text': query,
+                'source': 'nominatim',
+                '_nominatim_geom': nr.get('geojson'),
+            })
+        results.sort(key=lambda x: x['score'], reverse=True)
+        return results[:(
+            settings.similarity.max_entities
+            if settings and settings.similarity else 5
+        )]
 
     async def find_geo(
         self,

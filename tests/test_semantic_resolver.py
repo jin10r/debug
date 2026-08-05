@@ -126,6 +126,23 @@ class TestResolveIntegration:
             (2, "Дерибасовская", "street"),
         )
         result = resolver._pre_filter("от Ланжероновской до Дерибасовской", cand)
-        assert result is None or result['strategy'] in (
-            'single_match', 'intersection', 'midpoint'
-        )
+        assert result is None or result['strategy'] in ('single_match', 'intersection', 'midpoint')
+
+
+class TestBuildPrompt:
+    """Проверка формирования промпта (только структура)."""
+
+    def test_prompt_contains_text_and_candidates(self):
+        from processor.semantic_resolver import _build_prompt
+
+        prompt = _build_prompt("Александровка блокпост", [
+            {"geo_id": 1, "matched_name": "Александровка", "type": "village"},
+            {"geo_id": 2, "matched_name": "Ильичёвск", "type": "town"},
+        ])
+        assert "Александровка" in prompt
+        assert "1" in prompt
+        assert "village" in prompt
+        assert "single_match" in prompt
+        assert "intersection" in prompt
+        assert "midpoint" in prompt
+        assert "json" in prompt.lower()

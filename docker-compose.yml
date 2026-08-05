@@ -127,9 +127,15 @@ services:
     stop_grace_period: 30s
     environment:
       <<: *pg-env
-    <<: *dns
+      <<: *dns
+      NOMINATIM_ENABLED: ${NOMINATIM_ENABLED:-true}
     depends_on:
       postgres:
+        condition: service_healthy
+      # Ждём healthcheck nominatim (HTTP API на 8080), а не просто старта контейнера:
+      # иначе processor стартует во время PBF-импорта, NominatimClient.connect()
+      # упадёт, и Nominatim fallback будет навсегда отключён для данной сессии.
+      nominatim:
         condition: service_healthy
     networks:
       - backend
@@ -145,11 +151,12 @@ services:
     deploy:
       resources:
         limits:
+          # Память: DAWG pymorphy3 (~20MB) + LRU-кэши + ONNX runtime
           cpus: '1.5'
-          memory: 1.5G
+          memory: 1G
         reservations:
           cpus: '0.5'
-          memory: 768M
+          memory: 512M
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -260,6 +267,53 @@ services:
       - SETGID
       - SETUID
       - DAC_OVERRIDE
+    restart: unless-stopped
+    logging: *default-logging
+
+  # =============================================================================
+  # Nominatim - геокодер (ODbL OSM data)
+  # =============================================================================
+  nominatim:
+    build:
+      context: .
+      dockerfile: Dockerfile.nominatim
+      network: host
+    container_name: nominatim
+    shm_size: 1gb
+    environment:
+      NOMINATIM_PASSWORD: ${NOMINATIM_PASSWORD:-qaIACxO6wMR3}
+      NOMINATIM_QUERY_TIMEOUT: 10
+      WARMUP_ON_STARTUP: "false"
+      POSTGRES_SHARED_BUFFERS: 256MB
+      POSTGRES_MAINTENANCE_WORK_MEM: 512MB
+      POSTGRES_WORK_MEM: 16MB
+      POSTGRES_EFFECTIVE_CACHE_SIZE: 1GB
+      POSTGRES_MAX_WAL_SIZE: 512MB
+    volumes:
+      - ./data:/nominatim/data
+      - nominatim_data:/var/lib/postgresql/16/main
+    networks:
+      - backend
+      - db
+    expose:
+      - "5432"
+    healthcheck:
+      # PBF import занимает 5–15 минут для Odesa Oblast (35MB).
+      # start_period 1200s = 20 min: Docker не считает failures во время импорта.
+      # После импорта gunicorn стартует на 8080 → healthcheck проходит.
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/status"]
+      interval: 15s
+      timeout: 5s
+      start_period: 1200s
+      retries: 12
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
     restart: unless-stopped
     logging: *default-logging
 
@@ -408,4 +462,5 @@ volumes:
     driver: local
   grafana_data:
     driver: local
-
+  nominatim_data:
+    driver: local

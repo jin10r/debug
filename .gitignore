@@ -42,6 +42,9 @@ arms_cache/
 .qoder/
 .windsurf/
 
+# AI assistant local state (Kilo agents, commands, plans)
+.kilo/
+
 # Session files
 *.session
 *.session-journal

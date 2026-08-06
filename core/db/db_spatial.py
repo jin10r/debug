@@ -5,7 +5,10 @@ Handles geometric calculations and intersections.
 
 import logging
 import json
+import asyncio
 from typing import Dict, Any, Optional, List
+
+from core.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +46,10 @@ class SpatialOperations:
             WHERE geom IS NOT NULL AND NOT ST_IsEmpty(geom);
         """
         try:
-            result = await self.db.fetchval(query, geo_id1, geo_id2)
+            result = await asyncio.wait_for(
+                self.db.fetchval(query, geo_id1, geo_id2),
+                timeout=settings.db.command_timeout,
+            )
             return result if result else None
         except Exception as e:
             logger.error(
@@ -81,7 +87,10 @@ class SpatialOperations:
             FROM dist;
         """
         try:
-            result = await self.db.fetchval(query, geo_id1, geo_id2, max_distance_m)
+            result = await asyncio.wait_for(
+                self.db.fetchval(query, geo_id1, geo_id2, max_distance_m),
+                timeout=settings.db.command_timeout,
+            )
             return result if result else None
         except Exception as e:
             logger.error(
@@ -152,7 +161,10 @@ class SpatialOperations:
             ORDER BY is_real DESC, id1, id2;
         """
         try:
-            results = await self.db.fetch(query, geo_ids, max_distance_m)
+            results = await asyncio.wait_for(
+                self.db.fetch(query, geo_ids, max_distance_m),
+                timeout=settings.db.command_timeout,
+            )
             return [dict(row) for row in results]
         except Exception as e:
             logger.error(f"Batch intersection query failed for geo IDs {geo_ids}: {e}", exc_info=True)
@@ -172,7 +184,10 @@ class SpatialOperations:
             );
         """
         try:
-            distance_in_meters = await self.db.fetchval(query, polygon_wkt)
+            distance_in_meters = await asyncio.wait_for(
+                self.db.fetchval(query, polygon_wkt),
+                timeout=settings.db.command_timeout,
+            )
             return distance_in_meters
         except Exception as e:
             logger.error(f"Failed to calculate max distance for polygon: {e}", exc_info=True)

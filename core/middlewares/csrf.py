@@ -18,6 +18,7 @@ from typing import Optional, Tuple
 from aiohttp import web
 
 from core.settings import settings
+from core.utils.validators import validate_csrf_token_format
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +68,7 @@ def generate_csrf_token(session_token: str, timestamp: int = None) -> str:
         settings.jwt.secret.encode(),
         message.encode(),
         hashlib.sha256
-    ).hexdigest()[:32]
+    ).hexdigest()
     
     return f"{timestamp}.{signature}"
 
@@ -85,6 +86,12 @@ def verify_csrf_token(csrf_token: str, session_token: str) -> Tuple[bool, str]:
     """
     if not csrf_token or not session_token:
         return False, "Missing CSRF token or session token"
+    
+    # Validate token format: {10-digit-timestamp}.{64-hex-hmac}
+    try:
+        validate_csrf_token_format(csrf_token)
+    except ValueError as e:
+        return False, str(e)
     
     try:
         # Разбираем токен
@@ -233,34 +240,3 @@ async def csrf_middleware(request: web.Request, handler):
     
     return await handler(request)
 
-
-# ============================================
-# Helper функции для использования в коде
-# ============================================
-
-def get_csrf_headers(csrf_token: str) -> dict:
-    """
-    Получить заголовки для CSRF защищённого запроса.
-    
-    Usage:
-        headers = get_csrf_headers(csrf_token)
-        response = await fetch('/api/events', {
-            method: 'POST',
-            headers: {**headers, 'Content-Type': 'application/json'}
-        })
-    """
-    return {
-        'X-CSRF-Token': csrf_token,
-        'X-XSRF-Token': csrf_token,
-    }
-
-
-async def get_csrf_token_from_response(response: web.Response) -> Optional[str]:
-    """
-    Извлечь CSRF токен из ответа сервера.
-    
-    Usage:
-        response = await fetch('/api/config')
-        csrf_token = await get_csrf_token_from_response(response)
-    """
-    return response.headers.get('X-CSRF-Token')

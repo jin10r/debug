@@ -34,29 +34,6 @@ http_requests_in_progress = Gauge(
 )
 
 # ============================================
-# Cache Metrics
-# ============================================
-
-cache_hits_total = Counter(
-    'cache_hits_total',
-    'Total cache hits',
-    ['cache_type']  # e.g., 'geo', 'events', 'nlp'
-)
-
-cache_misses_total = Counter(
-    'cache_misses_total',
-    'Total cache misses',
-    ['cache_type']
-)
-
-cache_operations_duration_seconds = Histogram(
-    'cache_operations_duration_seconds',
-    'Cache operation duration',
-    ['operation', 'cache_type'],  # operation: get, set, delete
-    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5)
-)
-
-# ============================================
 # Database Metrics
 # ============================================
 
@@ -73,57 +50,6 @@ db_pool_idle = Gauge(
 db_pool_in_use = Gauge(
     'db_pool_in_use',
     'Number of in-use database connections'
-)
-
-db_query_duration_seconds = Histogram(
-    'db_query_duration_seconds',
-    'Database query duration',
-    ['query_type'],  # SELECT, INSERT, UPDATE, DELETE
-    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0)
-)
-
-db_slow_queries_total = Counter(
-    'db_slow_queries_total',
-    'Total number of slow queries (>100ms)',
-    ['query_type']
-)
-
-db_pool_usage_percent = Gauge(
-    'db_pool_usage_percent',
-    'Database pool usage percentage (0-100)'
-)
-
-cache_miss_rate = Gauge(
-    'cache_miss_rate',
-    'Cache miss rate percentage (0-100)',
-    ['cache_type']
-)
-
-parser_errors_total = Counter(
-    'parser_errors_total',
-    'Total parser errors',
-    ['error_type']  # 'processing', 'database', 'timeout', etc.
-)
-
-parser_messages_processed_total = Counter(
-    'parser_messages_processed_total',
-    'Total messages processed by parser'
-)
-
-# ============================================
-# NLP Metrics
-# ============================================
-
-nlp_processing_duration_seconds = Histogram(
-    'nlp_processing_duration_seconds',
-    'NLP processing duration',
-    ['operation'],  # normalize, tokenize, ner, query_variants
-    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0)
-)
-
-nlp_worker_pool_tasks = Gauge(
-    'nlp_worker_pool_tasks',
-    'Number of tasks in NLP worker pool queue'
 )
 
 # ============================================
@@ -164,23 +90,6 @@ ws_broadcast_errors_total = Counter(
 
 
 # ============================================
-# Background Tasks Metrics
-# ============================================
-
-background_task_duration_seconds = Histogram(
-    'background_task_duration_seconds',
-    'Background task execution duration',
-    ['task_name'],
-    buckets=(0.1, 0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 300.0)
-)
-
-background_task_errors_total = Counter(
-    'background_task_errors_total',
-    'Total background task errors',
-    ['task_name']
-)
-
-# ============================================
 # Application Info
 # ============================================
 
@@ -194,7 +103,7 @@ def set_application_info(version: str = '1.0.0'):
     """Устанавливает мета-информацию о приложении для Prometheus."""
     application_info.info({
         'version': version,
-        'name': 'temperature_optimization'
+        'name': 'survival_map'
     })
 
 
@@ -279,26 +188,11 @@ def _normalize_endpoint(path: str) -> str:
 # Helper Functions
 # ============================================
 
-def record_cache_hit(cache_type: str):
-    """Увеличивает счётчик попаданий в кэш для указанного типа."""
-    cache_hits_total.labels(cache_type=cache_type).inc()
-
-
-def record_cache_miss(cache_type: str):
-    """Увеличивает счётчик промахов кэша для указанного типа."""
-    cache_misses_total.labels(cache_type=cache_type).inc()
-
-
 def update_db_pool_metrics(stats: dict):
     """Обновляет метрики пула соединений БД."""
     db_pool_size.set(stats.get('size', 0))
     db_pool_idle.set(stats.get('idle', 0))
     db_pool_in_use.set(stats.get('in_use', 0))
-
-
-def record_slow_query(query_type: str):
-    """Увеличивает счётчик медленных запросов для указанного типа."""
-    db_slow_queries_total.labels(query_type=query_type).inc()
 
 
 # ============================================
@@ -343,6 +237,4 @@ def setup_metrics_routes(app: web.Application):
     """Регистрирует маршрут /metrics в aiohttp-приложении."""
     app.router.add_get('/metrics', metrics_handler)
     logger.info("Metrics endpoint registered at /metrics")
-
-
 

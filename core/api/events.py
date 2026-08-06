@@ -55,9 +55,12 @@ async def post_events_updates_handler(request: web.Request):
     try:
         after_id = int(after_id_raw)
         if after_id < 0:
-            raise ValueError()
-    except Exception:
-        return web.json_response({'error': 'Invalid after_id'}, status=400)
+            raise ValueError("after_id must be >= 0")
+    except (ValueError, TypeError) as e:
+        return web.json_response(
+            {'error': f'Invalid after_id: must be a non-negative integer'},
+            status=400
+        )
 
     if after_id > 0:
         min_id = await db_request.get_events_min_id()
@@ -67,9 +70,9 @@ async def post_events_updates_handler(request: web.Request):
     try:
         limit = int(limit_raw)
         if limit < 1:
-            raise ValueError()
+            raise ValueError("limit must be >= 1")
         limit = min(limit, 10000)
-    except Exception:
+    except (ValueError, TypeError):
         limit = 2000
 
     meta = await db_request.get_events_meta()
@@ -177,7 +180,7 @@ async def get_events_handler(request: web.Request):
                 )
         
         # Generate ETag from cached response
-        etag = hashlib.md5(cached_response.encode()).hexdigest()
+        etag = hashlib.md5(cached_response.encode(), usedforsecurity=False).hexdigest()
         client_etag = request.headers.get('If-None-Match')
         
         # Return 304 Not Modified if ETag matches

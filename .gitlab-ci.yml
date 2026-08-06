@@ -1,18 +1,92 @@
-# CI: бэкенд-тесты (pytest) + фронтенд (typecheck + build).
+# CI: security scanning → тесты (pytest) + фронтенд (typecheck + build) → image scan.
 # Артефакты не публикуем — это проверочный пайплайн на push/MR.
 stages:
+  - security-scan
   - test
+  - image-security
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.pip-cache"
+  PYTHON_IMAGE: python:3.11-slim-bookworm
+
+cache:
+  key: pip-$CI_COMMIT_REF_SLUG
+  paths:
+    - .pip-cache/
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Security Scanning Stage (runs first — fail fast on vulnerabilities)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# SAST: static analysis for Python security issues (bandit)
+bandit-scan:
+  stage: security-scan
+  image: $PYTHON_IMAGE
+  before_script:
+    - pip install bandit==1.7.10
+  script:
+    - bandit -r core/ processor/ parser/ -ll -x '*/tests/*,scripts,processor/models'
+    - bandit -ll core/utils/validators.py
+  rules:
+    - if: '$CI_COMMIT_BRANCH'
+
+# Dependency vulnerability scan (pip-audit)
+pip-audit:
+  stage: security-scan
+  image: $PYTHON_IMAGE
+  before_script:
+    - pip install pip-audit==2.7.3
+  script:
+    - pip-audit -r requirements.txt
+    - pip-audit -r processor/requirements.txt
+    - pip-audit -r parser/requirements.txt
+    - pip-audit -r requirements-dev.txt
+  rules:
+    - if: '$CI_COMMIT_BRANCH'
+
+# Dockerfile linting (hadolint)
+hadolint:
+  stage: security-scan
+  image: hadolint/hadolint:latest
+  script:
+    - hadolint --failure-threshold warning Dockerfile.core
+    - hadolint --failure-threshold warning Dockerfile.processor
+    - hadolint --failure-threshold warning Dockerfile.parser
+    - hadolint --failure-threshold warning Dockerfile.web
+    - hadolint --failure-threshold warning Dockerfile.postgres
+  rules:
+    - if: '$CI_COMMIT_BRANCH'
+
+# Frontend security lint (eslint-plugin-security)
+frontend-security:
+  stage: security-scan
+  image: node:20-alpine
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+  cache:
+    key: npm-$CI_COMMIT_REF_SLUG
+    paths:
+      - web/node_modules/
+  before_script:
+    - cd web
+    - npm ci --no-audit --no-fund
+  script:
+    # Run ESLint with security rules enabled as errors.
+    # Other rules (no-unused-vars, no-explicit-any) are non-fatal.
+    - npx eslint js --ext .ts,.js --no-error-on-unmatched-pattern --quiet
+    # Explicitly check for critical security rules
+    - npx eslint js --ext .ts,.js --rule '{"security/detect-unsafe-regex": "error", "security/detect-non-buffer-require": "error", "security/detect-new-buffer": "error", "security/detect-buffer-noassert": "error"}' --no-error-on-unmatched-pattern --quiet
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test Stage
+# ═══════════════════════════════════════════════════════════════════════════════
 
 # ── Backend: pytest по ключевой логике ───────────────────────────────────────
 backend-tests:
   stage: test
-  image: python:3.11
-  variables:
-    PIP_CACHE_DIR: "$CI_PROJECT_DIR/.pip-cache"
-  cache:
-    key: pip-$CI_COMMIT_REF_SLUG
-    paths:
-      - .pip-cache/
+  image: $PYTHON_IMAGE
   before_script:
     - python -V
     - pip install -r requirements.txt -r parser/requirements.txt -r requirements-dev.txt
@@ -34,8 +108,24 @@ frontend-build:
     - cd web
     - npm ci --no-audit --no-fund
   script:
-    - npm run typecheck   # tsc --noEmit (нужны @types/* из devDependencies)
+    - npm run typecheck   # tsc --noEmit — now fails the build on type errors
     - npm run build       # webpack production
+    - for f in dist/js/common.js dist/js/core/store.js dist/js/core/ui.js dist/js/core/websocket.js; do
+        test -s "$f" || { echo "Build verification failed: $f missing or empty"; exit 1; };
+      done
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH'
+
+# Container/filesystem vulnerability scan (trivy) — scans source tree for
+# vulnerable OS packages and known library CVEs. Runs after tests pass.
+trivy-scan:
+  stage: image-security
+  image: aquasec/trivy:latest
+  script:
+    - trivy fs --severity HIGH,CRITICAL --exit-code 1 --scanners vuln,config .
+  rules:
+    - if: '$CI_COMMIT_BRANCH'
+  needs:
+    - frontend-build
+  allow_failure: false

@@ -23,6 +23,7 @@ from core.api.auth import init_cache
 from core.api.websocket import WebSocketManager
 from core.middlewares.jwt_auth import jwt_auth_middleware
 from core.middlewares.csrf import csrf_middleware
+from core.middlewares.body_size_limit import body_size_limit_middleware
 
 logger = logging.getLogger(__name__)
 
@@ -319,6 +320,7 @@ async def create_app():
     app = web.Application(middlewares=[
         logging_middleware,
         metrics_middleware,
+        body_size_limit_middleware,
         csrf_middleware,
         jwt_auth_middleware,
         rate_limiter.middleware

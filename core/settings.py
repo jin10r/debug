@@ -89,7 +89,7 @@ class DatabaseConfig:
 
 @dataclass
 class AppConfig:
-    host: str = "0.0.0.0"
+    host: str = "0.0.0.0"  # nosec B104 — bind all interfaces (nginx reverse proxy)
     port: int = 8080
     telegram_validation_enabled: bool = True
     # Логирование (main.py, parser/monitoring.py читают эти поля)

@@ -260,7 +260,7 @@ class ParserBot:
     def _write_heartbeat():
         """Записать timestamp в /tmp/parser_heartbeat для healthcheck."""
         try:
-            with open('/tmp/parser_heartbeat', 'w') as f:
+            with open('/tmp/parser_heartbeat', 'w') as f:  # nosec B108 — container /tmp, Docker healthcheck
                 f.write(str(int(datetime.now(timezone.utc).timestamp())))
         except OSError:
             pass

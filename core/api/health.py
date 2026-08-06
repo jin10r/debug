@@ -159,7 +159,7 @@ async def health_detailed_handler(request: web.Request):
         if cache:
             cache_stats = await cache.get_stats()
             health_data['checks']['cache'] = {
-                'status': 'healthy' if cache._connected else 'degraded',
+                'status': 'healthy',
                 'backend': cache_stats.get('backend', 'unknown'),
                 'stats': cache_stats
             }

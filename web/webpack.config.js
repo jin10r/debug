@@ -20,6 +20,7 @@ module.exports = {
     'js/core/ui': './js/core/ui.ts',
     'js/modules/popups': './js/modules/popups.ts',
     'js/modules/notifications': './js/modules/notifications.ts',
+    'js/telegram/integration': './js/telegram/integration.ts',
   },
   output: {
     filename: '[name].js',
@@ -42,16 +43,6 @@ module.exports = {
           }
         },
         exclude: /node_modules/
-      },
-      {
-        test: /\.js$/,
-        exclude: /node_modules/,
-        use: {
-          loader: 'babel-loader',
-          options: {
-            presets: ['@babel/preset-env']
-          }
-        }
       }
     ]
   },

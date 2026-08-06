@@ -4,7 +4,6 @@ In-memory caching layer with TTL support and LRU eviction
 Redis removed - using pure in-memory cache only.
 """
 import time
-import json
 import logging
 import asyncio
 from typing import Optional, Any, Dict
@@ -43,12 +42,10 @@ class CacheManager:
     - Statistics tracking
     """
 
-    def __init__(self, redis_url: str = None, max_size: int = 10000):
+    def __init__(self, max_size: int = 10000):
         """Инициализирует in-memory кэш с LRU-вытеснением и поддержкой TTL."""
-        # Redis URL ignored - using in-memory cache only
         # OrderedDict для LRU eviction
         self._cache: OrderedDict[str, CacheEntry] = OrderedDict()
-        self._connected = False  # Always False (no Redis)
         self.hits = 0
         self.misses = 0
         self.max_size = max_size
@@ -61,9 +58,8 @@ class CacheManager:
         self._cleanup_task: Optional[asyncio.Task] = None
 
     async def connect(self, max_retries: int = 3):
-        """Заглушка подключения для in-memory кэша (Redis не используется)."""
-        self._connected = False
-        logger.info(f"✅ In-memory cache initialized (max_size={self.max_size}, Redis removed)")
+        """Инициализирует in-memory кэш и запускает фоновую задачу очистки."""
+        logger.info(f"✅ In-memory cache initialized (max_size={self.max_size})")
         
         # Start background cleanup task
         if self._cleanup_task is None or self._cleanup_task.done():
@@ -164,40 +160,6 @@ class CacheManager:
             self._cache[key] = CacheEntry(value, ttl)
             return True
 
-    async def removeItem(self, key: str) -> bool:
-        """Удаляет значение из кэша по ключу."""
-        if key in self._cache:
-            del self._cache[key]
-            return True
-        return False
-
-    async def getItemJSON(self, key: str) -> Optional[Any]:
-        """Получает JSON-значение из кэша и десериализует его."""
-        value = await self.getItem(key)
-        if value is None:
-            return None
-        try:
-            return json.loads(value)
-        except (json.JSONDecodeError, TypeError):
-            logger.error(f"Invalid JSON in cache for key: {key}")
-            return None
-
-    async def setItemJSON(self, key: str, value: Any, ttl: int = 3600) -> bool:
-        """Сериализует и сохраняет JSON-значение в кэше."""
-        try:
-            json_value = json.dumps(value)
-            return await self.setItem(key, json_value, ttl)
-        except (TypeError, ValueError) as e:
-            logger.error(f"Failed to serialize value for key {key}: {e}")
-            return False
-
-    async def invalidate_events_cache(self):
-        """Инвалидирует все записи кэша, связанные с событиями."""
-        keys_to_delete = [k for k in self._cache if k.startswith('events:')]
-        for key in keys_to_delete:
-            del self._cache[key]
-        logger.debug(f"Invalidated {len(keys_to_delete)} events cache entries")
-
     # =====================
     # Events API methods
     # =====================
@@ -228,7 +190,7 @@ class CacheManager:
         """Возвращает статистику кэша, включая LRU-метрики."""
         total = self.hits + self.misses
         return {
-            'connected': self._connected,
+            'connected': True,
             'backend': 'memory',
             'memory_size': len(self._cache),
             'max_size': self.max_size,

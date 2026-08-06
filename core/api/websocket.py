@@ -30,6 +30,10 @@ SEND_TIMEOUT = 5.0
 HEARTBEAT_INTERVAL = 30.0
 # Rate limiting для ping сообщений (макс. в секунду)
 PING_RATE_LIMIT = 5
+# Макс. время на аутентификацию после открытия соединения
+WS_AUTH_TIMEOUT = 5.0
+# Макс. размер одного сообщения (bytes)
+WS_MAX_MSG_BYTES = 65536
 
 
 class WebSocketManager:
@@ -303,7 +307,19 @@ def _ws_authenticate(data: dict) -> bool:
 
 async def websocket_handler(request: web.Request):
     """WebSocket endpoint for real-time event updates."""
-    ws = web.WebSocketResponse(heartbeat=120)
+    # Origin check: reject cross-origin connections unless explicitly allowed
+    origin = request.headers.get('Origin', '')
+    if origin:
+        allowed_origins = getattr(settings.app, 'allowed_origins', ())
+        if allowed_origins:
+            if origin not in allowed_origins and origin != '*':
+                logger.warning(f"WebSocket rejected: origin {origin} not in allowed list")
+                return web.json_response({'error': 'Origin not allowed'}, status=403)
+
+    ws = web.WebSocketResponse(
+        heartbeat=120,
+        max_ws_bytes=WS_MAX_MSG_BYTES,
+    )
     await ws.prepare(request)
 
     ws_manager = request.app.get('websocket_manager')
@@ -317,10 +333,30 @@ async def websocket_handler(request: web.Request):
         return ws
     authenticated = False
 
+    # Auth timeout: close connection if not authenticated within WS_AUTH_TIMEOUT
+    auth_deadline_task: Optional[asyncio.Task] = None
+
+    async def _auth_timeout():
+        await asyncio.sleep(WS_AUTH_TIMEOUT)
+        if not authenticated and not ws.closed:
+            logger.warning(f"WebSocket auth timeout from {request.remote}")
+            await ws.close(code=1008, message=b'auth timeout')
+
+    auth_deadline_task = asyncio.create_task(_auth_timeout())
+
     try:
         async for msg in ws:
             if msg.type == WSMsgType.TEXT:
                 try:
+                    # Per-message size guard
+                    if len(msg.data) > WS_MAX_MSG_BYTES:
+                        logger.warning(f"WebSocket message too large from {request.remote}")
+                        await ws.send_str(json.dumps({
+                            'type': 'error',
+                            'message': 'message too large'
+                        }))
+                        continue
+
                     data = json.loads(msg.data)
                     message_type = data.get('type')
 
@@ -345,6 +381,8 @@ async def websocket_handler(request: web.Request):
                         if _ws_authenticate(data):
                             authenticated = True
                             logger.info("WebSocket client authenticated")
+                            if auth_deadline_task and not auth_deadline_task.done():
+                                auth_deadline_task.cancel()
                             await ws.send_str(json.dumps({'type': 'auth_ok'}))
                         else:
                             logger.warning("WebSocket auth failed — closing connection")
@@ -372,6 +410,8 @@ async def websocket_handler(request: web.Request):
                 break
 
     finally:
+        if auth_deadline_task and not auth_deadline_task.done():
+            auth_deadline_task.cancel()
         await ws_manager.unregister_connection(ws)
 
     return ws

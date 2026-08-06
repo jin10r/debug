@@ -1,12 +1,13 @@
 # Telegram client (kurigram — поддерживаемый форк pyrogram)
+# All versions pinned with == for reproducible Docker builds.
 kurigram==2.2.9
-tgcrypto~=1.2
+tgcrypto==1.2.5
 
 # Database
-asyncpg~=0.29
+asyncpg==0.30.0
 
 # Configuration (через core.settings)
-environs~=11.0
+environs==11.2.1
 
 # Timezone data
-tzdata~=2024.1
+tzdata==2024.1

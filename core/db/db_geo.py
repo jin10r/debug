@@ -6,7 +6,10 @@ Geo-related database operations.
 
 import json
 import logging
+import asyncio
 from typing import List, Dict, Any, Optional
+
+from core.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +24,7 @@ class GeoOperations:
     async def get_geo_count(self) -> int:
         """Get the total count of geo records."""
         try:
-            return await self.db.fetchval("SELECT COUNT(*) FROM geo")
+            return await self.db.fetchval("SELECT COUNT(*) FROM geo", timeout=settings.db.command_timeout)
         except Exception as e:
             logger.error(f"Failed to get geo count: {e}")
             return 0
@@ -32,7 +35,7 @@ class GeoOperations:
         Таблицы table_updates в схеме нет (init-scripts) — берём MAX(created_at).
         """
         try:
-            return await self.db.fetchval("SELECT MAX(created_at) FROM geo")
+            return await self.db.fetchval("SELECT MAX(created_at) FROM geo", timeout=settings.db.command_timeout)
         except Exception as e:
             logger.error(f"Failed to get latest geo update time: {e}")
             return None
@@ -58,7 +61,10 @@ class GeoOperations:
         """
         try:
             async with self.db.pool.acquire() as connection:
-                result = await connection.fetchval(query)
+                result = await asyncio.wait_for(
+                    connection.fetchval(query),
+                    timeout=settings.db.command_timeout,
+                )
             return result if result else '{"type": "FeatureCollection", "features": []}'
         except Exception as e:
             logger.error(f"Failed to fetch geo as GeoJSON: {e}")

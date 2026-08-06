@@ -7,6 +7,7 @@ from typing import Optional
 from aiohttp import web
 
 from core.settings import settings
+from core.utils.validators import MAX_MEDIA_FILE_BYTES
 
 logger = logging.getLogger(__name__)
 
@@ -42,10 +43,20 @@ async def get_media_handler(request: web.Request) -> web.Response:
     if not media_path.is_file():
         return web.json_response({'error': 'File not found'}, status=404)
     try:
-        # FileResponse infers Content-Type from the extension (image/jpeg).
+        file_size = media_path.stat().st_size
+        if file_size > MAX_MEDIA_FILE_BYTES:
+            logger.warning(f"File too large: {filename} ({file_size} bytes)")
+            return web.json_response({'error': 'File too large'}, status=413)
+    except OSError:
+        return web.json_response({'error': 'Cannot stat file'}, status=500)
+    try:
         return web.FileResponse(
             path=media_path,
-            headers={'Cache-Control': 'public, max-age=300'},
+            headers={
+                'Cache-Control': 'public, max-age=300',
+                'Content-Type': 'image/jpeg',
+                'Content-Disposition': 'inline',
+            },
         )
     except Exception:
         logger.exception("Failed to serve media file: %s", filename)

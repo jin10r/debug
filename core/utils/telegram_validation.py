@@ -15,6 +15,12 @@ import time
 from typing import Optional, Dict, Tuple
 import pybreaker
 
+from core.utils.validators import (
+    validate_init_data_length,
+    validate_bot_token,
+    validate_max_age_hours,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -55,6 +61,15 @@ def validate_telegram_webapp_data(init_data: str, bot_token: str, max_age_hours:
     """
     if not init_data or not bot_token:
         logger.warning("Missing init_data or bot_token")
+        return False, None
+
+    # Pre-validation: length limits + format sanity
+    try:
+        init_data = validate_init_data_length(init_data)
+        bot_token = validate_bot_token(bot_token)
+        max_age_hours = validate_max_age_hours(max_age_hours)
+    except ValueError as e:
+        logger.warning(f"initData pre-validation failed: {e}")
         return False, None
 
     try:
@@ -115,6 +130,24 @@ def validate_telegram_webapp_data(init_data: str, bot_token: str, max_age_hours:
             import json
             try:
                 user_data = json.loads(data_fields['user'])
+                # Validate user_id is a positive integer
+                uid = user_data.get('id')
+                if uid is None:
+                    logger.warning("initData user object missing 'id' field")
+                    return False, None
+                if isinstance(uid, float):
+                    if uid != int(uid):
+                        logger.warning("initData user id is not an integer")
+                        return False, None
+                    uid = int(uid)
+                if not isinstance(uid, int) or uid <= 0:
+                    logger.warning("initData user id must be a positive integer")
+                    return False, None
+                user_data['id'] = uid
+                # Bound string fields
+                for field in ('first_name', 'last_name', 'username'):
+                    if field in user_data and user_data[field] is not None:
+                        user_data[field] = str(user_data[field])[:100]
             except json.JSONDecodeError:
                 logger.warning("Failed to parse user data JSON")
                 return False, None
@@ -135,70 +168,3 @@ def validate_telegram_webapp_data(init_data: str, bot_token: str, max_age_hours:
     except Exception as e:
         logger.error(f"Error validating initData: {e}")
         return False, None
-
-
-def extract_user_id_from_init_data(init_data: str) -> Optional[int]:
-    """
-    Extract user ID from initData without full validation.
-    Use only for logging/analytics, NOT for authentication.
-
-    Args:
-        init_data: Raw initData string
-
-    Returns:
-        user_id or None
-    """
-    if not init_data:
-        return None
-
-    try:
-        parsed = urllib.parse.parse_qs(init_data)
-
-        # Try to get from 'user' JSON field first
-        if 'user' in parsed:
-            import json
-            user_data = json.loads(parsed['user'][0])
-            return user_data.get('id')
-
-        # Fallback to direct 'id' field
-        if 'id' in parsed:
-            return int(parsed['id'][0])
-
-        return None
-    except Exception:
-        return None
-
-
-def check_init_data_or_redirect(
-    init_data: Optional[str],
-    bot_token: str,
-    redirect_url: Optional[str] = None,
-    max_age_hours: int = 24
-) -> Tuple[bool, Optional[str]]:
-    """
-    Validates initData and returns redirect URL if invalid.
-
-    This is the main entry point for frontend validation.
-
-    Args:
-        init_data: The initData from Telegram.WebApp.initData
-        bot_token: Bot token for HMAC validation
-        redirect_url: URL to redirect to if validation fails
-        max_age_hours: Maximum age of initData
-
-    Returns:
-        (is_valid: bool, redirect_url: str or None)
-        If is_valid is False, redirect_url contains where to redirect the user
-    """
-    is_valid, user_data = validate_telegram_webapp_data(init_data, bot_token, max_age_hours)
-
-    if is_valid:
-        logger.info(f"Valid initData for user: {user_data.get('username') or user_data.get('id')}")
-        return True, None
-
-    if redirect_url:
-        logger.warning(f"Invalid or missing initData, redirecting to: {redirect_url}")
-        return False, redirect_url
-
-    logger.warning("Invalid initData, no redirect URL configured")
-    return False, None

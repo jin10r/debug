@@ -23,7 +23,7 @@ async def main():
         port=settings.db.port,
         user=settings.db.user,
         password=settings.db.password,
-        database=settings.db.name,
+        database=settings.db.database,
     )
 
     rows = await db.fetch("SELECT input_text, target_text FROM training_examples ORDER BY id")

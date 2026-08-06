@@ -1,5 +1,4 @@
 """Configuration API handlers"""
-import json
 from aiohttp import web
 
 from core.settings import settings

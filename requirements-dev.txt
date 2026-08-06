@@ -1,8 +1,12 @@
-# Dev/test dependencies. Install on top of requirements.txt + parser/requirements.txt
-# to run the full suite (some tests are skipped if heavy runtime deps are absent).
+# Dev/test + security-audit dependencies.
+# Install on top of requirements.txt + parser/requirements.txt:
 #   pip install -r requirements.txt -r parser/requirements.txt -r requirements-dev.txt
 #   pytest
-pytest>=8,<10
-# pytest.ini объявляет asyncio_mode = auto — без плагина все async-тесты
-# падают с "async def functions are not natively supported".
-pytest-asyncio>=0.23,<1
+pytest==9.1.1
+# pytest-asyncio 1.x required for pytest 9 (0.23.x is incompatible with
+# pytest>=9). The original <1 upper bound predates pytest-asyncio 1.0 release.
+pytest-asyncio==1.4.0
+# SAST: static analysis for Python security issues
+bandit==1.7.10
+# Dependency vulnerability scanner
+pip-audit==2.7.3

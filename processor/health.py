@@ -48,7 +48,7 @@ class HealthServer:
 
         runner = web.AppRunner(app)
         await runner.setup()
-        site = web.TCPSite(runner, "0.0.0.0", port)
+        site = web.TCPSite(runner, "0.0.0.0", port)  # nosec B104 — bind all interfaces (health endpoint)
         await site.start()
 
         logger.info(f"Health server started on port {port}")

@@ -36,6 +36,11 @@ class RateLimiter:
         # {(ip, path): [count, window_start]}
         self._counters: dict = {}
         self._last_cleanup = time.monotonic()
+        # Global per-IP burst tracking: {ip: [count, window_start]}
+        # Caps total requests per IP across ALL paths within the window.
+        self._ip_total: dict = {}
+        self._global_ip_limit = 500  # 500 req/min per IP across all paths
+        self._global_window = 60
 
         # Per-endpoint overrides: path -> (limit, window_seconds)
         self.endpoint_limits: dict = {
@@ -124,12 +129,41 @@ class RateLimiter:
         self._cleanup(now)
         return True, limit, remaining, reset_at
 
+    def check_global_ip(self, ip: str) -> bool:
+        """Check global per-IP burst cap (total requests across all paths).
+
+        Returns False if the IP has exceeded _global_ip_limit in _global_window.
+        """
+        now = time.monotonic()
+        entry = self._ip_total.get(ip)
+        if entry is None or now - entry[1] > self._global_window:
+            self._ip_total[ip] = [1, now]
+            return True
+        if entry[0] >= self._global_ip_limit:
+            return False
+        entry[0] += 1
+        return True
+
     @web.middleware
     async def middleware(self, request: web.Request, handler):
         if request.path in _EXEMPT_PATHS:
             return await handler(request)
 
         ip = self._get_client_ip(request)
+
+        # Global per-IP burst cap: total requests across all paths
+        if not self.check_global_ip(ip):
+            logger.warning(f"Global rate limit exceeded for IP {ip}")
+            return web.json_response(
+                {
+                    'error': 'Rate limit exceeded',
+                    'message': 'Too many requests across all endpoints',
+                    'retry_after': self._global_window,
+                },
+                status=429,
+                headers={'Retry-After': str(self._global_window)},
+            )
+
         allowed, limit, remaining, reset_at = self.check(ip, request.path)
 
         if not allowed:

@@ -5,8 +5,11 @@ Handles event creation, querying, and cleanup.
 
 import json
 import logging
+import asyncio
 from datetime import datetime
 from typing import List, Dict, Any, Optional
+
+from core.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +84,10 @@ class EventOperations:
 
         try:
             async with self.db.pool.acquire() as connection:
-                result = await connection.fetchval(query, *params)
+                result = await asyncio.wait_for(
+                    connection.fetchval(query, *params),
+                    timeout=settings.db.command_timeout,
+                )
             return json.loads(result) if result else {'type': 'FeatureCollection', 'features': []}
         except Exception as e:
             logger.error(f"Failed to fetch filtered events as GeoJSON: {e}", exc_info=True)
@@ -99,7 +105,10 @@ class EventOperations:
         """
         try:
             async with self.db.pool.acquire() as connection:
-                deleted_count = await connection.fetchval(query, time_interval_minutes)
+                deleted_count = await asyncio.wait_for(
+                    connection.fetchval(query, time_interval_minutes),
+                    timeout=settings.db.command_timeout,
+                )
             if deleted_count and deleted_count > 0:
                 logger.info(f"Successfully deleted {deleted_count} old events.")
         except Exception as e:
@@ -113,8 +122,9 @@ class EventOperations:
         """
         try:
             async with self.db.pool.acquire() as connection:
-                result = await connection.fetchval(
-                    "SELECT MAX(event_time) FROM events"
+                result = await asyncio.wait_for(
+                    connection.fetchval("SELECT MAX(event_time) FROM events"),
+                    timeout=settings.db.command_timeout,
                 )
                 return result
         except Exception as e:
@@ -164,7 +174,10 @@ class EventOperations:
 
         try:
             async with self.db.pool.acquire() as connection:
-                result = await connection.fetchval(query, *params)
+                result = await asyncio.wait_for(
+                    connection.fetchval(query, *params),
+                    timeout=settings.db.command_timeout,
+                )
             return json.loads(result) if result else {'type': 'FeatureCollection', 'features': []}
         except Exception as e:
             logger.error(f"Failed to fetch incremental events as GeoJSON: {e}", exc_info=True)
@@ -179,7 +192,10 @@ class EventOperations:
         """
         try:
             async with self.db.pool.acquire() as connection:
-                row = await connection.fetchrow(query)
+                row = await asyncio.wait_for(
+                    connection.fetchrow(query),
+                    timeout=settings.db.command_timeout,
+                )
             if not row:
                 return {'version': 0, 'updated_at': None, 'max_event_id': 0}
             data = dict(row)
@@ -197,7 +213,10 @@ class EventOperations:
         query = "SELECT COALESCE(MIN(id), 0) FROM events"
         try:
             async with self.db.pool.acquire() as connection:
-                val = await connection.fetchval(query)
+                val = await asyncio.wait_for(
+                    connection.fetchval(query),
+                    timeout=settings.db.command_timeout,
+                )
             return int(val or 0)
         except Exception as e:
             logger.error(f"Failed to get min events id: {e}", exc_info=True)
@@ -239,7 +258,10 @@ class EventOperations:
         """
         try:
             async with self.db.pool.acquire() as connection:
-                result = await connection.fetchval(query, after_id, limit)
+                result = await asyncio.wait_for(
+                    connection.fetchval(query, after_id, limit),
+                    timeout=settings.db.command_timeout,
+                )
             return json.loads(result) if result else {'type': 'FeatureCollection', 'features': []}
         except Exception as e:
             logger.error(f"Failed to fetch updates as GeoJSON: {e}", exc_info=True)
@@ -279,7 +301,10 @@ class EventOperations:
         """
         try:
             async with self.db.pool.acquire() as connection:
-                result = await connection.fetchval(query, limit)
+                result = await asyncio.wait_for(
+                    connection.fetchval(query, limit),
+                    timeout=settings.db.command_timeout,
+                )
             return json.loads(result) if result else {'type': 'FeatureCollection', 'features': []}
         except Exception as e:
             logger.error(f"Failed to fetch snapshot as GeoJSON: {e}", exc_info=True)

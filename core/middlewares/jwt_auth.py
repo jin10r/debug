@@ -59,7 +59,7 @@ async def jwt_auth_middleware(app: web.Application, handler):
         auth_header = request.headers.get('Authorization', '')
         token = None
         
-        if auth_header.startswith('Bearer '):
+        if auth_header.lower().startswith('bearer '):
             token = auth_header[7:]
         
         # Try to get from session cookie
@@ -83,9 +83,21 @@ async def jwt_auth_middleware(app: web.Application, handler):
                 status=401
             )
         
+        # Validate sub claim is a valid user ID
+        try:
+            user_id = int(payload['sub'])
+            if user_id <= 0:
+                raise ValueError("user_id must be positive")
+        except (ValueError, TypeError, KeyError):
+            logger.warning(f"Invalid sub claim in token for {path}")
+            return web.json_response(
+                {'error': 'Invalid token claims', 'code': 'TOKEN_INVALID'},
+                status=401
+            )
+        
         # Attach user data to request
         request['telegram_user'] = {
-            'id': int(payload['sub']),
+            'id': user_id,
             'first_name': payload.get('first_name', ''),
             'username': payload.get('username', ''),
             'is_premium': payload.get('is_premium', False)

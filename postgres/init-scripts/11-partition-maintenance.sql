@@ -48,5 +48,10 @@ $$ LANGUAGE plpgsql;
 SELECT cron.unschedule('manage-event-partitions')
 WHERE EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'manage-event-partitions');
 
--- Создаём задание каждую минуту (чтобы новые партиции создавались сразу)
-SELECT cron.schedule('manage-event-partitions', '* * * * *', 'SELECT manage_event_partitions()');
+-- Создаём задание каждые 5 минут в минуты 0/5/10/... (`*/5`). Партиции
+-- создаются заранее на +2 часа вперёд, поэтому задержка до 5 минут
+-- некритична (в INSERT-окне нужные партиции уже существуют). Раньше задание
+-- бежало каждую минуту и давало ~1с нагрузки/цикл, а при старте в минуты
+-- 0/5/10/... конфликтовало по блокировке events с clean-old-events
+-- (`3-59/5`) — AccessShareLock против AccessExclusiveLock, чистка ждала ~1с.
+SELECT cron.schedule('manage-event-partitions', '*/5 * * * *', 'SELECT manage_event_partitions()');

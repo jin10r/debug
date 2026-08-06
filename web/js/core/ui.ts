@@ -155,7 +155,7 @@ window.switchTileLayer = function(tileKey: string): void {
     const provider = TILE_PROVIDERS[tileKey];
     let newLayer: L.Layer;
     if (provider.type === 'maplibre') {
-        newLayer = (L as unknown as { maplibreGL: (opts: { style: string }) => L.Layer }).maplibreGL({ style: provider.style });
+        newLayer = (L as unknown as { maplibreGL: (opts: { style: string }) => L.Layer }).maplibreGL({ style: (provider as TileProviderMaplibre).style });
         newLayer.addTo(map);
         const glMap = (newLayer as unknown as { getMaplibreMap: () => GLMap }).getMaplibreMap();
         if (glMap.isStyleLoaded()) {
@@ -209,7 +209,7 @@ window.initializeMap = function(): void {
     // Добавляем выбранный тайл
     const provider = TILE_PROVIDERS[currentTileKey];
     if (provider.type === 'maplibre') {
-        currentTileLayer = (L as unknown as { maplibreGL: (opts: { style: string }) => L.Layer }).maplibreGL({ style: provider.style });
+        currentTileLayer = (L as unknown as { maplibreGL: (opts: { style: string }) => L.Layer }).maplibreGL({ style: (provider as TileProviderMaplibre).style });
         currentTileLayer.addTo(map);
         const glMap = (currentTileLayer as unknown as { getMaplibreMap: () => GLMap }).getMaplibreMap();
         if (glMap.isStyleLoaded()) {
@@ -539,13 +539,15 @@ function addRenderedEvent(id: string | number, feature: import('../types/geojson
             elements = window.createMultiPolygon(map, (feature.geometry as unknown as import('geojson').MultiPolygon).coordinates as [number, number][][][], props);
             break;
         case 'MultiLineString':
-            elements = window.createMultiLineString(map, feature.geometry.coordinates, feature.properties);
+            elements = window.createMultiLineString(map, (feature.geometry as unknown as import('geojson').MultiLineString).coordinates as number[][][], feature.properties);
             break;
         case 'MultiPoint':
-            elements = window.createMultiPoint(map, feature.geometry.coordinates, feature.properties);
+            elements = window.createMultiPoint(map, (feature.geometry as unknown as import('geojson').MultiPoint).coordinates as number[][], feature.properties);
             break;
         case 'GeometryCollection':
-            elements = window.createGeometryCollection(map, feature.geometry.geometries, feature.properties);
+            // feature.geometry типизирован как Point | LineString | Polygon —
+            // для GeometryCollection нужен каст к необработанным geometries.
+            elements = window.createGeometryCollection(map, (feature.geometry as unknown as { geometries: Array<Record<string, unknown>> }).geometries, feature.properties);
             break;
         default:
             console.warn('[renderFromCache] Unsupported geometry type:', geoType);

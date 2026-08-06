@@ -22,7 +22,6 @@ from .word_tokenizer import Token
 
 if TYPE_CHECKING:
     from .semantic_matcher import SemanticMatcher
-    from .nominatim_client import NominatimClient
 
 from processor.metrics import record_geo_matches
 
@@ -63,6 +62,9 @@ class GeoMatcher:
         self._index = index
         self._initialized = False
         self._stopwords: Set[str] = set()
+        # geo_id → type (street/village/town/...): пробрасывается в кандидатов,
+        # чтобы pre-filter SemanticResolver'а (midpoint/type_hint) мог работать.
+        self._geo_types: Dict[int, str] = {}
         self._executor: Optional[ThreadPoolExecutor] = None
         self._semantic_matcher: Optional["SemanticMatcher"] = None
 
@@ -80,6 +82,7 @@ class GeoMatcher:
                 sw_rows = await conn.fetch("SELECT word FROM stopwords")
 
             await asyncio.to_thread(self._index.build, geo_rows)
+            self._geo_types = {row['id']: row['type'] for row in geo_rows if row.get('type')}
             self._stopwords = {row['word'].strip().lower() for row in sw_rows if row['word']}
             self._executor = ThreadPoolExecutor(max_workers=4)
             logger.info(f"[Geo] Loaded {len(self._stopwords)} stopwords, {len(geo_rows)} objects, ThreadPoolExecutor initialized")
@@ -96,6 +99,7 @@ class GeoMatcher:
                 rows = await conn.fetch(
                     "SELECT id, names, type FROM geo WHERE geom IS NOT NULL"
                 )
+            self._geo_types = {row['id']: row['type'] for row in rows if row.get('type')}
             count = await asyncio.to_thread(self._index.build, rows)
             logger.info(f"[Geo] Reindexed {count} variants")
             return count
@@ -108,11 +112,16 @@ class GeoMatcher:
         try:
             async with pg_pool.acquire() as conn:
                 row = await conn.fetchrow(
-                    "SELECT id, names FROM geo WHERE id = $1 AND geom IS NOT NULL",
+                    "SELECT id, names, type FROM geo WHERE id = $1 AND geom IS NOT NULL",
                     geo_id,
                 )
+            row_dict = dict(row) if row else None
+            if row_dict:
+                self._geo_types[geo_id] = row_dict.get('type') or ''
+            else:
+                self._geo_types.pop(geo_id, None)  # объект удалён/geom NULL
             await asyncio.to_thread(
-                self._index.replace_street, geo_id, dict(row) if row else None
+                self._index.replace_street, geo_id, row_dict
             )
         except Exception as exc:
             logger.error(f"[Geo] reindex_geo({geo_id}) failed: {exc}")
@@ -266,6 +275,7 @@ class GeoMatcher:
         results = sorted(kept, key=lambda x: x['score'], reverse=True)[:top_k]
         for r in results:
             r.pop('_span', None)
+            r['type'] = self._geo_types.get(r['geo_id'], '')
         record_geo_matches(results)
         source_stats = {}
         for r in results:
@@ -275,43 +285,6 @@ class GeoMatcher:
             f"{[(r['matched_name'], round(r['score'], 2), r['source']) for r in results]}"
         )
         return results
-
-    async def find_geo_nominatim(
-        self,
-        tokens: List[Token],
-        nominatim_client: "NominatimClient",
-    ) -> List[Dict]:
-        """Fallback-поиск через Nominatim, когда локальный индекс пуст.
-
-        Склеивает токены в строку запроса, отправляет в Nominatim.
-        Возвращает тот же формат что find_geo().
-        """
-        if not tokens:
-            return []
-        query = ' '.join(t.text.lower() for t in tokens if t.text)
-        if len(query) < 3:
-            return []
-        nom_results = await nominatim_client.geocode(query)
-        if not nom_results:
-            return []
-        results = []
-        for nr in nom_results:
-            gid = -(nr.get('place_id', 0) or 0)
-            if gid == 0:
-                continue
-            results.append({
-                'geo_id': gid,
-                'score': nr.get('importance', 0.5),
-                'matched_name': nr.get('name', query),
-                'text': query,
-                'source': 'nominatim',
-                '_nominatim_geom': nr.get('geojson'),
-            })
-        results.sort(key=lambda x: x['score'], reverse=True)
-        return results[:(
-            settings.similarity.max_entities
-            if settings and settings.similarity else 5
-        )]
 
     async def find_geo(
         self,

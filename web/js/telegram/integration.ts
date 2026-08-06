@@ -461,33 +461,74 @@ class TelegramIntegration {
     }
 
     async requestLocation(): Promise<{ latitude: number; longitude: number; altitude?: number; accuracy?: number }> {
-        if (!this.tg?.LocationManager) {
-            if (navigator.geolocation) {
-                return new Promise((resolve, reject) => {
-                    navigator.geolocation.getCurrentPosition(
-                        (position) => {
-                            resolve({
-                                latitude: position.coords.latitude,
-                                longitude: position.coords.longitude,
-                                altitude: position.coords.altitude ?? undefined,
-                                accuracy: position.coords.accuracy
-                            });
-                        },
-                        (error) => { reject(error); }
-                    );
-                });
-            }
-            throw new Error('Geolocation not supported');
+        const lm = this.tg?.LocationManager;
+
+        // Библиотека geo-доступа есть только в Bot API 8.0+. На старых клиентах
+        // или если библиотека недоступна — фолбэк на браузерный geolocation.
+        if (!lm) {
+            return this._requestBrowserGeolocation();
         }
 
-        return new Promise((resolve, reject) => {
-            this.tg!.LocationManager!.getLocation((location: { latitude: number; longitude: number } | null) => {
-                if (location) {
-                    resolve(location);
-                } else {
-                    reject(new Error('Location denied'));
-                }
+        try {
+            // LocationManager.init() обязателен перед getLocation(): без него
+            // официальный telegram-web-app.js бросает WebAppLocationManagerNotInited.
+            // init() = postEvent('web_app_check_location') — опрашивает устройство
+            // (доступно ли гео, запрашивал ли доступ).
+            if (!lm.isInited) {
+                await new Promise<void>((resolveInit) => {
+                    lm.init!(() => resolveInit());
+                    // Таймаут-страховка: если событие location_checked не придёт
+                    // (клиент без поддержки / оффлайн), не зависаем навсегда.
+                    setTimeout(() => resolveInit(), 5000);
+                });
+            }
+
+            // Гео недоступно на устройстве / доступ не выдан → фолбэк на браузер.
+            if (!lm.isLocationAvailable || !lm.isAccessGranted) {
+                return this._requestBrowserGeolocation();
+            }
+
+            return await new Promise((resolve, reject) => {
+                lm.getLocation!((location: { latitude: number; longitude: number; altitude?: number; horizontal_accuracy?: number } | null) => {
+                    if (location) {
+                        resolve({
+                            latitude: location.latitude,
+                            longitude: location.longitude,
+                            altitude: location.altitude,
+                            // telegram-web-app.js отдаёт horizontal_accuracy,
+                            // navigator.geolocation — accuracy.
+                            accuracy: location.horizontal_accuracy
+                        });
+                    } else {
+                        reject(new Error('Location denied'));
+                    }
+                });
             });
+        } catch (e) {
+            // WebAppLocationManagerNotInited / LocationNotAvailable и прочие
+            // ошибки библиотеки — фолбэк на браузерный geolocation.
+            console.warn('[TG] LocationManager failed, falling back to browser geolocation:', e);
+            return this._requestBrowserGeolocation();
+        }
+    }
+
+    /** Браузерный geolocation (фолбэк, когда Telegram-библиотека недоступна). */
+    private _requestBrowserGeolocation(): Promise<{ latitude: number; longitude: number; altitude?: number; accuracy?: number }> {
+        if (!navigator.geolocation) {
+            return Promise.reject(new Error('Geolocation not supported'));
+        }
+        return new Promise((resolve, reject) => {
+            navigator.geolocation.getCurrentPosition(
+                (position) => {
+                    resolve({
+                        latitude: position.coords.latitude,
+                        longitude: position.coords.longitude,
+                        altitude: position.coords.altitude ?? undefined,
+                        accuracy: position.coords.accuracy
+                    });
+                },
+                (error) => { reject(error); }
+            );
         });
     }
 

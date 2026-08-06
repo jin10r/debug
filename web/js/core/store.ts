@@ -78,8 +78,20 @@ export function getEventTime(feature: EventFeature): Date | null {
     const p = feature?.properties;
     if (!p) return null;
     const raw = p.time ?? p.created_at ?? p.timestamp;
-    if (!raw) return null;
-    const d = new Date(raw as string | number);
+    if (raw == null) return null;
+    // Строка без явного offset (naive) трактуется JS-ом как ЛОКАЛЬНОЕ время
+    // устройства → фильтрация по окну и TTL сдвигается на (TZ_устройства - Kiev).
+    // События хранятся в UTC, поэтому naive-строку интерпретируем как UTC.
+    let value: string | number = raw as string | number;
+    if (typeof value === 'string') {
+        // Разделитель ' ' → 'T' до проверки offset (PSQL-стиль без T).
+        let normalized = value.trim().replace(' ', 'T');
+        if (!/([zZ]|[+-]\d{2}:?\d{2})$/.test(normalized)) {
+            normalized += 'Z';
+        }
+        value = normalized;
+    }
+    const d = new Date(value);
     return Number.isNaN(d.getTime()) ? null : d;
 }
 

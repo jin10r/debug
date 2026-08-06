@@ -623,38 +623,74 @@ class TelegramIntegration {
 
     /**
      * Bot API 8.0+: Geolocation Manager
+     * Важно: LocationManager.init() обязателен перед getLocation() —
+     * официальный telegram-web-app.js бросает WebAppLocationManagerNotInited.
+     * Любые ошибки библиотеки тихо фолбэчатся на браузерный geolocation.
      */
     async requestLocation() {
-        if (!this.tg?.LocationManager) {
-            // Fallback на Geolocation API
-            if (navigator.geolocation) {
-                return new Promise((resolve, reject) => {
-                    navigator.geolocation.getCurrentPosition(
-                        (position) => {
-                            resolve({
-                                latitude: position.coords.latitude,
-                                longitude: position.coords.longitude,
-                                altitude: position.coords.altitude,
-                                accuracy: position.coords.accuracy
-                            });
-                        },
-                        (error) => {
-                            reject(error);
-                        }
-                    );
+        const lm = this.tg?.LocationManager;
+
+        // Библиотека geo-доступа есть только в Bot API 8.0+.
+        if (!lm) {
+            return this._requestBrowserGeolocation();
+        }
+
+        try {
+            if (!lm.isInited) {
+                await new Promise((resolveInit) => {
+                    lm.init(() => resolveInit());
+                    // Таймаут-страховка: если location_checked не придёт — не зависаем.
+                    setTimeout(() => resolveInit(), 5000);
                 });
             }
-            throw new Error('Geolocation not supported');
+
+            if (!lm.isLocationAvailable || !lm.isAccessGranted) {
+                return this._requestBrowserGeolocation();
+            }
+
+            return await new Promise((resolve, reject) => {
+                lm.getLocation((location) => {
+                    if (location) {
+                        resolve({
+                            latitude: location.latitude,
+                            longitude: location.longitude,
+                            altitude: location.altitude,
+                            accuracy: location.horizontal_accuracy
+                        });
+                    } else {
+                        reject(new Error('Location denied'));
+                    }
+                });
+            });
+        } catch (e) {
+            // WebAppLocationManagerNotInited / LocationNotAvailable и пр.
+            console.warn('[TG] LocationManager failed, falling back to browser geolocation:', e);
+            return this._requestBrowserGeolocation();
+        }
+    }
+
+    /**
+     * Браузерный geolocation (фолбэк, когда Telegram-библиотека недоступна).
+     */
+    _requestBrowserGeolocation() {
+        if (!navigator.geolocation) {
+            return Promise.reject(new Error('Geolocation not supported'));
         }
 
         return new Promise((resolve, reject) => {
-            this.tg.LocationManager.getLocation((location) => {
-                if (location) {
-                    resolve(location);
-                } else {
-                    reject(new Error('Location denied'));
+            navigator.geolocation.getCurrentPosition(
+                (position) => {
+                    resolve({
+                        latitude: position.coords.latitude,
+                        longitude: position.coords.longitude,
+                        altitude: position.coords.altitude,
+                        accuracy: position.coords.accuracy
+                    });
+                },
+                (error) => {
+                    reject(error);
                 }
-            });
+            );
         });
     }
 

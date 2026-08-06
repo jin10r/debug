@@ -12,6 +12,7 @@ import {
     LineString,
     Polygon
 } from 'geojson';
+import { TelegramAPI } from './telegram';
 
 /**
  * Event layer types
@@ -210,39 +211,9 @@ declare global {
             render(): void;
         };
         
-        // Telegram
-        Telegram: {
-            WebApp: {
-                initData: string;
-                initDataUnsafe: {
-                    user?: {
-                        id: number;
-                        first_name?: string;
-                        last_name?: string;
-                        username?: string;
-                        language_code?: string;
-                    };
-                };
-                version: string;
-                platform: string;
-                colorScheme: 'light' | 'dark';
-                ready: () => void;
-                expand: () => void;
-                showAlert: (message: string) => void;
-                HapticFeedback?: {
-                    impactOccurred: (style: 'light' | 'medium' | 'heavy') => void;
-                    notificationOccurred: (type: 'success' | 'warning' | 'error') => void;
-                    selectionChanged: () => void;
-                };
-                DeviceStorage?: {
-                    getItem: (key: string, callback: (err: string | null, value: string | null) => void) => void;
-                    setItem: (key: string, value: string, callback: (err: string | null) => void) => void;
-                    removeItem: (key: string, callback: (err: string | null) => void) => void;
-                    getKeys: (callback: (err: string | null, keys: string[]) => void) => void;
-                };
-            };
-        };
-        
+        // Telegram — общий тип вынесен в js/types/telegram.ts (см. TelegramAPI)
+        Telegram: TelegramAPI;
+
         // Validator
         telegramValidator: {
             validateAndInit(): Promise<boolean>;

@@ -161,7 +161,7 @@ window.createMultiPoint = function(map, coords, properties) {
     for (const c of coords) {
         const latLng = L.latLng(c[1], c[0]);
         allLatLngs.push(latLng);
-        const strategy = properties.strategy;
+        const strategy = properties.strategy as string | undefined;
         const markerEls = window.createCircle(map, c, properties, strategy);
         elements.push(...markerEls);
     }
@@ -178,7 +178,7 @@ window.createGeometryCollection = function(map, coords, properties) {
         let created;
         switch (type) {
             case 'Point':
-                created = window.createCircle(map, c, properties, properties.strategy);
+                created = window.createCircle(map, c, properties, properties.strategy as string | undefined);
                 break;
             case 'LineString':
                 created = window.createPolyline(map, c, properties);

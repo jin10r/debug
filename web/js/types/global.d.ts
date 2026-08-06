@@ -5,6 +5,7 @@
  */
 
 import { EventFeature, EventFeatureCollection, AppConfig, StoreState } from './geojson';
+import { TelegramAPI } from './telegram';
 
 /**
  * Leaflet type declarations (simplified)
@@ -84,40 +85,9 @@ declare global {
         };
         
         // ==================== TELEGRAM ====================
-        
-        Telegram: {
-            WebApp: {
-                initData: string;
-                initDataUnsafe: {
-                    user?: {
-                        id: number;
-                        first_name?: string;
-                        last_name?: string;
-                        username?: string;
-                        language_code?: string;
-                    };
-                };
-                version: string;
-                platform: string;
-                colorScheme: 'light' | 'dark';
-                ready: () => void;
-                expand: () => void;
-                showAlert: (message: string) => void;
-                HapticFeedback?: {
-                    impactOccurred: (style: 'light' | 'medium' | 'heavy') => void;
-                    notificationOccurred: (type: 'success' | 'warning' | 'error') => void;
-                    selectionChanged: () => void;
-                };
-                DeviceStorage?: {
-                    getItem: (key: string, callback: (err: string | null, value: string | null) => void) => void;
-                    setItem: (key: string, value: string, callback: (err: string | null) => void) => void;
-                    removeItem: (key: string, callback: (err: string | null) => void) => void;
-                    getKeys: (callback: (err: string | null, keys: string[]) => void) => void;
-                };
-            };
-        };
-        
-        
+        // Общий тип вынесен в js/types/telegram.ts (см. TelegramAPI)
+        Telegram: TelegramAPI;
+
         // ==================== UTILITY FUNCTIONS ====================
         
         // ==================== SERVER CLOCK SYNC ====================
@@ -142,6 +112,24 @@ declare global {
         geometryLayerGroup: L.LayerGroup | null;
         randomMarkersGroup: L.LayerGroup | null;
 
+        // ==================== GEOMETRY HELPERS (js/core/map.ts) ====================
+
+        createIcon: (layer: string) => L.Icon | L.DivIcon;
+        createMarker: (map: L.Map, latLng: L.LatLng, properties: Record<string, unknown>) => L.Marker;
+        createCircle: (map: L.Map, coords: number[], properties: Record<string, unknown>, strategy?: string) => L.Layer[];
+        getPolylineMidpoint: (latLngs: L.LatLng[]) => L.LatLng | null;
+        createPolyline: (map: L.Map, coords: [number, number][], properties: Record<string, unknown>) => L.Layer[];
+        createPolygon: (map: L.Map, coords: [number, number][][], properties: Record<string, unknown>) => L.Layer[];
+        createMultiPolygon: (map: L.Map, coords: [number, number][][][], properties: Record<string, unknown>) => L.Layer[];
+        createMultiLineString: (map: L.Map, coords: number[][][], properties: Record<string, unknown>) => L.Layer[];
+        createMultiPoint: (map: L.Map, coords: number[][], properties: Record<string, unknown>) => L.Layer[];
+        // coords: any[] — элементы GeometryCollection разнородны (Point/
+        // LineString/...), каждая ветка кастует свои coordinates самостоятельно.
+        createGeometryCollection: (map: L.Map, coords: any[], properties: Record<string, unknown>) => L.Layer[];
+        createTelegramPopup: (content: string, customOptions?: Record<string, unknown>) => L.Popup;
+        adSquares: Record<string, unknown>;
+        switchTileLayer: (tileKey: string) => void;
+
         autoRefreshInterval?: number;
         
         // ==================== CONSTANTS ====================
@@ -157,13 +145,43 @@ declare global {
         createPopupContent: (properties: Record<string, unknown>) => string;
         processTelegramHTML: (html: string) => string;
         formatDateTime: (dateString: string) => string;
-        hapticFeedback: (type?: 'light' | 'medium' | 'heavy' | 'success' | 'warning' | 'error' | 'selection_changed') => void;
+        // type: string — реальные вызовы передают произвольные строки
+        // (например HAPTIC_BY_TYPE[type] в common.ts), строгий union здесь
+        // приводил к TS2345.
+        hapticFeedback: (type?: string) => void;
         showNotification: (message: string, duration?: number, type?: 'info' | 'warning' | 'error' | 'success') => void;
         playNotificationSound: () => boolean;
-        handleNewEvents: (events: Array<Record<string, unknown>>) => void;
+        handleNewEvents: (events: any[]) => void;
         renderFromCache: () => void;
         initializeMap: () => void;
         
+        // ==================== TELEGRAM INTEGRATION (js/telegram/integration.ts) ====================
+
+        __hapticDebugOnce?: boolean;
+        telegramIntegration: {
+            init(): boolean;
+            hapticFeedback(type?: string): boolean;
+            showPopup(message: string, buttons?: Array<{ type: string }>): Promise<string>;
+            showAlert(message: string): Promise<void>;
+            showConfirm(message: string): Promise<boolean>;
+        };
+
+        // ==================== TOKEN MANAGER (js/core/token-manager.ts) ====================
+
+        tokenManager: {
+            init(): Promise<boolean>;
+            getAccessToken(): string | null;
+            getRefreshToken(): string | null;
+            getValidToken(): Promise<string | null>;
+            storeTokens(accessToken: string, refreshToken?: string): void;
+            clearTokens(): void;
+            isTokenExpired(token: string, thresholdMs?: number): boolean;
+            getTokenExpiration(token: string): Date | null;
+            refreshAccessToken(): Promise<string | null>;
+            scheduleRefresh(): void;
+            destroy(): void;
+        };
+
         // ==================== DEBUG ====================
         
         debugManager?: {

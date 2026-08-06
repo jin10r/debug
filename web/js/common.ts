@@ -291,23 +291,39 @@ window.showNotification = function(message: string, duration: number = 3000, typ
 window.formatDateTime = function(dateTimeStr: string): string {
     if (!dateTimeStr) return '';
     try {
-        const timeMatch = dateTimeStr.match(/T(\d{2}):(\d{2})/);
-        if (timeMatch) {
-            return `${timeMatch[1]}:${timeMatch[2]}`;
+        // Строка без явного часового пояса (naive, напр. '2026-08-06 12:41:04'
+        // или '2026-08-06T12:41:04') трактуется JS-ом как ЛОКАЛЬНОЕ время
+        // устройства → конвертация в Киев даст сдвиг на (TZ_устройства - Kiev),
+        // т.е. «сырое» время на чужом часовом поясе. События хранятся в UTC,
+        // поэтому naive-строку ВСЕГДА интерпретируем как UTC (суффикс 'Z'),
+        // и только потом конвертируем в Europe/Kiev.
+        // Сначала приводим разделитель ' ' к 'T' (PSQL-стиль без T), затем
+        // проверяем наличие явного offset — иначе строка с пробелом и offset
+        // вида '+00' пройдёт regex и new Date() вернёт INVALID.
+        let normalized = String(dateTimeStr).trim().replace(' ', 'T');
+        if (!/([zZ]|[+-]\d{2}:?\d{2})$/.test(normalized)) {
+            normalized += 'Z';
         }
 
-        const date = new Date(dateTimeStr);
+        const date = new Date(normalized);
         if (isNaN(date.getTime())) return '';
 
-        // Конвертируем UTC время в киевское
-        // Используем Intl.DateTimeFormat для правильной конвертации с учетом DST
+        // Конвертируем UTC время в киевское.
+        // ВАЖНО: раньше здесь был regex-путь, вытаскивающий HH:MM прямо из
+        // UTC-строки (/T(\d{2}):(\d{2})/) — на карте показывалось UTC-время
+        // вместо киевского (событие 14:30Z отображалось как 14:30 вместо
+        // 17:30). Теперь ВСЕГДА парсим дату и форматируем через
+        // Intl.DateTimeFormat с timeZone Europe/Kiev (с учётом DST).
+        // hourCycle: 'h23' — гарантирует 00..23 (в противном случае часовая
+        // полночь по ru-RU может отобразиться как 24:xx). НЕ задаём hour12:
+        // по ECMA-402 он имеет приоритет над hourCycle и отменяет его.
         const timeFormatter = new Intl.DateTimeFormat('ru-RU', {
             hour: '2-digit',
             minute: '2-digit',
-            hour12: false,
+            hourCycle: 'h23',
             timeZone: 'Europe/Kiev'
         });
-        
+
         return timeFormatter.format(date);
     } catch (e) {
         console.error('Invalid datetime format:', dateTimeStr, e);

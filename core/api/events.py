@@ -5,7 +5,6 @@ import logging
 import hashlib
 from datetime import datetime
 
-import aiohttp
 from aiohttp import web
 from pydantic import ValidationError
 
@@ -239,29 +238,6 @@ async def get_geo_handler(request: web.Request):
     except Exception as e:
         logger.error(f"Error fetching geo for API: {e}", exc_info=True)
         return web.json_response({'error': 'Internal server error'}, status=500)
-
-
-async def reverse_geocode_handler(request: web.Request):
-    proxy = request.app.get('nominatim_proxy', 'http://nominatim:8080')
-    lat = request.query.get('lat')
-    lon = request.query.get('lon')
-    if not lat or not lon:
-        return web.json_response({'error': 'lat and lon required'}, status=400)
-    try:
-        async with aiohttp.ClientSession() as session:
-            url = f"{proxy}/reverse?lat={lat}&lon={lon}&format=json&zoom=18"
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                if resp.status != 200:
-                    return web.json_response(
-                        {'error': 'Nominatim error', 'status': resp.status},
-                        status=502,
-                    )
-                data = await resp.json()
-                return web.json_response(data)
-    except asyncio.TimeoutError:
-        return web.json_response({'error': 'Nominatim timeout'}, status=504)
-    except Exception as exc:
-        return web.json_response({'error': str(exc)}, status=502)
 
 
 async def get_data_status_handler(request: web.Request):

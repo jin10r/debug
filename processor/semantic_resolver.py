@@ -9,6 +9,7 @@
 
 import json
 import logging
+import re
 from typing import Any, Dict, List, Optional, Set
 
 try:
@@ -25,9 +26,21 @@ _DIRECTIONAL_PREPS: frozenset = frozenset({
 })
 
 # Типы объектов, для которых разрешён midpoint
+# (должны совпадать с v_midpoint_types в 08-process-candidates.sql)
 _MIDPOINT_TYPES: frozenset = frozenset({
     'street', 'market', 'station', 'park', 'landmark',
+    'village', 'town',
 })
+
+# Типы-якоря для эвристики «угол X и Y» / «X / Y» → intersection
+# (мягкий сигнал: финальное решение принимает process_candidates по геометрии).
+_INTERSECTION_ANCHOR_TYPES: frozenset = frozenset({'street'})
+
+# Словоформы «угол» (исключают «уголок»/«уголка»)
+_CORNER_WORDS: frozenset = frozenset({'угол', 'углу', 'угла', 'углом'})
+
+# Slash-разделитель: «X / Y» — но не даты/дроби («12/06», «3/4»)
+_SLASH_RE = re.compile(r'(?<!\d)\s*/\s*(?!\d)')
 
 
 def _build_prompt(text: str, candidates: List[Dict]) -> str:
@@ -125,14 +138,17 @@ class SemanticResolver:
     def _pre_filter(self, text: str, candidates: List[Dict]) -> Optional[Dict[str, Any]]:
         """Быстрые правила без вызова модели."""
         text_lower = text.lower()
+        # Точные токены (не подстроки!): 'до' ⊄ 'доме', 'от' ⊄ 'который',
+        # 'между' ⊄ 'международный' — иначе ложные срабатывания предлогов.
+        words = set(re.findall(r'[а-яё]+', text_lower))
 
         candidate_types = {c.get('type', '') for c in candidates}
         candidate_names = {c.get('matched_name', '').lower() for c in candidates}
 
         # ── Правило 1: предлоги направления → midpoint ──────────────────────────
         # "от X до Y", "между X и Y"
-        has_from_to = any(p in text_lower for p in ('от', 'до')) and len(candidates) >= 2
-        has_between = 'между' in text_lower and len(candidates) >= 2
+        has_from_to = bool(words & {'от', 'до'}) and len(candidates) >= 2
+        has_between = 'между' in words and len(candidates) >= 2
         if has_from_to or has_between:
             midpoint_types = _MIDPOINT_TYPES & candidate_types
             if midpoint_types:
@@ -167,6 +183,23 @@ class SemanticResolver:
                         'strategy': 'midpoint' if _MIDPOINT_TYPES & {target_type} else 'single_match',
                         'reasoning': f'type_hint_multiple:{target_type}',
                     }
+
+        # ── Правило 4 (эвристика): «X угол Y» / «X / Y» → intersection ─────────
+        # Мягкий маркер: срабатывает только при 2+ кандидатах, среди которых есть
+        # street-якорь. Если gazetteer неполон (1 кандидат) — правило молчит
+        # и событие корректно уходит в single_match/PostGIS.
+        if len(candidates) >= 2 and any(
+            c.get('type') in _INTERSECTION_ANCHOR_TYPES for c in candidates
+        ):
+            corner = bool(_CORNER_WORDS & words)
+            if not corner:
+                corner = _SLASH_RE.search(text) is not None
+            if corner:
+                return {
+                    'geo_ids': [c['geo_id'] for c in candidates],
+                    'strategy': 'intersection',
+                    'reasoning': 'corner_construction_heuristic',
+                }
 
         # ── Правило 3: одноимённые объекты, в тексте есть второй топоним ────────
         # Если среди кандидатов есть пары одинаковых названий с разными id,

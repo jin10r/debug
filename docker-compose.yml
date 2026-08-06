@@ -342,7 +342,10 @@ services:
     logging: *default-logging
 
   grafana:
-    image: grafana/grafana-oss:11.1.0
+    build:
+      context: .
+      dockerfile: Dockerfile.grafana
+    image: survival_grafana:latest
     container_name: grafana
     environment:
       # Анонимный доступ — только чтение (Viewer): дашборды видны без логина,

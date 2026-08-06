@@ -359,6 +359,7 @@ services:
       # Live не используется — отключаем: иначе браузер с устаревшей cookie
       # раз в ~30с долбит /api/live/ws с "user token not found" в логах.
       GF_LIVE_ENABLED: "false"
+      GF_DATABASE_SQLITE_TIMEOUT: "10000"
     volumes:
       - grafana_data:/var/lib/grafana
       # Provisioning: datasource Prometheus + дашборды (перечитаются автоматически)

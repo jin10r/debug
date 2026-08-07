@@ -316,9 +316,11 @@ async def websocket_handler(request: web.Request):
                 logger.warning(f"WebSocket rejected: origin {origin} not in allowed list")
                 return web.json_response({'error': 'Origin not allowed'}, status=403)
 
+    # aiohttp >= 3.10 removed max_ws_bytes (renamed max_msg_size in 3.9);
+    # on 3.14 the old kwarg raises TypeError and breaks every /ws connection.
     ws = web.WebSocketResponse(
         heartbeat=120,
-        max_ws_bytes=WS_MAX_MSG_BYTES,
+        max_msg_size=WS_MAX_MSG_BYTES,
     )
     await ws.prepare(request)
 

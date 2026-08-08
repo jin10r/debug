@@ -49,8 +49,6 @@ RUN useradd -m -u 1000 processor && \
 COPY --chown=processor:processor processor/ ./processor/
 COPY --chown=processor:processor core/ ./core/
 
-COPY --chown=processor:processor processor/models/rubert-tiny2-onnx /app/models/rubert-tiny2-onnx
-
 USER processor
 
 CMD ["python", "-m", "processor.main"]

@@ -87,6 +87,10 @@ nnew_events_export.csv
 events_export.csv
 events_export*.csv
 
+# Large local data dumps
+messages.txt
+result.json
+
 # ONNX model files (large binaries, downloaded separately)
 parser/models/
 processor/models/

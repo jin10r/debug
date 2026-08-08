@@ -92,7 +92,7 @@ END;
 $$;
 
 -- ══════════════════════════════════════════════════════════════════════════════
--- TEST 2: midpoint (близкие объекты 50м)
+-- TEST 2: midpoint (близкие объекты ~50м, >50m порог)
 -- ══════════════════════════════════════════════════════════════════════════════
 DO $$
 DECLARE
@@ -105,7 +105,7 @@ BEGIN
             (ARRAY['TEST_MIDPOINT_A'], 'poi',
              ST_SetSRID(ST_MakePoint(30.83135, 46.49804), 4326)),
             (ARRAY['TEST_MIDPOINT_B'], 'poi',
-             ST_SetSRID(ST_MakePoint(30.83180, 46.49804), 4326))
+             ST_SetSRID(ST_MakePoint(30.83200, 46.49804), 4326))
         RETURNING id, names
     ),
     _ids AS (
@@ -124,9 +124,46 @@ BEGIN
              30.83135, 46.49804, 0.045
          ) pc;
 
-    PERFORM assert_equal(_strategy, 'midpoint', 'T2: strategy should be midpoint');
+    PERFORM assert_equal(_strategy, 'midpoint', 'T2: strategy should be midpoint (>50m)');
     PERFORM assert_true(_geom_type = 'ST_Point', 'T2: geom should be POINT');
-    RAISE NOTICE 'TEST 2 (midpoint): PASSED';
+    RAISE NOTICE 'TEST 2 (midpoint >50m): PASSED';
+END;
+$$;
+
+-- ══════════════════════════════════════════════════════════════════════════════
+-- TEST 2b: false midpoint blocked (<50m, was 32m bug)
+-- ══════════════════════════════════════════════════════════════════════════════
+DO $$
+DECLARE
+    _strategy VARCHAR(40);
+BEGIN
+    WITH _data AS (
+        INSERT INTO geo (names, type, geom)
+        VALUES
+            (ARRAY['TEST_FALSE_MIDPOINT_A'], 'poi',
+             ST_SetSRID(ST_MakePoint(30.83135, 46.49804), 4326)),
+            (ARRAY['TEST_FALSE_MIDPOINT_B'], 'poi',
+             ST_SetSRID(ST_MakePoint(30.83170, 46.49804), 4326))
+        RETURNING id, names
+    ),
+    _ids AS (
+        SELECT
+            MAX(CASE WHEN names @> ARRAY['TEST_FALSE_MIDPOINT_A'] THEN id END) AS id_a,
+            MAX(CASE WHEN names @> ARRAY['TEST_FALSE_MIDPOINT_B'] THEN id END) AS id_b
+        FROM _data
+    )
+    SELECT pc.result_strategy
+    INTO _strategy
+    FROM _ids,
+         process_candidates(
+             ARRAY[_ids.id_a, _ids.id_b],
+             ARRAY[0.90::float, 0.85::float],
+             ARRAY['TEST_FALSE_MIDPOINT_A', 'TEST_FALSE_MIDPOINT_B'],
+             30.83135, 46.49804, 0.045
+         ) pc;
+
+    PERFORM assert_equal(_strategy, 'single_match', 'T2b: strategy should be single_match (too close for midpoint)');
+    RAISE NOTICE 'TEST 2b (false midpoint blocked): PASSED';
 END;
 $$;
 
@@ -265,7 +302,8 @@ DELETE FROM events WHERE description LIKE 'TEST_%';
 DELETE FROM geo WHERE names @> ARRAY['TEST_INTERSECTION'] 
    OR names @> ARRAY['TEST_MIDPOINT_A']
    OR names @> ARRAY['TEST_CLUSTER_A']
-   OR names @> ARRAY['TEST_PENALTY'];
+   OR names @> ARRAY['TEST_PENALTY']
+   OR names @> ARRAY['TEST_FALSE_MIDPOINT_A'];
 
 DROP FUNCTION assert_equal(ANYELEMENT, ANYELEMENT, TEXT);
 DROP FUNCTION assert_true(BOOLEAN, TEXT);
@@ -273,4 +311,4 @@ DROP FUNCTION assert_true(BOOLEAN, TEXT);
 COMMIT;
 
 -- Итог
-SELECT 'ALL 5 TESTS PASSED' AS status;
+SELECT 'ALL 6 TESTS PASSED' AS status;

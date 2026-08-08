@@ -253,7 +253,7 @@ BEGIN
         WHERE a.id < b.id
           AND NOT ST_Intersects(a.geom, b.geom)
           AND ST_Distance(a.geom_m, b.geom_m) <= v_midpoint_radius_m
-          AND ST_Distance(a.geom_m, b.geom_m) > 0
+          AND ST_Distance(a.geom_m, b.geom_m) > 50
           AND (
               (a.adjusted_score >= v_score_threshold AND b.adjusted_score >= v_score_threshold)
               OR (a.adjusted_score >= 0.95 AND b.adjusted_score >= 0.80)

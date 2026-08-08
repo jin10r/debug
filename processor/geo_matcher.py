@@ -44,8 +44,6 @@ def _fuzzy_match(query: str, phrases: list, threshold: float):
     except Exception:
         return None
 
-_STEM_MATCH_SCORE = 0.97
-
 _LOC_PREPS: frozenset = frozenset({
     'на', 'по', 'в', 'у', 'до',
     'від', 'біля',
@@ -200,7 +198,7 @@ class GeoMatcher:
                     best = hit[0]
                 return {
                     'geo_id': best.street_id,
-                    'score': _STEM_MATCH_SCORE,
+                    'score': fuzz.ratio(surface, best.variant_text) / 100.0,
                     'matched_name': best.canonical_name,
                     'text': surface,
                     'source': source,

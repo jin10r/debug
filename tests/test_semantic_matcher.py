@@ -147,9 +147,9 @@ def test_gray_zone_reject():
 
 
 def test_confident_candidate_untouched():
-    """Кандидаты ≥ confident-порога (в т.ч. стем-exact 0.97) модель не трогает."""
+    """Кандидаты ≥ confident-порога (в т.ч. стем-exact с высоким score) модель не трогает."""
     m = _make_matcher(["Балковская", "Красивая"], np.array([0.5, 0.5]))
-    cand = {"geo_id": 1, "score": 0.97, "matched_name": "Балковская", "source": "stem_exact"}
+    cand = {"geo_id": 1, "score": 0.95, "matched_name": "Балковская", "source": "stem_exact"}
     out = m.filter_candidates([dict(cand)], "совершенно другой текст без улиц")
     assert len(out) == 1
     assert out[0]["source"] == "stem_exact"  # без "+semantic"

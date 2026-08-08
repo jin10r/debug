@@ -151,7 +151,7 @@ class SimilarityConfig:
     # Порог fuzz.ratio для surface-орфо-корректора (Tier 2 в _link_span, 0-1).
     # 0.80: пропускает в «серую зону» (0.80–0.85) слабее совпадения, которые
     # ранее валидировала семантическая модель (см. semantic_accept_threshold).
-    # Точные стем-матчи (Tier 1, score 0.97) модель не затрагивает.
+    # Точные стем-матчи (Tier 1, score varies) модель не затрагивает.
     surface_typo_threshold: float = 0.80
 
     # Включение SemanticMatcher (ONNX rubert-tiny2). По умолчанию ОТКЛЮЧЕН:

@@ -41,9 +41,12 @@ CREATE TABLE IF NOT EXISTS events (
         'random',
         'single_match',
         'intersection',
-        'midpoint'
+        'midpoint',
+        'cluster_centroid'
     )),
     geom GEOMETRY,
+    confidence FLOAT DEFAULT 0.0,
+    geo_diagnostics JSONB,
     PRIMARY KEY (id, event_time)
 ) PARTITION BY RANGE (event_time);
 
@@ -91,7 +94,8 @@ ALTER TABLE events ADD CONSTRAINT events_strategy_check
         'random',
         'single_match',
         'intersection',
-        'midpoint'
+        'midpoint',
+        'cluster_centroid'
     ));
 
 ALTER TABLE events DROP CONSTRAINT IF EXISTS events_layer_check;

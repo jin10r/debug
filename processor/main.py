@@ -33,7 +33,6 @@ from core.db.db_adapter import DBAdapter
 from .morphology import Morphology
 from .phonetic_index import PhoneticIndex
 from .geo_matcher import GeoMatcher
-from .semantic_resolver import SemanticResolver
 from .health import HealthServer
 from .layer_classifier import LayerClassifier
 from .word_tokenizer import tokenize
@@ -148,18 +147,20 @@ _INSERT_EVENT_SIMPLE = """
 
 _INSERT_EVENT_FROM_CANDIDATES = """
     WITH pc AS (
-        SELECT result_geom, result_strategy, result_matches
+        SELECT result_geom, result_strategy, result_matches,
+               result_confidence, result_diagnostics
         FROM process_candidates(
-            $6::int[], $7::double precision[], $8::text[], $9::varchar,
-            $10::float, $11::float, $12::float
+            $6::int[], $7::double precision[], $8::text[],
+            $9::float, $10::float, $11::float
         )
     ),
     inserted AS (
         INSERT INTO events
             (message_id, event_time, description, photo_url,
-             layer, strategy, geom, matches)
+             layer, strategy, geom, matches, confidence, geo_diagnostics)
         SELECT $1, $2, $3, $4, $5,
-               pc.result_strategy, pc.result_geom, pc.result_matches
+               pc.result_strategy, pc.result_geom, pc.result_matches,
+               pc.result_confidence, pc.result_diagnostics
         FROM pc
         WHERE pc.result_geom IS NOT NULL
         ON CONFLICT (message_id, event_time) DO NOTHING
@@ -217,7 +218,6 @@ class ProcessorBot:
         self.morph = Morphology()
         self.index = PhoneticIndex(self.morph)
         self.matcher = GeoMatcher(self.morph, self.index)
-        self.resolver = SemanticResolver(self.morph, self.index)
         # SemanticMatcher (rubert ONNX) — создаётся только при semantic_enabled=True
         # (см. _init_nlp). По умолчанию отключён: модель не влияла на решения.
         self.semantic_matcher = None
@@ -300,9 +300,6 @@ class ProcessorBot:
                     logger.warning("⚠️ Continuing without SemanticMatcher")
             else:
                 logger.info("ℹ️ SemanticMatcher disabled (semantic_enabled=False)")
-
-            logger.info("Initializing SemanticResolver...")
-            await self.resolver.initialize(self.db.pool)
 
             logger.info("Setting up PostgreSQL notifications...")
             await self._setup_pg_notify()
@@ -549,26 +546,12 @@ class ProcessorBot:
                 tokens=tokens, geo_ids=geo_ids,
             )
 
-        strategy = None
-        if len(geo_ids) > 1:
-            resolved = await self.resolver.resolve(
-                text=raw_text, tokens=tokens, lemmas=lemmas, candidates=entities,
-            )
-            if resolved is not None:
-                strategy = resolved.get('strategy')
-                resolved_ids = resolved.get('geo_ids')
-                if resolved_ids is not None:
-                    id_set = set(resolved_ids)
-                    geo_ids = [gid for gid in geo_ids if gid in id_set]
-                    geo_scores = [s for gid, s in zip(geo_ids, geo_scores) if gid in id_set]
-                    geo_texts = [t for gid, t in zip(geo_ids, geo_texts) if gid in id_set]
-
         return self._enrich(
             await self._insert_event_from_candidates(
                 message_id=message_id, event_time=event_time,
                 description=raw_text, photo_path=None,
                 layer=layer, geo_ids=geo_ids, geo_scores=geo_scores,
-                geo_texts=geo_texts, strategy=strategy,
+                geo_texts=geo_texts,
             ),
             tokens=tokens, geo_ids=geo_ids,
         )
@@ -593,8 +576,7 @@ class ProcessorBot:
 
     async def _insert_event_from_candidates(self, *, message_id, event_time,
                                               description, photo_path, layer,
-                                              geo_ids, geo_scores, geo_texts,
-                                              strategy=None):
+                                              geo_ids, geo_scores, geo_texts):
         """Вставка события с вызовом process_candidates для разрешения кандидатов."""
         scores_array = [float(s) for s in geo_scores]
         if settings and hasattr(settings, 'question_overlay'):
@@ -605,7 +587,7 @@ class ProcessorBot:
         return await self._run_insert(
             _INSERT_EVENT_FROM_CANDIDATES,
             (message_id, event_time, description, photo_path, layer,
-             geo_ids, scores_array, geo_texts, strategy,
+             geo_ids, scores_array, geo_texts,
              center_lon, center_lat, radius),
             message_id=message_id,
         )
@@ -664,8 +646,6 @@ class ProcessorBot:
 
         if self.matcher:
             await self.matcher.close()
-        if self.resolver:
-            await self.resolver.close()
         if self.semantic_matcher:
             self.semantic_matcher.close()
         if self.db:

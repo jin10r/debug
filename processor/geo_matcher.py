@@ -61,7 +61,7 @@ class GeoMatcher:
         self._initialized = False
         self._stopwords: Set[str] = set()
         # geo_id → type (street/village/town/...): пробрасывается в кандидатов,
-        # чтобы pre-filter SemanticResolver'а (midpoint/type_hint) мог работать.
+        # чтобы pre-filter (midpoint/type_hint) мог работать.
         self._geo_types: Dict[int, str] = {}
         self._executor: Optional[ThreadPoolExecutor] = None
         self._semantic_matcher: Optional["SemanticMatcher"] = None

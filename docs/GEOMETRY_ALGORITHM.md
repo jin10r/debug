@@ -8,15 +8,16 @@
 
 ```
 raw_candidates → district_filter → final_candidates → candidates (deduplicated)
-                                                              ↓
-                                                    H1: single_match
-                                                    H2: intersection
-                                                    H3: midpoint
-                                                    H4: cluster_centroid
-                                                              ↓
-                                                    best_hypothesis (priority + score)
-                                                              ↓
-                                                    fallback (single_match / random)
+                                                               ↓
+                                                     H1: single_match
+                                                     H2: intersection
+                                                     H3: midpoint
+                                                     H3b: proximity
+                                                     H4: cluster_centroid
+                                                               ↓
+                                                     best_hypothesis (priority + score)
+                                                               ↓
+                                                     fallback (single_match / random)
 ```
 
 ## Предобработка кандидатов
@@ -60,7 +61,12 @@ ST_AsText(ST_SnapToGrid(geom, 0.0001)) AS geom_hash
 
 **Score:** `adjusted_score`.
 
-**Fallback:** если `adjusted_score < 0.85` → `random`.
+**Thresholds:**
+- `>= 0.85` → `single_match` (full confidence)
+- `0.70 – 0.85` → `single_match` с `weak_candidate: true` в diagnostics
+- `< 0.70` → `random`
+
+**Fallback:** если `adjusted_score < 0.70` → `random`.
 
 ### H2: intersection
 
@@ -80,13 +86,26 @@ harmonic_mean(a, b) + 0.3
 
 ### H3: midpoint
 
-**Условие:** 2+ кандидата, геометрии НЕ пересекаются, расстояние ≤ 150м.
+**Условие:** 2+ кандидата, геометрии НЕ пересекаются, расстояние 50–150м.
 
 **Геометрия:** `ST_LineInterpolatePoint(ST_ShortestLine(a.geom, b.geom), 0.5)`.
 
 **Score:**
 ```
 harmonic_mean(a, b) + 0.2 * (1 - distance_m / 150)
+```
+
+**Threshold (Option B):** тот же, что у intersection.
+
+### H3b: proximity
+
+**Условие:** 2+ кандидата, геометрии НЕ пересекаются, расстояние 150–500м.
+
+**Геометрия:** `ST_LineInterpolatePoint(ST_ShortestLine(a.geom, b.geom), 0.5)`.
+
+**Score:**
+```
+harmonic_mean(a, b) + 0.1 * (1 - distance_m / 500)
 ```
 
 **Threshold (Option B):** тот же, что у intersection.
@@ -125,17 +144,19 @@ AVG(adjusted_score) + 0.4 * (1 - max_deviation_m / 500)
 
 | Приоритет | Стратегия | Объяснение |
 |-----------|-----------|------------|
-| 4 | `intersection` | точное пересечение — самая надёжная |
-| 3 | `cluster_centroid` | кластер из 3+ объектов |
-| 2 | `midpoint` | близкие непересекающиеся объекты |
+| 5 | `intersection` | точное пересечение — самая надёжная |
+| 4 | `cluster_centroid` | кластер из 3+ объектов |
+| 3 | `proximity` | близкие объекты 150–500м |
+| 2 | `midpoint` | близкие непересекающиеся объекты 50–150м |
 | 1 | `single_match` | fallback для одного объекта |
 
 ## Fallback
 
 Если ни одна гипотеза не сгенерирована:
 
-1. Если лучший кандидат `adjusted_score >= 0.85` → `single_match` с его геометрией.
-2. Иначе → `random` (случайная точка в `question_overlay`).
+1. Если лучший кандидат `adjusted_score >= 0.85` → `single_match` с его геометрией (full confidence).
+2. Если лучший кандидат `adjusted_score >= 0.70` → `single_match` с его геометрией (weak, `weak_candidate: true`).
+3. Иначе → `random` (случайная точка в `question_overlay`).
 
 ## Geometry-type safety
 
@@ -149,11 +170,14 @@ AVG(adjusted_score) + 0.4 * (1 - max_deviation_m / 500)
 
 | Параметр | Значение | Описание |
 |-----------|----------|----------|
-| `v_score_threshold` | 0.85 | Минимальный score для single_match / cluster |
+| `v_score_threshold` | 0.70 | Минимальный score для single_match (floor) |
+| `v_strong_threshold` | 0.85 | Порог strong single_match и spatial hypotheses |
 | `v_cluster_radius_m` | 500.0 | Макс. расстояние для cluster_centroid |
 | `v_midpoint_radius_m` | 150.0 | Макс. расстояние для midpoint |
+| `v_midpoint_min_m` | 50.0 | Мин. расстояние для midpoint |
 | `short_match_penalty` | 0.6 | Коэффициент для совпадений-цифр |
 | `very_short_penalty` | 0.7 | Коэффициент для length < 3 |
 | `intersection_bonus` | 0.3 | Бонус за пересечение |
 | `midpoint_bonus` | 0.2 | Бонус за близость |
+| `proximity_bonus` | 0.1 | Бонус за близость (150–500м) |
 | `cluster_bonus` | 0.4 | Бонус за компактность кластера |

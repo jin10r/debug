@@ -34,7 +34,8 @@ DECLARE
     v_filtered_scores  FLOAT[];
     v_filtered_texts   TEXT[];
     v_candidate_count   INT;
-    v_score_threshold   FLOAT := 0.85;
+    v_score_threshold   FLOAT := 0.70;
+    v_strong_threshold   FLOAT := 0.85;
     v_cluster_radius_m  FLOAT := 500.0;
     v_midpoint_radius_m FLOAT := 150.0;
 BEGIN
@@ -123,7 +124,7 @@ BEGIN
 
     -- ── 1 совпадение → single_match ───────────────────────────────────────────
     IF array_length(v_filtered_ids, 1) = 1 THEN
-        IF v_filtered_scores[1] >= v_score_threshold THEN
+        IF v_filtered_scores[1] >= v_strong_threshold THEN
             SELECT ST_MakeValid(geom) INTO v_geom FROM geo WHERE id = v_filtered_ids[1];
             v_strategy := 'single_match';
             v_confidence := v_filtered_scores[1];
@@ -131,6 +132,17 @@ BEGIN
                 'type', 'single_match',
                 'geo_id', v_filtered_ids[1],
                 'score', v_filtered_scores[1]
+            );
+            RETURN QUERY SELECT v_geom, v_strategy, v_matches, v_confidence, v_diagnostics;
+        ELSIF v_filtered_scores[1] >= v_score_threshold THEN
+            SELECT ST_MakeValid(geom) INTO v_geom FROM geo WHERE id = v_filtered_ids[1];
+            v_strategy := 'single_match';
+            v_confidence := v_filtered_scores[1];
+            v_diagnostics := jsonb_build_object(
+                'type', 'single_match',
+                'geo_id', v_filtered_ids[1],
+                'score', v_filtered_scores[1],
+                'weak_candidate', true
             );
             RETURN QUERY SELECT v_geom, v_strategy, v_matches, v_confidence, v_diagnostics;
         ELSE
@@ -229,7 +241,7 @@ BEGIN
           AND ST_Intersects(a.geom, b.geom)
           AND NOT ST_IsEmpty(isect.g)
           AND (
-              (a.adjusted_score >= v_score_threshold AND b.adjusted_score >= v_score_threshold)
+              (a.adjusted_score >= v_strong_threshold AND b.adjusted_score >= v_strong_threshold)
               OR (a.adjusted_score >= 0.95 AND b.adjusted_score >= 0.80)
               OR (a.adjusted_score >= 0.80 AND b.adjusted_score >= 0.95)
           )
@@ -255,7 +267,33 @@ BEGIN
           AND ST_Distance(a.geom_m, b.geom_m) <= v_midpoint_radius_m
           AND ST_Distance(a.geom_m, b.geom_m) > 50
           AND (
-              (a.adjusted_score >= v_score_threshold AND b.adjusted_score >= v_score_threshold)
+              (a.adjusted_score >= v_strong_threshold AND b.adjusted_score >= v_strong_threshold)
+              OR (a.adjusted_score >= 0.95 AND b.adjusted_score >= 0.80)
+              OR (a.adjusted_score >= 0.80 AND b.adjusted_score >= 0.95)
+          )
+    ),
+
+    -- H3b: proximity для пар 150–500м (не пересекающихся)
+    hypothesis_proximity AS (
+        SELECT 
+            'proximity'::VARCHAR(40) AS strategy,
+            ST_LineInterpolatePoint(ST_ShortestLine(a.geom, b.geom), 0.5) AS geom,
+            (2 * a.adjusted_score * b.adjusted_score / 
+             (a.adjusted_score + b.adjusted_score + 0.001)) +
+             0.1 * (1 - ST_Distance(a.geom_m, b.geom_m) / 500.0) AS total_score,
+            jsonb_build_object(
+                'type', 'proximity',
+                'geo_ids', ARRAY[a.id, b.id],
+                'distance_m', ST_Distance(a.geom_m, b.geom_m)
+            ) AS diagnostics
+        FROM candidates a
+        CROSS JOIN candidates b
+        WHERE a.id < b.id
+          AND NOT ST_Intersects(a.geom, b.geom)
+          AND ST_Distance(a.geom_m, b.geom_m) > v_midpoint_radius_m
+          AND ST_Distance(a.geom_m, b.geom_m) <= 500.0
+          AND (
+              (a.adjusted_score >= v_strong_threshold AND b.adjusted_score >= v_strong_threshold)
               OR (a.adjusted_score >= 0.95 AND b.adjusted_score >= 0.80)
               OR (a.adjusted_score >= 0.80 AND b.adjusted_score >= 0.95)
           )
@@ -295,7 +333,7 @@ BEGIN
                ST_Collect(c.geom_m),
                ST_Centroid(ST_Collect(c.geom_m))
            ) <= v_cluster_radius_m
-           AND MIN(c.adjusted_score) >= v_score_threshold
+           AND MIN(c.adjusted_score) >= v_strong_threshold
     ),
 
     -- Объединение всех гипотез
@@ -305,6 +343,8 @@ BEGIN
         SELECT * FROM hypothesis_intersection
         UNION ALL
         SELECT * FROM hypothesis_midpoint
+        UNION ALL
+        SELECT * FROM hypothesis_proximity
         UNION ALL
         SELECT * FROM hypothesis_cluster
     ),
@@ -319,8 +359,9 @@ BEGIN
         FROM all_hypotheses h
         ORDER BY 
             CASE h.strategy 
-                WHEN 'intersection' THEN 4
-                WHEN 'cluster_centroid' THEN 3
+                WHEN 'intersection' THEN 5
+                WHEN 'cluster_centroid' THEN 4
+                WHEN 'proximity' THEN 3
                 WHEN 'midpoint' THEN 2
                 ELSE 1
             END DESC,

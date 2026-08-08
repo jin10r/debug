@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS events (
         'single_match',
         'intersection',
         'midpoint',
+        'proximity',
         'cluster_centroid'
     )),
     geom GEOMETRY,
@@ -88,13 +89,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_events_message_id_unique ON events(message
 -- на single_match при миграции.
 ALTER TABLE events DROP CONSTRAINT IF EXISTS events_strategy_check;
 UPDATE events SET strategy = 'single_match'
-WHERE strategy NOT IN ('random', 'single_match', 'intersection', 'midpoint');
+WHERE strategy NOT IN ('random', 'single_match', 'intersection', 'midpoint', 'proximity');
 ALTER TABLE events ADD CONSTRAINT events_strategy_check
     CHECK (strategy IN (
         'random',
         'single_match',
         'intersection',
         'midpoint',
+        'proximity',
         'cluster_centroid'
     ));
 

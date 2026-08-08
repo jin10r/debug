@@ -115,18 +115,20 @@ SELECT geom FROM geo WHERE id = $1;  -- может быть invalid
 | Стратегия | Тип геометрии | Когда |
 |-----------|---------------|-------|
 | `random` | POINT | 0 совпадений |
-| `single_match` | Любой | 1 совпадение (score >= 0.85) |
+| `single_match` | Любой | 1 совпадение (score >= 0.70, strong >= 0.85) |
 | `intersection` | POINT/POLYGON | 2+ пересекающихся объекта |
-| `midpoint` | POINT | 2+ близких объекта (≤150m) |
+| `midpoint` | POINT | 2+ близких объекта (≤150m, ≥50m) |
+| `proximity` | POINT | 2+ объекта на расстоянии 150–500м |
 | `cluster_centroid` | POINT | 3+ объекта в кластере (≤500m) |
 
 **Правило:** `random`, `midpoint`, `cluster_centroid` ВСЕГДА возвращают POINT (валидация через триггер).
 
 **Описание стратегий:**
-- `single_match`: выбирается один кандидат с highest score. При score < 0.85 → fallback на `random`.
+- `single_match`: выбирается один кандидат с highest score. При score >= 0.85 → full confidence. При score 0.70–0.85 → weak single_match (same geometry, `weak_candidate: true` в diagnostics). При score < 0.70 → `random`.
 - `intersection`: пересечение геометрий двух кандидатов. Бонус +0.3 за пересечение. Если один кандидат >= 0.95, второй >= 0.80 → допускается даже если оба ниже 0.85.
-- `midpoint`: середина кратчайшей линии между двумя непересекающимися объектами ≤150m. Бонус 0.2 * (1 - distance/max_distance).
-- `cluster_centroid`: взвешенный центроид 3+ объектов в радиусе 500m. Бонус 0.4 * (1 - max_deviation/radius). Минимум по adjusted_score >= 0.85.
+- `midpoint`: середина кратчайшей линии между двумя непересекающимися объектами 50–150м. Бонус 0.2 * (1 - distance/max_distance). Объекты < 50м не образуют midpoint.
+- `proximity`: середина кратчайшей линии между двумя непересекающимися объектами 150–500м. Бонус 0.1 * (1 - distance/500).
+- `cluster_centroid`: взвешенный центроид 3+ объектов в радиусе 500м. Бонус 0.4 * (1 - max_deviation/radius). Минимум по adjusted_score >= 0.85.
 - `random`: случайная точка в зоне `question_overlay`.
 
 ### R-DB9: Валидация geometry ↔ strategy
@@ -134,7 +136,7 @@ SELECT geom FROM geo WHERE id = $1;  -- может быть invalid
 Триггер `trg_validate_event_geom` проверяет соответствие:
 
 ```sql
-IF NEW.strategy IN ('random', 'midpoint')
+IF NEW.strategy IN ('random', 'midpoint', 'proximity', 'cluster_centroid')
    AND ST_GeometryType(NEW.geom) != 'ST_Point' THEN
     RAISE EXCEPTION 'strategy "%" требует POINT-геометрию';
 END IF;

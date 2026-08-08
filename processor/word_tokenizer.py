@@ -44,6 +44,7 @@ def tokenize(text: str) -> List[Token]:
     """
     if not text:
         return []
+    text = re.sub(r'(\d+)([а-яёА-ЯЁ])', r'\1 \2', text)
     raw = [
         Token(text=m.group(0), start=m.start(), stop=m.end())
         for m in _WORD_RE.finditer(text)

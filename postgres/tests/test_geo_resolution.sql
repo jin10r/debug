@@ -297,13 +297,124 @@ BEGIN
 END;
 $$;
 
+-- ══════════════════════════════════════════════════════════════════════════════
+-- TEST 6: weak single_match (score 0.75, floor 0.70)
+-- ══════════════════════════════════════════════════════════════════════════════
+DO $$
+DECLARE
+    _strategy VARCHAR(40);
+    _confidence FLOAT;
+    _diagnostics JSONB;
+BEGIN
+    WITH _data AS (
+        INSERT INTO geo (names, type, geom)
+        VALUES (ARRAY['TEST_WEAK_SINGLE'], 'street',
+                ST_SetSRID(ST_MakePoint(30.83135, 46.49804), 4326))
+        RETURNING id
+    )
+    SELECT pc.result_strategy, pc.result_confidence, pc.result_diagnostics
+    INTO _strategy, _confidence, _diagnostics
+    FROM _data,
+         process_candidates(
+             ARRAY[(SELECT id FROM _data)],
+             ARRAY[0.75::float],
+             ARRAY['test_weak'],
+             30.83135, 46.49804, 0.045
+         ) pc;
+
+    PERFORM assert_equal(_strategy, 'single_match', 'T6: strategy should be single_match (weak)');
+    PERFORM assert_true(_confidence = 0.75, 'T6: confidence should be 0.75');
+    PERFORM assert_true((_diagnostics->>'weak_candidate')::BOOLEAN, 'T6: diagnostics should have weak_candidate=true');
+    RAISE NOTICE 'TEST 6 (weak single_match): PASSED';
+END;
+$$;
+
+-- ══════════════════════════════════════════════════════════════════════════════
+-- TEST 7: proximity (200m apart, 150–500m range)
+-- ══════════════════════════════════════════════════════════════════════════════
+DO $$
+DECLARE
+    _strategy VARCHAR(40);
+    _geom_type TEXT;
+BEGIN
+    WITH _data AS (
+        INSERT INTO geo (names, type, geom)
+        VALUES
+            (ARRAY['TEST_PROXIMITY_A'], 'poi',
+             ST_SetSRID(ST_MakePoint(30.83135, 46.49804), 4326)),
+            (ARRAY['TEST_PROXIMITY_B'], 'poi',
+             ST_SetSRID(ST_MakePoint(30.83300, 46.49804), 4326))
+        RETURNING id, names
+    ),
+    _ids AS (
+        SELECT
+            MAX(CASE WHEN names @> ARRAY['TEST_PROXIMITY_A'] THEN id END) AS id_a,
+            MAX(CASE WHEN names @> ARRAY['TEST_PROXIMITY_B'] THEN id END) AS id_b
+        FROM _data
+    )
+    SELECT pc.result_strategy, ST_GeometryType(pc.result_geom)
+    INTO _strategy, _geom_type
+    FROM _ids,
+         process_candidates(
+             ARRAY[_ids.id_a, _ids.id_b],
+             ARRAY[0.90::float, 0.85::float],
+             ARRAY['TEST_PROXIMITY_A', 'TEST_PROXIMITY_B'],
+             30.83135, 46.49804, 0.045
+         ) pc;
+
+    PERFORM assert_equal(_strategy, 'proximity', 'T7: strategy should be proximity (200m)');
+    PERFORM assert_true(_geom_type = 'ST_Point', 'T7: geom should be POINT');
+    RAISE NOTICE 'TEST 7 (proximity): PASSED';
+END;
+$$;
+
+-- ══════════════════════════════════════════════════════════════════════════════
+-- TEST 8: very close objects (<50m) should NOT be proximity
+-- ══════════════════════════════════════════════════════════════════════════════
+DO $$
+DECLARE
+    _strategy VARCHAR(40);
+BEGIN
+    WITH _data AS (
+        INSERT INTO geo (names, type, geom)
+        VALUES
+            (ARRAY['TEST_CLOSE_PROX_A'], 'poi',
+             ST_SetSRID(ST_MakePoint(30.83135, 46.49804), 4326)),
+            (ARRAY['TEST_CLOSE_PROX_B'], 'poi',
+             ST_SetSRID(ST_MakePoint(30.83170, 46.49804), 4326))
+        RETURNING id, names
+    ),
+    _ids AS (
+        SELECT
+            MAX(CASE WHEN names @> ARRAY['TEST_CLOSE_PROX_A'] THEN id END) AS id_a,
+            MAX(CASE WHEN names @> ARRAY['TEST_CLOSE_PROX_B'] THEN id END) AS id_b
+        FROM _data
+    )
+    SELECT pc.result_strategy
+    INTO _strategy
+    FROM _ids,
+         process_candidates(
+             ARRAY[_ids.id_a, _ids.id_b],
+             ARRAY[0.90::float, 0.85::float],
+             ARRAY['TEST_CLOSE_PROX_A', 'TEST_CLOSE_PROX_B'],
+             30.83135, 46.49804, 0.045
+         ) pc;
+
+    PERFORM assert_equal(_strategy, 'single_match', 'T8: strategy should be single_match (too close for proximity/midpoint)');
+    RAISE NOTICE 'TEST 8 (close objects not proximity): PASSED';
+END;
+$$;
+
 -- ── Очистка ─────────────────────────────────────────────────────────────────
 DELETE FROM events WHERE description LIKE 'TEST_%';
 DELETE FROM geo WHERE names @> ARRAY['TEST_INTERSECTION'] 
    OR names @> ARRAY['TEST_MIDPOINT_A']
    OR names @> ARRAY['TEST_CLUSTER_A']
    OR names @> ARRAY['TEST_PENALTY']
-   OR names @> ARRAY['TEST_FALSE_MIDPOINT_A'];
+   OR names @> ARRAY['TEST_FALSE_MIDPOINT_A']
+   OR names @> ARRAY['TEST_WEAK_SINGLE']
+   OR names @> ARRAY['TEST_PROXIMITY_A']
+   OR names @> ARRAY['TEST_CLOSE_PROX_A'];
 
 DROP FUNCTION assert_equal(ANYELEMENT, ANYELEMENT, TEXT);
 DROP FUNCTION assert_true(BOOLEAN, TEXT);
@@ -311,4 +422,4 @@ DROP FUNCTION assert_true(BOOLEAN, TEXT);
 COMMIT;
 
 -- Итог
-SELECT 'ALL 6 TESTS PASSED' AS status;
+SELECT 'ALL 8 TESTS PASSED' AS status;

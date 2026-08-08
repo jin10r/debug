@@ -228,8 +228,11 @@ BEGIN
         WHERE a.id < b.id
           AND ST_Intersects(a.geom, b.geom)
           AND NOT ST_IsEmpty(isect.g)
-          AND a.adjusted_score >= v_score_threshold
-          AND b.adjusted_score >= v_score_threshold
+          AND (
+              (a.adjusted_score >= v_score_threshold AND b.adjusted_score >= v_score_threshold)
+              OR (a.adjusted_score >= 0.95 AND b.adjusted_score >= 0.80)
+              OR (a.adjusted_score >= 0.80 AND b.adjusted_score >= 0.95)
+          )
     ),
 
     -- H3: midpoint для близких пар (≤150m, не пересекающихся)
@@ -239,7 +242,7 @@ BEGIN
             ST_LineInterpolatePoint(ST_ShortestLine(a.geom, b.geom), 0.5) AS geom,
             (2 * a.adjusted_score * b.adjusted_score / 
              (a.adjusted_score + b.adjusted_score + 0.001)) +
-            0.2 * (1 - ST_Distance(a.geom_m, b.geom_m) / v_midpoint_radius_m) AS total_score,
+             0.2 * (1 - ST_Distance(a.geom_m, b.geom_m) / v_midpoint_radius_m) AS total_score,
             jsonb_build_object(
                 'type', 'midpoint',
                 'geo_ids', ARRAY[a.id, b.id],
@@ -251,8 +254,11 @@ BEGIN
           AND NOT ST_Intersects(a.geom, b.geom)
           AND ST_Distance(a.geom_m, b.geom_m) <= v_midpoint_radius_m
           AND ST_Distance(a.geom_m, b.geom_m) > 0
-          AND a.adjusted_score >= v_score_threshold
-          AND b.adjusted_score >= v_score_threshold
+          AND (
+              (a.adjusted_score >= v_score_threshold AND b.adjusted_score >= v_score_threshold)
+              OR (a.adjusted_score >= 0.95 AND b.adjusted_score >= 0.80)
+              OR (a.adjusted_score >= 0.80 AND b.adjusted_score >= 0.95)
+          )
     ),
 
     -- H4: cluster для 3+ кандидатов

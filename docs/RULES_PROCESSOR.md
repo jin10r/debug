@@ -12,7 +12,7 @@
 
 Processor — единственный сервис, выполняющий NLP-пайплайн:
 ```
-pending_events → tokenize → lemmatize → classify → find_geo → resolve → INSERT INTO events
+pending_events → tokenize → lemmatize → classify → find_geo → process_candidates → INSERT INTO events
 ```
 
 **Запрещено:**
@@ -40,7 +40,7 @@ for _ in range(self._worker_concurrency):
 2. Все worker tasks отменяются через `task.cancel()`
 3. `asyncio.gather(*tasks, return_exceptions=True)` — ждём завершения
 4. UNLISTEN `geo_updated` + release connection
-5. Закрытие GeoMatcher, SemanticResolver, DB pool
+    5. Закрытие GeoMatcher, DB pool
 
 ```python
 async def shutdown(self):
@@ -152,19 +152,6 @@ if llm_result.get('layer') == 'junk':
     strategy = 'random'
 ```
 
-### R-PR9: SemanticResolver — опциональный
-
-SemanticResolver используется ТОЛЬКО при >1 geo-кандидата:
-
-```python
-if len(geo_ids) > 1:
-    resolved = await self.resolver.resolve(
-        text=raw_text, tokens=tokens, lemmas=lemmas, candidates=entities,
-    )
-```
-
-**Правило:** При 0 кандидатах → random. При 1 → single_match без resolver.
-
 ### R-PR10: process_candidates в PostGIS
 
 Для 2+ кандидатов — INSERT через CTE с `process_candidates()`:
@@ -172,8 +159,12 @@ if len(geo_ids) > 1:
 ```python
 _INSERT_EVENT_FROM_CANDIDATES = """
     WITH pc AS (
-        SELECT result_geom, result_strategy, result_matches
-        FROM process_candidates($6::int[], $7::double precision[], $8::text[], $9::varchar)
+        SELECT result_geom, result_strategy, result_matches,
+               result_confidence, result_diagnostics
+        FROM process_candidates(
+            $6::int[], $7::double precision[], $8::text[],
+            $9::float, $10::float, $11::float
+        )
     ),
     inserted AS (
         INSERT INTO events (...) SELECT ... FROM pc WHERE pc.result_geom IS NOT NULL
@@ -184,7 +175,7 @@ _INSERT_EVENT_FROM_CANDIDATES = """
 """
 ```
 
-**Правило:** Геометрия вычисляется в PostGIS, НЕ в Python.
+**Правило:** Геометрия и стратегия вычисляются в PostGIS, НЕ в Python. SemanticResolver удалён.
 
 ---
 

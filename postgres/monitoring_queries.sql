@@ -245,3 +245,99 @@ WHERE tablename LIKE 'events_%'
   AND schemaname = 'public'
 ORDER BY tablename DESC
 LIMIT 10;
+
+-- ========================================
+-- 16. process_candidates() Performance (pg_stat_statements)
+-- ========================================
+-- Отдельный трекинг для вызова process_candidates() через CTE
+-- (функция вызывается внутри INSERT, поэтому в pg_stat_statements
+--  появляется как отдельный запрос)
+SELECT
+    calls,
+    ROUND(mean_exec_time::numeric, 2) AS avg_ms,
+    ROUND(total_exec_time::numeric, 2) AS total_ms,
+    ROUND((100 * total_exec_time / SUM(total_exec_time) OVER ())::numeric, 2) AS pct,
+    LEFT(query, 120) AS query_preview
+FROM pg_stat_statements
+WHERE query LIKE '%process_candidates%'
+  AND query NOT LIKE '%pg_stat_statements%'
+ORDER BY mean_exec_time DESC
+LIMIT 10;
+
+-- ========================================
+-- 17. Low-Confidence Events Alert
+-- ========================================
+-- События с низкой уверенностью (confidence < 0.7) за последний час
+-- Порог алерта: >10 событий/час
+SELECT
+    DATE_TRUNC('hour', event_time) AS hour,
+    COUNT(*) AS low_confidence_count,
+    ROUND(AVG(confidence)::numeric, 3) AS avg_confidence,
+    ROUND(AVG(ST_Distance(geom, ST_Centroid(geom)))::numeric, 2) AS avg_spread_m
+FROM events
+WHERE event_time >= NOW() - INTERVAL '1 hour'
+  AND confidence < 0.7
+GROUP BY DATE_TRUNC('hour', event_time)
+HAVING COUNT(*) > 10
+ORDER BY hour DESC;
+
+-- ========================================
+-- 18. Strategy Distribution Per Hour
+-- ========================================
+-- Распределение стратегий по часам (для анализа качества резолвера)
+SELECT
+    DATE_TRUNC('hour', event_time) AS hour,
+    strategy,
+    COUNT(*) AS cnt,
+    ROUND(AVG(confidence)::numeric, 3) AS avg_confidence,
+    ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (PARTITION BY DATE_TRUNC('hour', event_time))::numeric, 2) AS pct
+FROM events
+WHERE event_time >= NOW() - INTERVAL '24 hours'
+GROUP BY DATE_TRUNC('hour', event_time), strategy
+ORDER BY hour DESC, cnt DESC;
+
+-- ========================================
+-- 19. Confidence Distribution Buckets
+-- ========================================
+-- Гистограмма уверенности для диагностики порога 0.85
+SELECT
+    CASE
+        WHEN confidence >= 0.95 THEN '0.95+'
+        WHEN confidence >= 0.85 THEN '0.85-0.94'
+        WHEN confidence >= 0.70 THEN '0.70-0.84'
+        WHEN confidence >= 0.50 THEN '0.50-0.69'
+        ELSE '<0.50'
+    END AS confidence_bucket,
+    strategy,
+    COUNT(*) AS cnt,
+    ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (PARTITION BY strategy)::numeric, 2) AS pct_of_strategy
+FROM events
+WHERE event_time >= NOW() - INTERVAL '7 days'
+  AND confidence IS NOT NULL
+  AND strategy != 'random'
+GROUP BY
+    CASE
+        WHEN confidence >= 0.95 THEN '0.95+'
+        WHEN confidence >= 0.85 THEN '0.85-0.94'
+        WHEN confidence >= 0.70 THEN '0.70-0.84'
+        WHEN confidence >= 0.50 THEN '0.50-0.69'
+        ELSE '<0.50'
+    END,
+    strategy
+ORDER BY strategy, confidence_bucket;
+
+-- ========================================
+-- 20. Hypothesis Win Rate (diagnostics)
+-- ========================================
+-- Процент побед каждой гипотезы (из geo_diagnostics)
+SELECT
+    (d->>'type') AS hypothesis,
+    COUNT(*) AS wins,
+    ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER ()::numeric, 2) AS win_pct,
+    ROUND(AVG((d->>'score')::FLOAT)::numeric, 3) AS avg_score
+FROM events e,
+     jsonb_array_elements(e.geo_diagnostics) AS d
+WHERE e.event_time >= NOW() - INTERVAL '24 hours'
+  AND e.geo_diagnostics ? 'type'
+GROUP BY (d->>'type')
+ORDER BY wins DESC;

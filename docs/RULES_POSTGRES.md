@@ -115,11 +115,19 @@ SELECT geom FROM geo WHERE id = $1;  -- может быть invalid
 | Стратегия | Тип геометрии | Когда |
 |-----------|---------------|-------|
 | `random` | POINT | 0 совпадений |
-| `single_match` | Любой | 1 совпадение |
+| `single_match` | Любой | 1 совпадение (score >= 0.85) |
 | `intersection` | POINT/POLYGON | 2+ пересекающихся объекта |
 | `midpoint` | POINT | 2+ близких объекта (≤150m) |
+| `cluster_centroid` | POINT | 3+ объекта в кластере (≤500m) |
 
-**Правило:** `random` и `midpoint` ВСЕГДА возвращают POINT (валидация через триггер).
+**Правило:** `random`, `midpoint`, `cluster_centroid` ВСЕГДА возвращают POINT (валидация через триггер).
+
+**Описание стратегий:**
+- `single_match`: выбирается один кандидат с highest score. При score < 0.85 → fallback на `random`.
+- `intersection`: пересечение геометрий двух кандидатов. Бонус +0.3 за пересечение. Если один кандидат >= 0.95, второй >= 0.80 → допускается даже если оба ниже 0.85.
+- `midpoint`: середина кратчайшей линии между двумя непересекающимися объектами ≤150m. Бонус 0.2 * (1 - distance/max_distance).
+- `cluster_centroid`: взвешенный центроид 3+ объектов в радиусе 500m. Бонус 0.4 * (1 - max_deviation/radius). Минимум по adjusted_score >= 0.85.
+- `random`: случайная точка в зоне `question_overlay`.
 
 ### R-DB9: Валидация geometry ↔ strategy
 
@@ -134,18 +142,62 @@ END IF;
 
 **Правило:** Невалидная комбинация → INSERT/UPDATE отклоняется с ошибкой.
 
-### R-DB10: process_candidates — CTE pipeline
+### R-DB10: process_candidates — контракт функции
 
-Вычисление геометрии — один roundtrip через CTE:
+```sql
+CREATE OR REPLACE FUNCTION process_candidates(
+    p_geo_ids           INT[]   DEFAULT NULL,
+    p_scores            FLOAT[] DEFAULT NULL,
+    p_matched_texts     TEXT[]  DEFAULT NULL,
+    p_center_lon        FLOAT   DEFAULT 30.83135,
+    p_center_lat        FLOAT   DEFAULT 46.49804,
+    p_radius            FLOAT   DEFAULT 0.045
+)
+RETURNS TABLE(
+    result_geom       GEOMETRY,
+    result_strategy   VARCHAR(40),
+    result_matches    JSONB,
+    result_confidence FLOAT,
+    result_diagnostics JSONB
+)
+```
+
+**Входные параметры:**
+- `p_geo_ids` — массив ID гео-объектов (из NLP-матчера)
+- `p_scores` — массив similarity scores (0.0–1.0)
+- `p_matched_texts` — массив matched_text для штрафа коротких совпадений
+- `p_center_lon/lat` — центр зоны для `random`
+- `p_radius` — радиус зоны для `random`
+
+**Выход:**
+- `result_geom` — итоговая геометрия (POINT для random/midpoint/cluster_centroid)
+- `result_strategy` — `random` | `single_match` | `intersection` | `midpoint` | `cluster_centroid`
+- `result_matches` — JSONB массив всех кандидатов (geo_id, name, similarity, matched_text)
+- `result_confidence` — итоговый score (0.0–1.0+)
+- `result_diagnostics` — JSONB с типом гипотезы, geo_ids, score
+
+**Внутренняя логика:**
+1. Фильтрация по району (если есть district в кандидатах)
+2. Штраф за короткие совпадения: length < 3 → *0.7, только цифры → *0.6
+3. Дедупликация по `ST_AsText(ST_SnapToGrid(geom, 0.0001))`
+4. Генерация 4 гипотез (H1–H4)
+5. Выбор лучшей по приоритету: intersection > cluster_centroid > midpoint > single_match
+6. Fallback: если нет гипотез → лучший кандидат или random
+
+**Вызов из Python (CTE pipeline):**
 
 ```sql
 WITH pc AS (
-    SELECT * FROM process_candidates($geo_ids, $scores, $texts, $strategy)
+    SELECT result_geom, result_strategy, result_matches,
+           result_confidence, result_diagnostics
+    FROM process_candidates(
+        $6::int[], $7::double precision[], $8::text[],
+        $9::float, $10::float, $11::float
+    )
 ),
 inserted AS (
-    INSERT INTO events (...)
-    SELECT ... FROM pc WHERE pc.result_geom IS NOT NULL
-    ON CONFLICT DO NOTHING
+    INSERT INTO events (...) SELECT ... FROM pc WHERE pc.result_geom IS NOT NULL
+    ON CONFLICT (message_id, event_time) DO NOTHING
     RETURNING ...
 ),
 meta_upd AS (

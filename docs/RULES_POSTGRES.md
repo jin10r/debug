@@ -115,20 +115,18 @@ SELECT geom FROM geo WHERE id = $1;  -- может быть invalid
 | Стратегия | Тип геометрии | Когда |
 |-----------|---------------|-------|
 | `random` | POINT | 0 совпадений |
-| `single_match` | Любой | 1 совпадение (score >= 0.70, strong >= 0.85) |
-| `intersection` | POINT/POLYGON | 2+ пересекающихся объекта |
-| `midpoint` | POINT | 2+ близких объекта (≤150m, ≥50m) |
-| `proximity` | POINT | 2+ объекта на расстоянии 150–500м |
-| `cluster_centroid` | POINT | 3+ объекта в кластере (≤500m) |
+| `single_match` | Любой | 1 совпадение (score >= 0.85) |
+| `intersection` | POINT | 2+ пересекающихся объекта |
+| `street_segment` | LINESTRING | Линия, пересекающая 2+ объекта (сегмент ≤ 2000м) |
+| `weighted_centroid` | POINT | 2+ объекта, scatter ≤ 1500м |
 
-**Правило:** `random`, `midpoint`, `cluster_centroid` ВСЕГДА возвращают POINT (валидация через триггер).
+**Правило:** `random`, `intersection`, `weighted_centroid` ВСЕГДА возвращают POINT (валидация через триггер). `street_segment` всегда возвращает LINESTRING. `single_match` может быть любым типом.
 
 **Описание стратегий:**
-- `single_match`: выбирается один кандидат с highest score. При score >= 0.85 → full confidence. При score 0.70–0.85 → weak single_match (same geometry, `weak_candidate: true` в diagnostics). При score < 0.70 → `random`.
-- `intersection`: пересечение геометрий двух кандидатов. Бонус +0.3 за пересечение. Если один кандидат >= 0.95, второй >= 0.80 → допускается даже если оба ниже 0.85.
-- `midpoint`: середина кратчайшей линии между двумя непересекающимися объектами 50–150м. Бонус 0.2 * (1 - distance/max_distance). Объекты < 50м не образуют midpoint.
-- `proximity`: середина кратчайшей линии между двумя непересекающимися объектами 150–500м. Бонус 0.1 * (1 - distance/500).
-- `cluster_centroid`: взвешенный центроид 3+ объектов в радиусе 500м. Бонус 0.4 * (1 - max_deviation/radius). Минимум по adjusted_score >= 0.85.
+- `single_match`: выбирается один кандидат с highest score. При score >= 0.85 → full confidence (weight ×0.4). При score < 0.85 → `random`.
+- `intersection`: пересечение геометрий двух кандидатов. Harmonic mean * 1.0 + bonus 0.3. Допускается если один >= 0.95, второй >= 0.80.
+- `street_segment`: сегмент линии между первым и последним пересечением с объектами. Вес 0.9. Сегмент ≤ 2000м.
+- `weighted_centroid`: Weighted centroid из пересечений пар (вес ×2.5) и центроидов кандидатов (вес ×1.0). Scatter ≤ 1500м. Confidence = AVG(base_score) * 0.85 - scatter_penalty.
 - `random`: случайная точка в зоне `question_overlay`.
 
 ### R-DB9: Валидация geometry ↔ strategy
@@ -136,9 +134,14 @@ SELECT geom FROM geo WHERE id = $1;  -- может быть invalid
 Триггер `trg_validate_event_geom` проверяет соответствие:
 
 ```sql
-IF NEW.strategy IN ('random', 'midpoint', 'proximity', 'cluster_centroid')
+IF NEW.strategy IN ('random', 'weighted_centroid', 'intersection')
    AND ST_GeometryType(NEW.geom) != 'ST_Point' THEN
     RAISE EXCEPTION 'strategy "%" требует POINT-геометрию';
+END IF;
+
+IF NEW.strategy = 'street_segment'
+   AND ST_GeometryType(NEW.geom) != 'ST_LineString' THEN
+    RAISE EXCEPTION 'strategy "street_segment" требует LINESTRING-геометрию';
 END IF;
 ```
 
@@ -172,8 +175,8 @@ RETURNS TABLE(
 - `p_radius` — радиус зоны для `random`
 
 **Выход:**
-- `result_geom` — итоговая геометрия (POINT для random/midpoint/cluster_centroid)
-- `result_strategy` — `random` | `single_match` | `intersection` | `midpoint` | `cluster_centroid`
+- `result_geom` — итоговая геометрия (POINT для random/intersection/weighted_centroid/single_match_point, LINESTRING для street_segment)
+- `result_strategy` — `random` | `single_match` | `intersection` | `street_segment` | `weighted_centroid`
 - `result_matches` — JSONB массив всех кандидатов (geo_id, name, similarity, matched_text)
 - `result_confidence` — итоговый score (0.0–1.0+)
 - `result_diagnostics` — JSONB с типом гипотезы, geo_ids, score
@@ -183,7 +186,7 @@ RETURNS TABLE(
 2. Штраф за короткие совпадения: length < 3 → *0.7, только цифры → *0.6
 3. Дедупликация по `ST_AsText(ST_SnapToGrid(geom, 0.0001))`
 4. Генерация 4 гипотез (H1–H4)
-5. Выбор лучшей по приоритету: intersection > cluster_centroid > midpoint > single_match
+5. Выбор лучшей по приоритету: intersection (5) > street_segment (4) > weighted_centroid (3) > single_match (1)
 6. Fallback: если нет гипотез → лучший кандидат или random
 
 **Вызов из Python (CTE pipeline):**

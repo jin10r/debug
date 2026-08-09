@@ -88,16 +88,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_events_message_id_unique ON events(message
 -- Старые приблизительные стратегии (nearest_point, within_polygon и др.) заменяются
 -- на single_match при миграции.
 ALTER TABLE events DROP CONSTRAINT IF EXISTS events_strategy_check;
-UPDATE events SET strategy = 'single_match'
-WHERE strategy NOT IN ('random', 'single_match', 'intersection', 'midpoint', 'proximity');
+UPDATE events SET strategy = 'weighted_centroid'
+WHERE strategy IN ('midpoint', 'proximity', 'cluster_centroid');
 ALTER TABLE events ADD CONSTRAINT events_strategy_check
     CHECK (strategy IN (
         'random',
         'single_match',
         'intersection',
-        'midpoint',
-        'proximity',
-        'cluster_centroid'
+        'street_segment',
+        'weighted_centroid'
     ));
 
 ALTER TABLE events DROP CONSTRAINT IF EXISTS events_layer_check;

@@ -2,8 +2,8 @@
 -- process_candidates.sql
 --
 -- PostGIS as sole geometry arbiter. No strategy parameter from Python.
--- Generates hypotheses internally: single_match, intersection, midpoint,
--- cluster_centroid. Returns confidence and diagnostics.
+-- Generates hypotheses internally: single_match, intersection, street_segment,
+-- weighted_centroid. Returns confidence and diagnostics.
 -- =============================================================================
 
 CREATE OR REPLACE FUNCTION process_candidates(
@@ -34,10 +34,10 @@ DECLARE
     v_filtered_scores  FLOAT[];
     v_filtered_texts   TEXT[];
     v_candidate_count   INT;
-    v_score_threshold   FLOAT := 0.70;
-    v_strong_threshold   FLOAT := 0.85;
+    v_score_threshold   FLOAT := 0.85;
     v_cluster_radius_m  FLOAT := 500.0;
-    v_midpoint_radius_m FLOAT := 150.0;
+    v_wc_max_scatter_m  FLOAT := 1500.0;
+    v_ss_max_segment_m  FLOAT := 2000.0;
 BEGIN
     v_scores := COALESCE(
         p_scores,
@@ -124,7 +124,7 @@ BEGIN
 
     -- ── 1 совпадение → single_match ───────────────────────────────────────────
     IF array_length(v_filtered_ids, 1) = 1 THEN
-        IF v_filtered_scores[1] >= v_strong_threshold THEN
+        IF v_filtered_scores[1] >= v_score_threshold THEN
             SELECT ST_MakeValid(geom) INTO v_geom FROM geo WHERE id = v_filtered_ids[1];
             v_strategy := 'single_match';
             v_confidence := v_filtered_scores[1];
@@ -132,17 +132,6 @@ BEGIN
                 'type', 'single_match',
                 'geo_id', v_filtered_ids[1],
                 'score', v_filtered_scores[1]
-            );
-            RETURN QUERY SELECT v_geom, v_strategy, v_matches, v_confidence, v_diagnostics;
-        ELSIF v_filtered_scores[1] >= v_score_threshold THEN
-            SELECT ST_MakeValid(geom) INTO v_geom FROM geo WHERE id = v_filtered_ids[1];
-            v_strategy := 'single_match';
-            v_confidence := v_filtered_scores[1];
-            v_diagnostics := jsonb_build_object(
-                'type', 'single_match',
-                'geo_id', v_filtered_ids[1],
-                'score', v_filtered_scores[1],
-                'weak_candidate', true
             );
             RETURN QUERY SELECT v_geom, v_strategy, v_matches, v_confidence, v_diagnostics;
         ELSE
@@ -201,12 +190,12 @@ BEGIN
         SELECT * FROM deduplicated
     ),
 
-    -- H1: single_match для каждого кандидата
+    -- H1: single_match для каждого кандидата (weight 0.4)
     hypothesis_single AS (
         SELECT 
             'single_match'::VARCHAR(40) AS strategy,
             c.geom AS geom,
-            c.adjusted_score AS total_score,
+            c.adjusted_score * 0.4 AS total_score,
             jsonb_build_object(
                 'type', 'single_match',
                 'geo_id', c.id,
@@ -216,7 +205,7 @@ BEGIN
         WHERE c.adjusted_score >= v_score_threshold
     ),
 
-    -- H2: intersection для всех пар
+    -- H2: intersection для всех пар (weight 1.0)
     hypothesis_intersection AS (
         SELECT 
             'intersection'::VARCHAR(40) AS strategy,
@@ -228,7 +217,7 @@ BEGIN
                 ELSE ST_PointOnSurface(isect.g)
             END AS geom,
             (2 * a.adjusted_score * b.adjusted_score / 
-             (a.adjusted_score + b.adjusted_score + 0.001)) + 0.3 AS total_score,
+             (a.adjusted_score + b.adjusted_score + 0.001)) * 1.0 AS total_score,
             jsonb_build_object(
                 'type', 'intersection',
                 'geo_ids', ARRAY[a.id, b.id],
@@ -241,99 +230,111 @@ BEGIN
           AND ST_Intersects(a.geom, b.geom)
           AND NOT ST_IsEmpty(isect.g)
           AND (
-              (a.adjusted_score >= v_strong_threshold AND b.adjusted_score >= v_strong_threshold)
+              (a.adjusted_score >= v_score_threshold AND b.adjusted_score >= v_score_threshold)
               OR (a.adjusted_score >= 0.95 AND b.adjusted_score >= 0.80)
               OR (a.adjusted_score >= 0.80 AND b.adjusted_score >= 0.95)
           )
     ),
 
-    -- H3: midpoint для близких пар (≤150m, не пересекающихся)
-    hypothesis_midpoint AS (
+    -- H3: street_segment для линий, пересекающихся в 2+ точках (weight 0.9)
+    hypothesis_street_segment AS (
         SELECT 
-            'midpoint'::VARCHAR(40) AS strategy,
-            ST_LineInterpolatePoint(ST_ShortestLine(a.geom, b.geom), 0.5) AS geom,
-            (2 * a.adjusted_score * b.adjusted_score / 
-             (a.adjusted_score + b.adjusted_score + 0.001)) +
-             0.2 * (1 - ST_Distance(a.geom_m, b.geom_m) / v_midpoint_radius_m) AS total_score,
+            'street_segment'::VARCHAR(40) AS strategy,
+            ST_LineSubstring(
+                l.geom,
+                LEAST(crossings.first_loc, crossings.last_loc),
+                GREATEST(crossings.first_loc, crossings.last_loc)
+            ) AS geom,
+            l.adjusted_score * 0.9 AS total_score,
             jsonb_build_object(
-                'type', 'midpoint',
-                'geo_ids', ARRAY[a.id, b.id],
-                'distance_m', ST_Distance(a.geom_m, b.geom_m)
+                'type', 'street_segment',
+                'line_id', l.id,
+                'crossing_ids', crossings.id_array,
+                'segment_length_m', crossings.segment_len_m
             ) AS diagnostics
+        FROM (
+            SELECT * FROM candidates
+            WHERE GeometryType(geom) IN ('LINESTRING', 'MULTILINESTRING')
+              AND adjusted_score >= v_score_threshold
+        ) l
+        CROSS JOIN LATERAL (
+            SELECT 
+                MIN(ST_LineLocatePoint(l.geom, ST_PointOnSurface(ST_Intersection(l.geom, c.geom)))) AS first_loc,
+                MAX(ST_LineLocatePoint(l.geom, ST_PointOnSurface(ST_Intersection(l.geom, c.geom)))) AS last_loc,
+                ARRAY_AGG(c.id) AS id_array,
+                COUNT(*) AS n,
+                ST_Length(ST_ShortestLine(
+                    ST_PointN(ST_GeometryN(l.geom, 1), 1),
+                    ST_PointN(ST_GeometryN(l.geom, 1), 2)
+                )) AS segment_len_m
+            FROM candidates c
+            WHERE c.id != l.id
+              AND ST_Intersects(l.geom, c.geom)
+              AND NOT ST_IsEmpty(ST_Intersection(l.geom, c.geom))
+        ) crossings
+        WHERE crossings.n >= 2
+          AND crossings.last_loc > crossings.first_loc
+    ),
+
+    -- H4: weighted_centroid для 2+ кандидатов (weight 0.85)
+    -- Точки пересечения пар (вес ×2.5) + центроиды кандидатов (вес ×1.0)
+    wc_intersection_points AS (
+        SELECT 
+            ST_PointOnSurface(ST_Intersection(a.geom, b.geom)) AS pt,
+            (a.adjusted_score + b.adjusted_score) / 2.0 AS base_score,
+            (a.adjusted_score + b.adjusted_score) / 2.0 * 2.5 AS weight
         FROM candidates a
         CROSS JOIN candidates b
         WHERE a.id < b.id
-          AND NOT ST_Intersects(a.geom, b.geom)
-          AND ST_Distance(a.geom_m, b.geom_m) <= v_midpoint_radius_m
-          AND ST_Distance(a.geom_m, b.geom_m) > 50
-          AND (
-              (a.adjusted_score >= v_strong_threshold AND b.adjusted_score >= v_strong_threshold)
-              OR (a.adjusted_score >= 0.95 AND b.adjusted_score >= 0.80)
-              OR (a.adjusted_score >= 0.80 AND b.adjusted_score >= 0.95)
-          )
+          AND ST_Intersects(a.geom, b.geom)
+          AND NOT ST_IsEmpty(ST_Intersection(a.geom, b.geom))
     ),
-
-    -- H3b: proximity для пар 150–500м (не пересекающихся)
-    hypothesis_proximity AS (
+    wc_candidate_points AS (
         SELECT 
-            'proximity'::VARCHAR(40) AS strategy,
-            ST_LineInterpolatePoint(ST_ShortestLine(a.geom, b.geom), 0.5) AS geom,
-            (2 * a.adjusted_score * b.adjusted_score / 
-             (a.adjusted_score + b.adjusted_score + 0.001)) +
-             0.1 * (1 - ST_Distance(a.geom_m, b.geom_m) / 500.0) AS total_score,
-            jsonb_build_object(
-                'type', 'proximity',
-                'geo_ids', ARRAY[a.id, b.id],
-                'distance_m', ST_Distance(a.geom_m, b.geom_m)
-            ) AS diagnostics
-        FROM candidates a
-        CROSS JOIN candidates b
-        WHERE a.id < b.id
-          AND NOT ST_Intersects(a.geom, b.geom)
-          AND ST_Distance(a.geom_m, b.geom_m) > v_midpoint_radius_m
-          AND ST_Distance(a.geom_m, b.geom_m) <= 500.0
-          AND (
-              (a.adjusted_score >= v_strong_threshold AND b.adjusted_score >= v_strong_threshold)
-              OR (a.adjusted_score >= 0.95 AND b.adjusted_score >= 0.80)
-              OR (a.adjusted_score >= 0.80 AND b.adjusted_score >= 0.95)
-          )
+            ST_PointOnSurface(geom) AS pt,
+            adjusted_score AS base_score,
+            adjusted_score * 1.0 AS weight
+        FROM candidates
     ),
-
-    -- H4: cluster для 3+ кандидатов
-    hypothesis_cluster AS (
+    wc_all_points AS (
+        SELECT pt, weight, base_score FROM wc_intersection_points
+        UNION ALL
+        SELECT pt, weight, base_score FROM wc_candidate_points
+    ),
+    hypothesis_weighted_centroid AS (
         SELECT 
-            'cluster_centroid'::VARCHAR(40) AS strategy,
+            'weighted_centroid'::VARCHAR(40) AS strategy,
             ST_Transform(
                 ST_SetSRID(
                     ST_MakePoint(
-                        SUM(ST_X(ST_Centroid(c.geom_m)) * c.adjusted_score) / SUM(c.adjusted_score),
-                        SUM(ST_Y(ST_Centroid(c.geom_m)) * c.adjusted_score) / SUM(c.adjusted_score)
+                        SUM(ST_X(ST_Transform(pt, 3857)) * weight) / NULLIF(SUM(weight), 0),
+                        SUM(ST_Y(ST_Transform(pt, 3857)) * weight) / NULLIF(SUM(weight), 0)
                     ),
                     3857
                 ),
                 4326
             ) AS geom,
-            AVG(c.adjusted_score) + 
-            0.4 * (1 - ST_MaxDistance(
-                ST_Collect(c.geom_m),
-                ST_Centroid(ST_Collect(c.geom_m))
-            ) / v_cluster_radius_m) AS total_score,
+            GREATEST(0.1,
+                (SELECT AVG(base_score) FROM wc_all_points) * 0.85
+                - LEAST(0.3, scatter.distance_m * 0.0004)
+            ) AS total_score,
             jsonb_build_object(
-                'type', 'cluster',
-                'geo_ids', array_agg(c.id ORDER BY c.adjusted_score DESC),
-                'cluster_radius_m', ST_MaxDistance(
-                    ST_Collect(c.geom_m),
-                    ST_Centroid(ST_Collect(c.geom_m))
-                ),
-                'cluster_size', COUNT(*)
+                'type', 'weighted_centroid',
+                'geo_ids', (SELECT ARRAY_AGG(id) FROM candidates),
+                'scatter_m', scatter.distance_m,
+                'candidate_count', (SELECT COUNT(*) FROM candidates)
             ) AS diagnostics
-        FROM candidates c
-        HAVING COUNT(*) >= 3
-           AND ST_MaxDistance(
-               ST_Collect(c.geom_m),
-               ST_Centroid(ST_Collect(c.geom_m))
-           ) <= v_cluster_radius_m
-           AND MIN(c.adjusted_score) >= v_strong_threshold
+        FROM wc_all_points
+        CROSS JOIN LATERAL (
+            SELECT ST_MaxDistance(
+                ST_Collect(ST_Transform(wc_all_points.pt, 3857)),
+                ST_Centroid(ST_Collect(ST_Transform(wc_all_points.pt, 3857)))
+            ) AS distance_m
+            FROM wc_all_points
+        ) scatter
+        WHERE (SELECT COUNT(*) FROM candidates) >= 2
+          AND scatter.distance_m <= v_wc_max_scatter_m
+        GROUP BY scatter.distance_m
     ),
 
     -- Объединение всех гипотез
@@ -342,11 +343,9 @@ BEGIN
         UNION ALL
         SELECT * FROM hypothesis_intersection
         UNION ALL
-        SELECT * FROM hypothesis_midpoint
+        SELECT * FROM hypothesis_street_segment
         UNION ALL
-        SELECT * FROM hypothesis_proximity
-        UNION ALL
-        SELECT * FROM hypothesis_cluster
+        SELECT * FROM hypothesis_weighted_centroid
     ),
 
     -- Выбор лучшей гипотезы
@@ -359,10 +358,9 @@ BEGIN
         FROM all_hypotheses h
         ORDER BY 
             CASE h.strategy 
-                WHEN 'intersection' THEN 5
-                WHEN 'cluster_centroid' THEN 4
-                WHEN 'proximity' THEN 3
-                WHEN 'midpoint' THEN 2
+                WHEN 'intersection'      THEN 5
+                WHEN 'street_segment'    THEN 4
+                WHEN 'weighted_centroid' THEN 3
                 ELSE 1
             END DESC,
             h.total_score DESC

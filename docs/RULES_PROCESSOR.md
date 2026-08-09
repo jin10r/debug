@@ -131,7 +131,7 @@ if promotional or not raw_text or len(raw_text) > max_text_length:
 
 Любое сообщение из `pending_events` ДОЛЖНО попасть в `events` и быть видимым на карте.
 
-- **Распознанные локации:** normal strategy (single_match / intersection / midpoint) — точная геометрия
+- **Распознанные локации:** normal strategy (single_match / intersection / street_segment / weighted_centroid) — точная геометрия
 - **Нераспознанные / спам / пустые:** `strategy=random` — точка в зоне `question_overlay`
 
 **Запрещено:**

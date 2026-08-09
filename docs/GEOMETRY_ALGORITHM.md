@@ -1,23 +1,22 @@
-# Geometry Algorithm — 4 Hypotheses
+# Geometry Algorithm — V2 Hypotheses
 
 ## Обзор
 
-`process_candidates()` — PostGIS-функция, которая является **единым арбитром геометрии**. Никакой стратегия не передаётся из Python: функция сама выбирает между 4 гипотезами на основе геометрий и scores кандидатов.
+`process_candidates()` — PostGIS-функция, которая является **единым арбитром геометрии**. Никакая стратегия не передаётся из Python: функция сама выбирает между 4 гипотезами на основе геометрий и scores кандидатов.
 
 ## Pipeline
 
 ```
 raw_candidates → district_filter → final_candidates → candidates (deduplicated)
-                                                               ↓
-                                                     H1: single_match
-                                                     H2: intersection
-                                                     H3: midpoint
-                                                     H3b: proximity
-                                                     H4: cluster_centroid
-                                                               ↓
-                                                     best_hypothesis (priority + score)
-                                                               ↓
-                                                     fallback (single_match / random)
+                                                                ↓
+                                                      H1: single_match
+                                                      H2: intersection
+                                                      H3: street_segment
+                                                      H4: weighted_centroid
+                                                                ↓
+                                                      best_hypothesis (priority + score)
+                                                                ↓
+                                                      fallback (single_match / random)
 ```
 
 ## Предобработка кандидатов
@@ -53,22 +52,19 @@ ST_AsText(ST_SnapToGrid(geom, 0.0001)) AS geom_hash
 
 ## 4 Гипотезы
 
-### H1: single_match
+### H1: single_match (weight 0.4)
 
-**Условие:** ровно 1 кандидат после дедупликации.
+**Условие:** ровно 1 кандидат после дедупликации, `adjusted_score >= 0.85`.
 
 **Геометрия:** `ST_MakeValid(geom)` кандидата.
 
-**Score:** `adjusted_score`.
+**Score:** `adjusted_score * 0.4`.
 
 **Thresholds:**
 - `>= 0.85` → `single_match` (full confidence)
-- `0.70 – 0.85` → `single_match` с `weak_candidate: true` в diagnostics
-- `< 0.70` → `random`
+- `< 0.85` → `random`
 
-**Fallback:** если `adjusted_score < 0.70` → `random`.
-
-### H2: intersection
+### H2: intersection (weight 1.0)
 
 **Условие:** 2+ кандидата, геометрии пересекаются.
 
@@ -76,67 +72,55 @@ ST_AsText(ST_SnapToGrid(geom, 0.0001)) AS geom_hash
 
 **Score:**
 ```
-harmonic_mean(a, b) + 0.3
-= (2 * a * b / (a + b + 0.001)) + 0.3
+harmonic_mean(a, b) * 1.0
+= (2 * a * b / (a + b + 0.001)) * 1.0
 ```
 
 **Threshold (Option B):**
 - Оба кандидата >= 0.85, ИЛИ
 - Один >= 0.95, второй >= 0.80
 
-### H3: midpoint
+### H3: street_segment (weight 0.9)
 
-**Условие:** 2+ кандидата, геометрии НЕ пересекаются, расстояние 50–150м.
+**Условие:** Линия (LINESTRING/MULTILINESTRING), пересекающая 2+ объекта, сегмент между первым и последним пересечением ≤ 2000м.
 
-**Геометрия:** `ST_LineInterpolatePoint(ST_ShortestLine(a.geom, b.geom), 0.5)`.
+**Геометрия:** `ST_LineSubstring` между `LEAST(first_loc, last_loc)` и `GREATEST(first_loc, last_loc)`, где локации вычисляются через `ST_LineLocatePoint` от точек пересечения.
 
-**Score:**
-```
-harmonic_mean(a, b) + 0.2 * (1 - distance_m / 150)
-```
+**Score:** `line.adjusted_score * 0.9`.
 
-**Threshold (Option B):** тот же, что у intersection.
+**Threshold:** `line.adjusted_score >= 0.85`, `crossings.n >= 2`, `last_loc > first_loc`.
 
-### H3b: proximity
+### H4: weighted_centroid (weight 0.85)
 
-**Условие:** 2+ кандидата, геометрии НЕ пересекаются, расстояние 150–500м.
+**Условие:** 2+ кандидата, scatter (max distance от любого point к centroid) ≤ 1500м.
 
-**Геометрия:** `ST_LineInterpolatePoint(ST_ShortestLine(a.geom, b.geom), 0.5)`.
-
-**Score:**
-```
-harmonic_mean(a, b) + 0.1 * (1 - distance_m / 500)
-```
-
-**Threshold (Option B):** тот же, что у intersection.
-
-### H4: cluster_centroid
-
-**Условие:** 3+ кандидата, максимальное расстояние между любыми двумя ≤ 500м.
-
-**Геометрия:** взвешенный центроид в EPSG:3857:
+**Геометрия:** Weighted centroid в EPSG:3857 с двумя типами точек:
 
 ```sql
-ST_Transform(
-    ST_SetSRID(
-        ST_MakePoint(
-            SUM(ST_X(ST_Centroid(c.geom_m)) * c.adjusted_score) / SUM(c.adjusted_score),
-            SUM(ST_Y(ST_Centroid(c.geom_m)) * c.adjusted_score) / SUM(c.adjusted_score)
-        ),
-        3857
-    ),
-    4326
+-- Точки пересечения пар (вес ×2.5)
+wc_intersection_points AS (
+    SELECT ST_PointOnSurface(ST_Intersection(a.geom, b.geom)) AS pt,
+           (a.adjusted_score + b.adjusted_score) / 2.0 * 2.5 AS weight
+    FROM candidates a, candidates b
+    WHERE a.id < b.id AND ST_Intersects(...)
+),
+-- Опорные точки кандидатов (вес ×1.0)
+wc_candidate_points AS (
+    SELECT ST_PointOnSurface(geom) AS pt,
+           adjusted_score * 1.0 AS weight
+    FROM candidates
 )
 ```
 
-**Важно:** `ST_Centroid()` используется перед `ST_X()`/`ST_Y()` потому что геометрии могут быть LINESTRING/POLYGON.
-
 **Score:**
 ```
-AVG(adjusted_score) + 0.4 * (1 - max_deviation_m / 500)
+GREATEST(0.1,
+    AVG(base_score) * 0.85
+    - LEAST(0.3, scatter_m * 0.0004)
+)
 ```
 
-**Threshold:** `MIN(adjusted_score) >= 0.85`.
+**Threshold:** `COUNT(*) >= 2`, `scatter_m <= 1500`.
 
 ## Приоритет гипотез
 
@@ -145,9 +129,8 @@ AVG(adjusted_score) + 0.4 * (1 - max_deviation_m / 500)
 | Приоритет | Стратегия | Объяснение |
 |-----------|-----------|------------|
 | 5 | `intersection` | точное пересечение — самая надёжная |
-| 4 | `cluster_centroid` | кластер из 3+ объектов |
-| 3 | `proximity` | близкие объекты 150–500м |
-| 2 | `midpoint` | близкие непересекающиеся объекты 50–150м |
+| 4 | `street_segment` | линия с 2+ пересечениями |
+| 3 | `weighted_centroid` | компактный кластер 2+ объектов |
 | 1 | `single_match` | fallback для одного объекта |
 
 ## Fallback
@@ -155,29 +138,26 @@ AVG(adjusted_score) + 0.4 * (1 - max_deviation_m / 500)
 Если ни одна гипотеза не сгенерирована:
 
 1. Если лучший кандидат `adjusted_score >= 0.85` → `single_match` с его геометрией (full confidence).
-2. Если лучший кандидат `adjusted_score >= 0.70` → `single_match` с его геометрией (weak, `weak_candidate: true`).
-3. Иначе → `random` (случайная точка в `question_overlay`).
+2. Иначе → `random` (случайная точка в `question_overlay`).
 
 ## Geometry-type safety
 
-- Все координатные extraction для LINESTRING/POLYGON должны использовать `ST_Centroid()` перед `ST_X()`/`ST_Y()`.
+- `random`, `intersection`, `weighted_centroid` → всегда POINT (проверка триггером).
+- `street_segment` → всегда LINESTRING (проверка триггером).
+- `single_match` → любой тип (гео-объект может быть точкой или линией).
 - `ST_MakeValid()` применяется перед всеми PostGIS-операциями.
-- `cluster_centroid` всегда возвращает POINT (проверка триггером).
-- `midpoint` всегда возвращает POINT (проверка триггером).
-- `random` всегда возвращает POINT (проверка триггером).
 
 ## Тонкая настройка
 
 | Параметр | Значение | Описание |
 |-----------|----------|----------|
-| `v_score_threshold` | 0.70 | Минимальный score для single_match (floor) |
-| `v_strong_threshold` | 0.85 | Порог strong single_match и spatial hypotheses |
-| `v_cluster_radius_m` | 500.0 | Макс. расстояние для cluster_centroid |
-| `v_midpoint_radius_m` | 150.0 | Макс. расстояние для midpoint |
-| `v_midpoint_min_m` | 50.0 | Мин. расстояние для midpoint |
+| `v_score_threshold` | 0.85 | Минимальный score для single_match и spatial hypotheses |
+| `v_cluster_radius_m` | 500.0 | Макс. расстояние для cluster (legacy, не используется) |
+| `v_wc_max_scatter_m` | 1500.0 | Макс. scatter для weighted_centroid |
+| `v_ss_max_segment_m` | 2000.0 | Макс. длина сегмента для street_segment |
 | `short_match_penalty` | 0.6 | Коэффициент для совпадений-цифр |
 | `very_short_penalty` | 0.7 | Коэффициент для length < 3 |
-| `intersection_bonus` | 0.3 | Бонус за пересечение |
-| `midpoint_bonus` | 0.2 | Бонус за близость |
-| `proximity_bonus` | 0.1 | Бонус за близость (150–500м) |
-| `cluster_bonus` | 0.4 | Бонус за компактность кластера |
+| `intersection_weight` | 1.0 | Weight для intersection hypothesis |
+| `street_segment_weight` | 0.9 | Weight для street_segment hypothesis |
+| `weighted_centroid_weight` | 0.85 | Weight для weighted_centroid hypothesis |
+| `single_match_weight` | 0.4 | Weight для single_match hypothesis |

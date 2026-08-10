@@ -1,0 +1,643 @@
+row_id,names,original_type,new_type,geometry_type,issue
+833,Белозёрка|Білозерка,town,REMOVED,POINT,settlement_point_duplicate_removed
+841,Днестровск|Дністровськ,town,REMOVED,POINT,settlement_point_duplicate_removed
+843,Доброслав,town,REMOVED,POINT,settlement_point_duplicate_removed
+846,Ивановка|Іванівка,town,REMOVED,POINT,settlement_point_duplicate_removed
+848,Красносёлка|Красносілка,town,REMOVED,POINT,settlement_point_duplicate_removed
+854,Лиманское|Лиманське,town,REMOVED,POINT,settlement_point_duplicate_removed
+863,Полигон|Полігон,town,REMOVED,POINT,settlement_point_duplicate_removed
+869,Слободзея,town,REMOVED,POINT,settlement_point_duplicate_removed
+869,Слободзея,town,REMOVED,POINT,settlement_point_duplicate_removed
+871,Татарбунары|Татарбунари,town,REMOVED,POINT,settlement_point_duplicate_removed
+874,Черноморск|Чорноморськ,town,REMOVED,POINT,settlement_point_duplicate_removed
+942,Александровка|Олександрівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+944,Александровка|Олександрівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+948,Алексеевка|Олексіївка,village,REMOVED,POINT,settlement_point_duplicate_removed
+950,Алтестово|Алтестове,village,REMOVED,POINT,settlement_point_duplicate_removed
+952,Анатольевка|Анатолівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+954,Ангелиновка|Ангелінівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+957,Андреевка|Андріївка,village,REMOVED,POINT,settlement_point_duplicate_removed
+960,Анновка|Ганнівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+968,Баланово|Баланове,village,REMOVED,POINT,settlement_point_duplicate_removed
+976,Беленькое|Біленьке,village,REMOVED,POINT,settlement_point_duplicate_removed
+981,Береговое|Берегове,village,REMOVED,POINT,settlement_point_duplicate_removed
+984,Бессарабка,village,REMOVED,POINT,settlement_point_duplicate_removed
+986,Бехтери,village,REMOVED,POINT,settlement_point_duplicate_removed
+990,Благодаровка|Благодарівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+994,Благодатное|Благодатне,village,REMOVED,POINT,settlement_point_duplicate_removed
+997,Благодатное|Благодатне,village,REMOVED,POINT,settlement_point_duplicate_removed
+1003,Богородицкое|Богородицьке,village,REMOVED,POINT,settlement_point_duplicate_removed
+1019,Вавилово|Вавилове,village,REMOVED,POINT,settlement_point_duplicate_removed
+1025,Вапнярка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1026,Вапнярка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1029,Василевка|Василівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1031,Василевка|Василівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1033,Введенка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1035,Велетенское|Велетенське,village,REMOVED,POINT,settlement_point_duplicate_removed
+1043,Великомарьяновка|Великомар’янівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1050,Весёлое|Веселе,village,REMOVED,POINT,settlement_point_duplicate_removed
+1053,Визирка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1055,Виишоара|Viișoara,village,REMOVED,POINT,settlement_point_duplicate_removed
+1059,Виноградное|Виноградне,village,REMOVED,POINT,settlement_point_duplicate_removed
+1065,Владимировка|Володимирівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1074,Выгода|Вигода,village,REMOVED,POINT,settlement_point_duplicate_removed
+1076,Выгон|Вигон,village,REMOVED,POINT,settlement_point_duplicate_removed
+1077,Гаевка|Гаївка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1079,Галицыново|Галицинове,village,REMOVED,POINT,settlement_point_duplicate_removed
+1082,Геройское|Геройське,village,REMOVED,POINT,settlement_point_duplicate_removed
+1085,Гончарное|Гончарне,village,REMOVED,POINT,settlement_point_duplicate_removed
+1087,Гончаровка|Гончарівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1089,Гороховка|Горохівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1090,Граденицы|Градениці,village,REMOVED,POINT,settlement_point_duplicate_removed
+1093,Гребеники,village,REMOVED,POINT,settlement_point_duplicate_removed
+1097,Грозовое|Грозове,village,REMOVED,POINT,settlement_point_duplicate_removed
+1104,Даниловка|Данилівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1109,Дмитровка|Дмитрівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1111,Дмитровка|Дмитрівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1113,Днепровское|Дніпровське,village,REMOVED,POINT,settlement_point_duplicate_removed
+1117,Доброжаново|Доброжанове,village,REMOVED,POINT,settlement_point_duplicate_removed
+1120,Долиновка|Долинівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1125,Дослидное|Дослідне,village,REMOVED,POINT,settlement_point_duplicate_removed
+1126,Дослидное|Дослідне,village,REMOVED,POINT,settlement_point_duplicate_removed
+1128,Егоровка|Єгорівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1130,Елизаветовка|Єлизаветівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1134,Ермишково|Єрмішкове,village,REMOVED,POINT,settlement_point_duplicate_removed
+1139,Журовка|Журівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1147,Заречное|Зарічне,village,REMOVED,POINT,settlement_point_duplicate_removed
+1150,Заря|Зоря,village,REMOVED,POINT,settlement_point_duplicate_removed
+1155,Зелёновка|Зеленівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1157,Зелёное|Зелене,village,REMOVED,POINT,settlement_point_duplicate_removed
+1159,Зелёный Гай|Зелений Гай,village,REMOVED,POINT,settlement_point_duplicate_removed
+1164,Знаменка|Знам’янка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1166,Зоревка|Зорівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1171,Ивановка|Іванівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1172,Ивановка|Іванівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1174,Иваново|Іванове,village,REMOVED,POINT,settlement_point_duplicate_removed
+1180,Казацкое|Козацьке,village,REMOVED,POINT,settlement_point_duplicate_removed
+1183,Калабатино|Калабатине,village,REMOVED,POINT,settlement_point_duplicate_removed
+1190,Каменка|Кам’янка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1193,Каменка|Кам’янка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1201,Карагаш,village,REMOVED,POINT,settlement_point_duplicate_removed
+1203,Карликовка|Карликівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1205,Карналиевка|Карналіївка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1210,Кизомыс|Кізомис,village,REMOVED,POINT,settlement_point_duplicate_removed
+1216,Клапая,village,REMOVED,POINT,settlement_point_duplicate_removed
+1220,Козырка|Козирка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1223,Константиновка|Костянтинівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1228,Копанка|Copanca,village,REMOVED,POINT,settlement_point_duplicate_removed
+1232,Коротное|Коротне,village,REMOVED,POINT,settlement_point_duplicate_removed
+1236,Котлярёво|Котляреве,village,REMOVED,POINT,settlement_point_duplicate_removed
+1240,Кошары|Кошари,village,REMOVED,POINT,settlement_point_duplicate_removed
+1242,Красная Коса|Красна Коса,village,REMOVED,POINT,settlement_point_duplicate_removed
+1244,Красное|Красне,village,REMOVED,POINT,settlement_point_duplicate_removed
+1246,Краснополье|Краснопілля,village,REMOVED,POINT,settlement_point_duplicate_removed
+1248,Кременчуг|Cremenciug / Кременчуг,village,REMOVED,POINT,settlement_point_duplicate_removed
+1249,Кремидовка|Кремидівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1252,Кривая Балка|Крива Балка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1256,Круглоозёрка|Круглоозерка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1258,Крутой Яр|Крутий Яр,village,REMOVED,POINT,settlement_point_duplicate_removed
+1261,Крутояровка|Крутоярівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1268,Курисово|Курісове,village,REMOVED,POINT,settlement_point_duplicate_removed
+1271,Куцуруб,village,REMOVED,POINT,settlement_point_duplicate_removed
+1277,Либенталь|Лібенталь,village,REMOVED,POINT,settlement_point_duplicate_removed
+1282,Лиманы|Лимани,village,REMOVED,POINT,settlement_point_duplicate_removed
+1287,Лупарево|Лупареве,village,REMOVED,POINT,settlement_point_duplicate_removed
+1289,Луч|Промінь,village,REMOVED,POINT,settlement_point_duplicate_removed
+1291,Лучинское|Лучинське,village,REMOVED,POINT,settlement_point_duplicate_removed
+1293,Люблино|Люблине,village,REMOVED,POINT,settlement_point_duplicate_removed
+1295,Любомировка|Любомирівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1299,Максимовка|Максимівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1301,Малаешты|Малаєшти,village,REMOVED,POINT,settlement_point_duplicate_removed
+1303,Малахово|Малахове,village,REMOVED,POINT,settlement_point_duplicate_removed
+1307,Маловарваровка|Маловарварівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1309,Малое|Мале,village,REMOVED,POINT,settlement_point_duplicate_removed
+1312,Маразлиевка|Маразліївка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1317,Марковка|Марківка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1323,Матросовка|Матросівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1326,Меняйловка|Міняйлівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1336,Мирное|Мирне,village,REMOVED,POINT,settlement_point_duplicate_removed
+1337,Мирное|Мирне,village,REMOVED,POINT,settlement_point_duplicate_removed
+1338,Мирное|Мирне,village,REMOVED,POINT,settlement_point_duplicate_removed
+1339,Мирное|Мирне,village,REMOVED,POINT,settlement_point_duplicate_removed
+1341,Мирнополье|Мирнопілля,village,REMOVED,POINT,settlement_point_duplicate_removed
+1344,Михайловка|Михайлівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1349,Молдово|Молдове,village,REMOVED,POINT,settlement_point_duplicate_removed
+1352,Молодецкое|Молодецьке,village,REMOVED,POINT,settlement_point_duplicate_removed
+1355,Монаши|Монаші,village,REMOVED,POINT,settlement_point_duplicate_removed
+1357,Морское|Морське,village,REMOVED,POINT,settlement_point_duplicate_removed
+1359,Міжлиманське,village,REMOVED,POINT,settlement_point_duplicate_removed
+1362,Надбугское|Надбузьке,village,REMOVED,POINT,settlement_point_duplicate_removed
+1364,Надеевка|Надіївка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1367,Надия|Надія,village,REMOVED,POINT,settlement_point_duplicate_removed
+1371,Негрово|Негрове,village,REMOVED,POINT,settlement_point_duplicate_removed
+1376,Нечаянное|Нечаяне,village,REMOVED,POINT,settlement_point_duplicate_removed
+1383,Николаевское|Миколаївське,village,REMOVED,POINT,settlement_point_duplicate_removed
+1387,Новая Долина|Нова Долина,village,REMOVED,POINT,settlement_point_duplicate_removed
+1389,Новая Дофиновка|Нова Дофінівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1393,Новая Ивановка|Нова Іванівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1397,Новая Царичанка|Нова Царичанка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1400,Новобогдановка|Новобогданівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1405,Новогригоровка|Новогригорівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1409,Новое|Нове,village,REMOVED,POINT,settlement_point_duplicate_removed
+1417,Новокрасное|Новокрасне,village,REMOVED,POINT,settlement_point_duplicate_removed
+1419,Новомихайловка|Новомихайлівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1423,Новониколаевка|Новомиколаївка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1425,Новоподолье|Новоподілля,village,REMOVED,POINT,settlement_point_duplicate_removed
+1427,Новорусское|Новоруське,village,REMOVED,POINT,settlement_point_duplicate_removed
+1429,Новосавицкая|Новосавицька,village,REMOVED,POINT,settlement_point_duplicate_removed
+1435,Новосёловка|Новоселівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1443,Новофёдоровка|Новофедорівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1453,Оленовка|Оленівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1455,Олэнешть|Olănești|Оленешть,village,REMOVED,POINT,settlement_point_duplicate_removed
+1458,Осетровка|Осетрівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1460,Островка|Острівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1472,Парышево|Паришеве,village,REMOVED,POINT,settlement_point_duplicate_removed
+1478,Петровка|Петрівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1480,Петровка|Петрівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1482,Петрово|Петрове,village,REMOVED,POINT,settlement_point_duplicate_removed
+1485,Петропавловка|Петропавлівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1488,Пивденное|Південне,village,REMOVED,POINT,settlement_point_duplicate_removed
+1490,Плахтиевка|Плахтіївка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1494,Подгорное|Підгірне,village,REMOVED,POINT,settlement_point_duplicate_removed
+1496,Подымово|Подимове,village,REMOVED,POINT,settlement_point_duplicate_removed
+1500,Покровское|Покровське,village,REMOVED,POINT,settlement_point_duplicate_removed
+1502,Полевое|Польове,village,REMOVED,POINT,settlement_point_duplicate_removed
+1506,Попельное|Попільне,village,REMOVED,POINT,settlement_point_duplicate_removed
+1513,Прибрежное|Прибережне,village,REMOVED,POINT,settlement_point_duplicate_removed
+1516,Прибугское|Прибузьке,village,REMOVED,POINT,settlement_point_duplicate_removed
+1517,Прибугское|Прибузьке,village,REMOVED,POINT,settlement_point_duplicate_removed
+1519,Прилиманское|Прилиманське,village,REMOVED,POINT,settlement_point_duplicate_removed
+1522,Приморское|Приморське,village,REMOVED,POINT,settlement_point_duplicate_removed
+1530,Протопоповка|Протопопівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1537,Радостный Сад|Радісний Сад,village,REMOVED,POINT,settlement_point_duplicate_removed
+1539,Разлив|Розлив,village,REMOVED,POINT,settlement_point_duplicate_removed
+1544,Ровное|Рівне,village,REMOVED,POINT,settlement_point_duplicate_removed
+1546,Розаловка|Розалівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1552,Ромашково|Ромашкове,village,REMOVED,POINT,settlement_point_duplicate_removed
+1556,Русскоивановка|Руськоіванівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1566,Светлое|Світле,village,REMOVED,POINT,settlement_point_duplicate_removed
+1573,Семёновка|Семенівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1580,Словяносербка|Слов’яносербка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1583,Солнечное|Сонячне,village,REMOVED,POINT,settlement_point_duplicate_removed
+1586,Солончаки,village,REMOVED,POINT,settlement_point_duplicate_removed
+1589,Софиевка|Софіївка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1590,Софиевка|Софіївка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1596,Старая Богдановка|Стара Богданівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1598,Старая Царичанка|Стара Царичанка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1606,Степовая Долина|Степова Долина,village,REMOVED,POINT,settlement_point_duplicate_removed
+1613,Суходол|Суходіл,village,REMOVED,POINT,settlement_point_duplicate_removed
+1615,Сухой Лиман|Сухий Лиман,village,REMOVED,POINT,settlement_point_duplicate_removed
+1619,Сычавка|Сичавка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1621,Таврийское|Таврійське,village,REMOVED,POINT,settlement_point_duplicate_removed
+1628,Терновые Поды|Тернові Поди,village,REMOVED,POINT,settlement_point_duplicate_removed
+1631,Троицкое|Троїцьке,village,REMOVED,POINT,settlement_point_duplicate_removed
+1636,Тузлы|Тузли,village,REMOVED,POINT,settlement_point_duplicate_removed
+1641,Украинка|Українка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1642,Украинка|Українка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1650,Фараоновка|Фараонівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1655,Фёдоровка|Федорівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1657,Хлебодарское|Хлібодарське,village,REMOVED,POINT,settlement_point_duplicate_removed
+1659,Холодная Балка|Холодна Балка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1661,Хоминка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1665,Центральное|Центральне,village,REMOVED,POINT,settlement_point_duplicate_removed
+1670,Червоное Парутино|Червоне Парутине,village,REMOVED,POINT,settlement_point_duplicate_removed
+1672,Черешенки|Черешеньки,village,REMOVED,POINT,settlement_point_duplicate_removed
+1675,Черкесы|Черкеси,village,REMOVED,POINT,settlement_point_duplicate_removed
+1677,Черноморка|Чорноморка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1681,Чистоводное|Чистоводне,village,REMOVED,POINT,settlement_point_duplicate_removed
+1682,Чобручи|Чобручі,village,REMOVED,POINT,settlement_point_duplicate_removed
+1684,Чулаковка|Чулаківка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1687,Чумаки,village,REMOVED,POINT,settlement_point_duplicate_removed
+1692,Шевченко,village,REMOVED,POINT,settlement_point_duplicate_removed
+1695,Шевченково|Шевченкове,village,REMOVED,POINT,settlement_point_duplicate_removed
+1702,Широкая Балка|Широка Балка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1706,Широкое|Широке,village,REMOVED,POINT,settlement_point_duplicate_removed
+1708,Шмидтово|Шмідтове,village,REMOVED,POINT,settlement_point_duplicate_removed
+1711,Шурино|Шурине,village,REMOVED,POINT,settlement_point_duplicate_removed
+1718,Яковлевка|Яковлівка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1720,Янтарное|Янтарне,village,REMOVED,POINT,settlement_point_duplicate_removed
+1722,Ярославка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1724,Яселка,village,REMOVED,POINT,settlement_point_duplicate_removed
+1726,Яськи,village,REMOVED,POINT,settlement_point_duplicate_removed
+27,Автостанция привоз|Автостанция старосенная,station,point,POLYGON,station_non_point_geometry
+28,Аэропорт,station,point,LINESTRING,station_non_point_geometry
+29,Аэропортовская,station,point,LINESTRING,station_non_point_geometry
+30,ТЦ «Аэропортовский»|таврия аэропортовская,station,point,POLYGON,station_non_point_geometry
+66,Аллея Славы,street,park,LINESTRING,park_line_geometry
+110,Березовка|Березівка,village,settlement,POINT,settlement_point_no_polygon
+181,Глухой мост,infrastructure,street,POLYGON,bridge_non_line_geometry
+312,Карантинный спуск,street,street,POLYGON,street_polygon_geometry
+357,Красноселка,town,settlement,POINT,settlement_point_no_polygon
+380,Куяльницкий мост,infrastructure,street,POLYGON,bridge_non_line_geometry
+393,Лидерсовский бульвар,street,street,POLYGON,street_polygon_geometry
+439,Матроский спуск,street,street,POLYGON,street_polygon_geometry
+485,Николаевская дорога,street,street,POLYGON,street_polygon_geometry
+505,Овидиопольская дорога,street,street,POLYGON,street_polygon_geometry
+542,Парковая,street,park,LINESTRING,park_line_geometry
+549,Пересипский мост,infrastructure,street,POLYGON,bridge_non_line_geometry
+573,Польский спуск,street,street,POLYGON,street_polygon_geometry
+629,Садиковская,street,park,LINESTRING,park_line_geometry
+630,Садовая,street,park,LINESTRING,park_line_geometry
+631,Садовского,street,park,LINESTRING,park_line_geometry
+670,спуск Ковалевского,street,street,POLYGON,street_polygon_geometry
+688,Строганов мост,infrastructure,street,POLYGON,bridge_non_line_geometry
+709,Тещин мост,infrastructure,street,POLYGON,bridge_non_line_geometry
+711,Тираспольское шоссе,street,street,POLYGON,street_polygon_geometry
+735,Улица Толбухина,street,street,POLYGON,street_polygon_geometry
+760,Херсонский спуск,street,street,POLYGON,street_polygon_geometry
+779,Червоный хутор,village,settlement,POINT,settlement_point_no_polygon
+815,Юго-западный массив|Югозападный|Юго-западный|ЮЗМ,landmark,district,POINT,district_point_geometry
+830,Александровка|Олександрівка,town,settlement,POINT,settlement_point_no_polygon
+831,Белгород-Днестровский|Білгород-Дністровський,town,settlement,POINT,settlement_point_no_polygon
+834,Беляевка|Біляївка,town,settlement,POINT,settlement_point_no_polygon
+836,Березанка,town,settlement,POINT,settlement_point_no_polygon
+837,Буялык|Буялик,town,settlement,POINT,settlement_point_no_polygon
+838,Великодолинское|Великодолинське,town,settlement,POINT,settlement_point_no_polygon
+839,Выпасное|Випасне,town,settlement,POINT,settlement_point_no_polygon
+844,Затока,town,settlement,POINT,settlement_point_no_polygon
+847,Красное|Красне,town,settlement,POINT,settlement_point_no_polygon
+852,Лиманка,town,settlement,POINT,settlement_point_no_polygon
+855,Маяки,town,settlement,POINT,settlement_point_no_polygon
+856,Николаев|Миколаїв,town,settlement,POINT,settlement_point_no_polygon
+857,Новотираспольский|Новотираспольський,town,settlement,POINT,settlement_point_no_polygon
+859,Овидиополь|Овідіополь,town,settlement,POINT,settlement_point_no_polygon
+860,Очаков|Очаків,town,settlement,POINT,settlement_point_no_polygon
+861,Первомайск|Первомайськ,town,settlement,POINT,settlement_point_no_polygon
+864,Раздельная|Роздільна,town,settlement,POINT,settlement_point_no_polygon
+865,Сарата,town,settlement,POINT,settlement_point_no_polygon
+866,Сергеевка|Сергіївка,town,settlement,POINT,settlement_point_no_polygon
+872,Теплодар,town,settlement,POINT,settlement_point_no_polygon
+875,Черноморское|Чорноморське,town,settlement,POINT,settlement_point_no_polygon
+877,Штефан-Водэ|Ștefan Vodă|Штефан-Воде,town,settlement,POINT,settlement_point_no_polygon
+878,Южное|Південне,town,settlement,POINT,settlement_point_no_polygon
+896,Мичурина площадь,landmark,landmark,LINESTRING,square_line_geometry
+897,Молодёжи площадь,landmark,landmark,LINESTRING,square_line_geometry
+930,таможенная площадь,landmark,landmark,LINESTRING,square_line_geometry
+933,Ярмарочная площадь,landmark,landmark,LINESTRING,square_line_geometry
+934,Абрикосовое|Абрикосове,village,settlement,POINT,settlement_point_no_polygon
+935,Авангард,village,settlement,POINT,settlement_point_no_polygon
+936,Августовка|Августівка,village,settlement,POINT,settlement_point_no_polygon
+937,Авидовка|Авидівка,village,settlement,POINT,settlement_point_no_polygon
+938,Адамовка|Адамівка,village,settlement,POINT,settlement_point_no_polygon
+939,Адамовка|Адамівка,village,settlement,POINT,settlement_point_no_polygon
+940,Алава|Alava,village,settlement,POINT,settlement_point_no_polygon
+941,Александровка|Олександрівка,village,settlement,POINT,settlement_point_no_polygon
+943,Александровка|Олександрівка,village,settlement,POINT,settlement_point_no_polygon
+945,Александровка|Олександрівка,village,settlement,POINT,settlement_point_no_polygon
+947,Алексеевка|Олексіївка,village,settlement,POINT,settlement_point_no_polygon
+956,Андреевка|Андріївка,village,settlement,POINT,settlement_point_no_polygon
+958,Андреево-Зорино|Андрієво-Зорине,village,settlement,POINT,settlement_point_no_polygon
+961,Антонешть/Антонешты|Antonești,village,settlement,POINT,settlement_point_no_polygon
+962,Антоновка|Антонівка,village,settlement,POINT,settlement_point_no_polygon
+963,Базарьянка|Базар’янка,village,settlement,POINT,settlement_point_no_polygon
+964,Байрамча,village,settlement,POINT,settlement_point_no_polygon
+965,Бакалово|Бакалове,village,settlement,POINT,settlement_point_no_polygon
+966,Баланины|Баланини,village,settlement,POINT,settlement_point_no_polygon
+969,Балково|Балкове,village,settlement,POINT,settlement_point_no_polygon
+970,Барабой,village,settlement,POINT,settlement_point_no_polygon
+971,Бараново|Баранове,village,settlement,POINT,settlement_point_no_polygon
+972,Барвинок|Барвінок,village,settlement,POINT,settlement_point_no_polygon
+973,Безводное|Безводне,village,settlement,POINT,settlement_point_no_polygon
+974,Безымянка|Безім’янка,village,settlement,POINT,settlement_point_no_polygon
+977,Белка|Білка,village,settlement,POINT,settlement_point_no_polygon
+978,Белолесье|Білолісся,village,settlement,POINT,settlement_point_no_polygon
+979,Беляры|Білярі,village,settlement,POINT,settlement_point_no_polygon
+982,Березань,village,settlement,POINT,settlement_point_no_polygon
+987,Бецилово|Бецилове,village,settlement,POINT,settlement_point_no_polygon
+988,Благовещенское|Благовіщенське,village,settlement,POINT,settlement_point_no_polygon
+991,Благодатне,village,settlement,POINT,settlement_point_no_polygon
+995,Благодатное|Благодатне,village,settlement,POINT,settlement_point_no_polygon
+996,Благодатное|Благодатне,village,settlement,POINT,settlement_point_no_polygon
+998,Благодатное|Благодатне,village,settlement,POINT,settlement_point_no_polygon
+999,Ближний Хутор|Ближній Хутір,village,settlement,POINT,settlement_point_no_polygon
+1000,Блонское|Блонське,village,settlement,POINT,settlement_point_no_polygon
+1001,Богатырёвка|Богатирівка,village,settlement,POINT,settlement_point_no_polygon
+1004,Болгарка,village,settlement,POINT,settlement_point_no_polygon
+1005,Большая Балка|Велика Балка,village,settlement,POINT,settlement_point_no_polygon
+1007,Братське,village,settlement,POINT,settlement_point_no_polygon
+1008,Бриновка|Бринівка,village,settlement,POINT,settlement_point_no_polygon
+1009,Бритовка|Бритівка,village,settlement,POINT,settlement_point_no_polygon
+1010,Будячки,village,settlement,POINT,settlement_point_no_polygon
+1011,Бузиново|Бузинове,village,settlement,POINT,settlement_point_no_polygon
+1012,Булдынка|Булдинка,village,settlement,POINT,settlement_point_no_polygon
+1013,Бурдовка|Бурдівка,village,settlement,POINT,settlement_point_no_polygon
+1014,Бурлачья Балка|Бурлача Балка,village,settlement,POINT,settlement_point_no_polygon
+1015,Бутовка|Бутівка,village,settlement,POINT,settlement_point_no_polygon
+1016,Буцыновка|Буцинівка,village,settlement,POINT,settlement_point_no_polygon
+1017,Быкоза|Бикоза,village,settlement,POINT,settlement_point_no_polygon
+1020,Важное|Важне,village,settlement,POINT,settlement_point_no_polygon
+1021,Вакуловка|Вакулівка,village,settlement,POINT,settlement_point_no_polygon
+1022,Валя Верде|Valea Verde,village,settlement,POINT,settlement_point_no_polygon
+1030,Василевка|Василівка,village,settlement,POINT,settlement_point_no_polygon
+1036,Велизарово|Велізарове,village,settlement,POINT,settlement_point_no_polygon
+1037,Великие Ламзаки|Великі Ламзаки,village,settlement,POINT,settlement_point_no_polygon
+1040,Великий Буялык|Великий Буялик,village,settlement,POINT,settlement_point_no_polygon
+1041,Великий Дальник,village,settlement,POINT,settlement_point_no_polygon
+1044,Великорыбальское|Великорибальське,village,settlement,POINT,settlement_point_no_polygon
+1045,Верхний Куяльник|Верхній Куяльник,village,settlement,POINT,settlement_point_no_polygon
+1046,Весняное|Весняне,village,settlement,POINT,settlement_point_no_polygon
+1047,Весёлая Балка|Весела Балка,village,settlement,POINT,settlement_point_no_polygon
+1049,Весёлое|Веселе,village,settlement,POINT,settlement_point_no_polygon
+1051,Весёлое|Веселе,village,settlement,POINT,settlement_point_no_polygon
+1056,Викторовка|Вікторівка,village,settlement,POINT,settlement_point_no_polygon
+1057,Виноградарь|Виноградар,village,settlement,POINT,settlement_point_no_polygon
+1060,Виноградное|Виноградне,village,settlement,POINT,settlement_point_no_polygon
+1061,Виноградовка|Виноградівка,village,settlement,POINT,settlement_point_no_polygon
+1062,Вишнёвое|Вишневе,village,settlement,POINT,settlement_point_no_polygon
+1064,Владимировка|Володимирівка,village,settlement,POINT,settlement_point_no_polygon
+1066,Владимировка|Володимирівка,village,settlement,POINT,settlement_point_no_polygon
+1067,Владимировка|Володимирівка,village,settlement,POINT,settlement_point_no_polygon
+1068,Водник,village,settlement,POINT,settlement_point_no_polygon
+1069,Волковское|Вовківське,village,settlement,POINT,settlement_point_no_polygon
+1070,Волонтировка|Volintiri,village,settlement,POINT,settlement_point_no_polygon
+1071,Вольная Дружина|Вільна Дружина,village,settlement,POINT,settlement_point_no_polygon
+1072,Вольное|Вільне,village,settlement,POINT,settlement_point_no_polygon
+1083,Глиное|Глинне,village,settlement,POINT,settlement_point_no_polygon
+1094,Грибовка|Грибівка,village,settlement,POINT,settlement_point_no_polygon
+1095,Григоровка|Григорівка,village,settlement,POINT,settlement_point_no_polygon
+1098,Граденицы|Grădinița|Гредініца,village,settlement,POINT,settlement_point_no_polygon
+1099,Гудевичево|Гудевичеве,village,settlement,POINT,settlement_point_no_polygon
+1100,Гуровское|Гурівське,village,settlement,POINT,settlement_point_no_polygon
+1101,Дальник,village,settlement,POINT,settlement_point_no_polygon
+1102,Дальничень|Дальнічень,village,settlement,POINT,settlement_point_no_polygon
+1105,Дачное|Дачне,village,settlement,POINT,settlement_point_no_polygon
+1106,Дивизия|Дивізія,village,settlement,POINT,settlement_point_no_polygon
+1110,Дмитровка|Дмитрівка,village,settlement,POINT,settlement_point_no_polygon
+1114,Днепровское|Дніпровське,village,settlement,POINT,settlement_point_no_polygon
+1115,Доброалександровка|Доброолександрівка,village,settlement,POINT,settlement_point_no_polygon
+1118,Долинка,village,settlement,POINT,settlement_point_no_polygon
+1119,Долиновка|Долинівка,village,settlement,POINT,settlement_point_no_polygon
+1122,Долматовка|Долматівка,village,settlement,POINT,settlement_point_no_polygon
+1127,Дружба,village,settlement,POINT,settlement_point_no_polygon
+1131,Елизаветовка|Єлизаветівка,village,settlement,POINT,settlement_point_no_polygon
+1132,Еремеевка|Єреміївка,village,settlement,POINT,settlement_point_no_polygon
+1135,Ермоклия|Ermoclia|Єрмоклія,village,settlement,POINT,settlement_point_no_polygon
+1136,Железный Порт|Залізний Порт,village,settlement,POINT,settlement_point_no_polygon
+1137,Желепово|Желепове,village,settlement,POINT,settlement_point_no_polygon
+1140,Жёлтое|Жовте,village,settlement,POINT,settlement_point_no_polygon
+1141,Жёлтый Яр|Жовтий Яр,village,settlement,POINT,settlement_point_no_polygon
+1142,Забарино|Забарине,village,settlement,POINT,settlement_point_no_polygon
+1143,Забары|Забари,village,settlement,POINT,settlement_point_no_polygon
+1144,Загорное|Zahorna / Загорное|Загорна,village,settlement,POINT,settlement_point_no_polygon
+1145,Заможное|Заможне,village,settlement,POINT,settlement_point_no_polygon
+1148,Заречное|Зарічне,village,settlement,POINT,settlement_point_no_polygon
+1151,Заря Труда|Зоря Труда,village,settlement,POINT,settlement_point_no_polygon
+1152,Збурьевка|Збур’ївка,village,settlement,POINT,settlement_point_no_polygon
+1153,Зеленотропинское|Зеленотропинське,village,settlement,POINT,settlement_point_no_polygon
+1160,Зелёный Гай|Зелений Гай,village,settlement,POINT,settlement_point_no_polygon
+1162,Змиенково|Змієнкове,village,settlement,POINT,settlement_point_no_polygon
+1167,Зориново|Зоринове,village,settlement,POINT,settlement_point_no_polygon
+1168,Зоряное|Зоряне,village,settlement,POINT,settlement_point_no_polygon
+1173,Ивановка|Іванівка,village,settlement,POINT,settlement_point_no_polygon
+1175,Ильинка|Іллінка,village,settlement,POINT,settlement_point_no_polygon
+1176,Ильичанка|Ілічанка,village,settlement,POINT,settlement_point_no_polygon
+1177,Йосиповка|Йосипівка,village,settlement,POINT,settlement_point_no_polygon
+1178,Кагарлык|Кагарлик,village,settlement,POINT,settlement_point_no_polygon
+1181,Каиры|Каїри,village,settlement,POINT,settlement_point_no_polygon
+1184,Калаглия|Калаглія,village,settlement,POINT,settlement_point_no_polygon
+1185,Калантаевка|Калантаївка,village,settlement,POINT,settlement_point_no_polygon
+1186,Калиновка|Калинівка,village,settlement,POINT,settlement_point_no_polygon
+1187,Калиновка|Калинівка,village,settlement,POINT,settlement_point_no_polygon
+1191,Каменка|Кам’янка,village,settlement,POINT,settlement_point_no_polygon
+1192,Каменка|Кам’янка,village,settlement,POINT,settlement_point_no_polygon
+1194,Камчик,village,settlement,POINT,settlement_point_no_polygon
+1196,Капаклиево|Капаклієве,village,settlement,POINT,settlement_point_no_polygon
+1197,Капитановка|Капітанівка,village,settlement,POINT,settlement_point_no_polygon
+1198,Капланы|Căplani,village,settlement,POINT,settlement_point_no_polygon
+1199,Карагасаны|Carahasani,village,settlement,POINT,settlement_point_no_polygon
+1206,Каролино-Бугаз|Кароліно-Бугаз,village,settlement,POINT,settlement_point_no_polygon
+1207,Карповка|Карпівка,village,settlement,POINT,settlement_point_no_polygon
+1208,Карпово|Карпове,village,settlement,POINT,settlement_point_no_polygon
+1211,Киркаешты|Chircăiești,village,settlement,POINT,settlement_point_no_polygon
+1213,Киселёвка|Киселівка,village,settlement,POINT,settlement_point_no_polygon
+1214,Кицканы|Chițcani / Кицканы|Кіцкани,village,settlement,POINT,settlement_point_no_polygon
+1217,Коблево|Коблеве,village,settlement,POINT,settlement_point_no_polygon
+1218,Ковалёвка|Ковалівка,village,settlement,POINT,settlement_point_no_polygon
+1221,Конное|Кінне,village,settlement,POINT,settlement_point_no_polygon
+1224,Константиновка|Костянтинівка,village,settlement,POINT,settlement_point_no_polygon
+1225,Константиновка|Костянтинівка,village,settlement,POINT,settlement_point_no_polygon
+1226,Копани|Копані,village,settlement,POINT,settlement_point_no_polygon
+1229,Копчак|Copceac,village,settlement,POINT,settlement_point_no_polygon
+1230,Кордон,village,settlement,POINT,settlement_point_no_polygon
+1233,Корсунцы|Корсунці,village,settlement,POINT,settlement_point_no_polygon
+1234,Косовка|Косівка,village,settlement,POINT,settlement_point_no_polygon
+1237,Кочковатое|Кочкувате,village,settlement,POINT,settlement_point_no_polygon
+1239,Кошары|Кошари,village,settlement,POINT,settlement_point_no_polygon
+1253,Кривая Балка|Крива Балка,village,settlement,POINT,settlement_point_no_polygon
+1254,Крокмаз|Crocmaz,village,settlement,POINT,settlement_point_no_polygon
+1259,Крутоярка,village,settlement,POINT,settlement_point_no_polygon
+1262,Крыжановка|Крижанівка,village,settlement,POINT,settlement_point_no_polygon
+1263,Кубанка,village,settlement,POINT,settlement_point_no_polygon
+1264,Кузьменко|Кузьменка,village,settlement,POINT,settlement_point_no_polygon
+1265,Кулевча,village,settlement,POINT,settlement_point_no_polygon
+1266,Курган,village,settlement,POINT,settlement_point_no_polygon
+1269,Курортное|Курортне,village,settlement,POINT,settlement_point_no_polygon
+1272,Кучурган,village,settlement,POINT,settlement_point_no_polygon
+1273,Лазо|Lazo,village,settlement,POINT,settlement_point_no_polygon
+1274,Леонтьево|Leuntea,village,settlement,POINT,settlement_point_no_polygon
+1275,Лески|Ліски,village,settlement,POINT,settlement_point_no_polygon
+1278,Лизинка|Лізинка,village,settlement,POINT,settlement_point_no_polygon
+1279,Лиман,village,settlement,POINT,settlement_point_no_polygon
+1280,Лимановка|Лиманівка,village,settlement,POINT,settlement_point_no_polygon
+1283,Лиманы|Лимани,village,settlement,POINT,settlement_point_no_polygon
+1284,Луговое|Лугове,village,settlement,POINT,settlement_point_no_polygon
+1285,Луговое|Лугове,village,settlement,POINT,settlement_point_no_polygon
+1296,Любополь|Любопіль,village,settlement,POINT,settlement_point_no_polygon
+1297,Майоры|Майори,village,settlement,POINT,settlement_point_no_polygon
+1305,Малиновка|Малинівка,village,settlement,POINT,settlement_point_no_polygon
+1308,Малодолинское|Малодолинське,village,settlement,POINT,settlement_point_no_polygon
+1310,Мандрове,village,settlement,POINT,settlement_point_no_polygon
+1313,Маразлиевка|Маразліївка,village,settlement,POINT,settlement_point_no_polygon
+1314,Мариновка|Маринівка,village,settlement,POINT,settlement_point_no_polygon
+1316,Марковка|Марківка,village,settlement,POINT,settlement_point_no_polygon
+1318,Мартово|Мартове,village,settlement,POINT,settlement_point_no_polygon
+1319,Марьяновка|Мар’янівка,village,settlement,POINT,settlement_point_no_polygon
+1320,Марьяновка|Мар’янівка,village,settlement,POINT,settlement_point_no_polygon
+1321,Матиясово|Матіясове,village,settlement,POINT,settlement_point_no_polygon
+1324,Матышевка|Матишівка,village,settlement,POINT,settlement_point_no_polygon
+1327,Меренешты|Merenești / Меренешты|Меренешти,village,settlement,POINT,settlement_point_no_polygon
+1328,Мешково-Погорелово|Мішково-Погорілове,village,settlement,POINT,settlement_point_no_polygon
+1329,Мещанка|Міщанка,village,settlement,POINT,settlement_point_no_polygon
+1330,Мигаево|Мигаєве,village,settlement,POINT,settlement_point_no_polygon
+1331,Миллиардовка|Мільярдівка,village,settlement,POINT,settlement_point_no_polygon
+1342,Миролюбовка|Миролюбівка,village,settlement,POINT,settlement_point_no_polygon
+1345,Михайловка|Михайлівка,village,settlement,POINT,settlement_point_no_polygon
+1346,Михайловка|Михайлівка,village,settlement,POINT,settlement_point_no_polygon
+1347,Молдаванка|Молдованка,village,settlement,POINT,settlement_point_no_polygon
+1350,Молога,village,settlement,POINT,settlement_point_no_polygon
+1353,Молодёжное|Молодіжне,village,settlement,POINT,settlement_point_no_polygon
+1360,Набережное|Набережне,village,settlement,POINT,settlement_point_no_polygon
+1366,Надия|Надія,village,settlement,POINT,settlement_point_no_polygon
+1368,Надлиманское|Надлиманське,village,settlement,POINT,settlement_point_no_polygon
+1369,Надъярное|Над’ярне,village,settlement,POINT,settlement_point_no_polygon
+1372,Незавертайловка|Незавертайлівка,village,settlement,POINT,settlement_point_no_polygon
+1373,Нерубайское|Нерубайське,village,settlement,POINT,settlement_point_no_polygon
+1374,Несломленное|Незламне,village,settlement,POINT,settlement_point_no_polygon
+1377,Нижний Куяльник|Нижній Куяльник,village,settlement,POINT,settlement_point_no_polygon
+1378,Нижняя Марьяновка|Marianca de Jos,village,settlement,POINT,settlement_point_no_polygon
+1379,Николаевка|Миколаївка,village,settlement,POINT,settlement_point_no_polygon
+1380,Николаевка|Миколаївка,village,settlement,POINT,settlement_point_no_polygon
+1381,Николаевка|Миколаївка,village,settlement,POINT,settlement_point_no_polygon
+1384,Никольское|Нікольське,village,settlement,POINT,settlement_point_no_polygon
+1385,Новая Андрияшевка|Нова Андріяшівка,village,settlement,POINT,settlement_point_no_polygon
+1390,Новая Заря|Нова Зоря,village,settlement,POINT,settlement_point_no_polygon
+1391,Новая Збурьевка|Нова Збур’ївка,village,settlement,POINT,settlement_point_no_polygon
+1394,Новая Ковалёвка|Нова Ковалівка,village,settlement,POINT,settlement_point_no_polygon
+1395,Новая Ольшанка|Нова Вільшанка,village,settlement,POINT,settlement_point_no_polygon
+1398,Новая Эметовка|Нова Еметівка,village,settlement,POINT,settlement_point_no_polygon
+1401,Нововладимировка|Нововолодимирівка,village,settlement,POINT,settlement_point_no_polygon
+1402,Нововладимировка|Нововолодимирівка,village,settlement,POINT,settlement_point_no_polygon
+1403,Новоградковка|Новоградківка,village,settlement,POINT,settlement_point_no_polygon
+1406,Новодмитровка|Новодмитрівка,village,settlement,POINT,settlement_point_no_polygon
+1407,Новодмитровка|Новодмитрівка,village,settlement,POINT,settlement_point_no_polygon
+1410,Новое|Нове,village,settlement,POINT,settlement_point_no_polygon
+1411,Новое|Нове,village,settlement,POINT,settlement_point_no_polygon
+1412,Новое Селище|Нове Селище,village,settlement,POINT,settlement_point_no_polygon
+1414,Новоконстантиновка|Новокостянтинівка,village,settlement,POINT,settlement_point_no_polygon
+1415,Новокотовск|Новокотовськ,village,settlement,POINT,settlement_point_no_polygon
+1420,Новомихайловка|Новомихайлівка,village,settlement,POINT,settlement_point_no_polygon
+1422,Новониколаевка|Новомиколаївка,village,settlement,POINT,settlement_point_no_polygon
+1430,Новосавицкое|Новосавицьке,village,settlement,POINT,settlement_point_no_polygon
+1431,Новоселица|Новоселиця,village,settlement,POINT,settlement_point_no_polygon
+1432,Новосельцы|Новосільці,village,settlement,POINT,settlement_point_no_polygon
+1436,Новосёловка|Новоселівка,village,settlement,POINT,settlement_point_no_polygon
+1437,Новосёловка|Новоселівка,village,settlement,POINT,settlement_point_no_polygon
+1438,Новосёловка|Новоселівка,village,settlement,POINT,settlement_point_no_polygon
+1439,Новосёловка|Новоселівка,village,settlement,POINT,settlement_point_no_polygon
+1440,Новоукраинка|Новоукраїнка,village,settlement,POINT,settlement_point_no_polygon
+1442,Новофёдоровка|Новофедорівка,village,settlement,POINT,settlement_point_no_polygon
+1444,Новочерноморье|Новочорномор’я,village,settlement,POINT,settlement_point_no_polygon
+1445,Новые Беляры|Нові Білярі,village,settlement,POINT,settlement_point_no_polygon
+1446,Новые Раскайцы|Răscăieții Noi|Раскаєцій-Ной,village,settlement,POINT,settlement_point_no_polygon
+1447,Новые Чобручи|Нові Чобручі,village,settlement,POINT,settlement_point_no_polygon
+1448,Новые Шомполы|Нові Шомполи,village,settlement,POINT,settlement_point_no_polygon
+1449,Облои|Облої,village,settlement,POINT,settlement_point_no_polygon
+1456,Ониськово|Ониськове,village,settlement,POINT,settlement_point_no_polygon
+1461,Отрадово|Одрадове,village,settlement,POINT,settlement_point_no_polygon
+1462,Очаковское|Очаківське,village,settlement,POINT,settlement_point_no_polygon
+1463,Павлинка,village,settlement,POINT,settlement_point_no_polygon
+1464,Павловка|Павлівка,village,settlement,POINT,settlement_point_no_polygon
+1465,Паланка|Palanca,village,settlement,POINT,settlement_point_no_polygon
+1466,Палиевка|Паліївка,village,settlement,POINT,settlement_point_no_polygon
+1467,Памятное|Пам’ятне,village,settlement,POINT,settlement_point_no_polygon
+1468,Парканцы|Парканці,village,settlement,POINT,settlement_point_no_polygon
+1469,Парканы|Паркани,village,settlement,POINT,settlement_point_no_polygon
+1470,Парутино|Парутине,village,settlement,POINT,settlement_point_no_polygon
+1473,Пасечное|Пасічне,village,settlement,POINT,settlement_point_no_polygon
+1474,Переможное|Переможне,village,settlement,POINT,settlement_point_no_polygon
+1475,Петро-Евдокиевка|Петро-Євдокіївка,village,settlement,POINT,settlement_point_no_polygon
+1479,Петровка|Петрівка,village,settlement,POINT,settlement_point_no_polygon
+1483,Петродолинское|Петродолинське,village,settlement,POINT,settlement_point_no_polygon
+1491,Плоп-Штюбей|Plop-Știubei,village,settlement,POINT,settlement_point_no_polygon
+1492,Повстанское|Повстанське,village,settlement,POINT,settlement_point_no_polygon
+1497,Покровка,village,settlement,POINT,settlement_point_no_polygon
+1498,Покровка,village,settlement,POINT,settlement_point_no_polygon
+1503,Понятовка|Понятівка,village,settlement,POINT,settlement_point_no_polygon
+1504,Попаздра,village,settlement,POINT,settlement_point_no_polygon
+1507,Поповка/Попяска|Popeasca,village,settlement,POINT,settlement_point_no_polygon
+1508,Порт,village,settlement,POINT,settlement_point_no_polygon
+1509,Посад-Покровское|Посад-Покровське,village,settlement,POINT,settlement_point_no_polygon
+1510,Поташенково|Поташенкове,village,settlement,POINT,settlement_point_no_polygon
+1511,Правдино|Правдине,village,settlement,POINT,settlement_point_no_polygon
+1518,Приветное|Привітне,village,settlement,POINT,settlement_point_no_polygon
+1523,Приморское|Приморське,village,settlement,POINT,settlement_point_no_polygon
+1524,Приозёрное|Приозерне,village,settlement,POINT,settlement_point_no_polygon
+1525,Приозёрное|Приозерне,village,settlement,POINT,settlement_point_no_polygon
+1526,Причеповка|Причепівка,village,settlement,POINT,settlement_point_no_polygon
+1527,Причерноморское|Причорноморське,village,settlement,POINT,settlement_point_no_polygon
+1528,Прогрессовка|Прогресівка,village,settlement,POINT,settlement_point_no_polygon
+1532,Пуркарь|Purcari,village,settlement,POINT,settlement_point_no_polygon
+1533,Пшеничное|Пшеничне,village,settlement,POINT,settlement_point_no_polygon
+1534,Пшеняново|Пшонянове,village,settlement,POINT,settlement_point_no_polygon
+1535,Радостное|Радісне,village,settlement,POINT,settlement_point_no_polygon
+1540,Ранжево|Ранжеве,village,settlement,POINT,settlement_point_no_polygon
+1541,Раскаецы|Răscăieți,village,settlement,POINT,settlement_point_no_polygon
+1542,Расселенец|Розселенець,village,settlement,POINT,settlement_point_no_polygon
+1547,Розовка|Розівка,village,settlement,POINT,settlement_point_no_polygon
+1548,Ройлянка,village,settlement,POINT,settlement_point_no_polygon
+1549,Ройлянка,village,settlement,POINT,settlement_point_no_polygon
+1550,Роксоланы|Роксолани,village,settlement,POINT,settlement_point_no_polygon
+1553,Роскошное|Розкішне,village,settlement,POINT,settlement_point_no_polygon
+1554,Русская Слободка|Руська Слобідка,village,settlement,POINT,settlement_point_no_polygon
+1557,Рыбаковка|Рибаківка,village,settlement,POINT,settlement_point_no_polygon
+1558,Рыбальче|Рибальче,village,settlement,POINT,settlement_point_no_polygon
+1559,Садовое|Садове,village,settlement,POINT,settlement_point_no_polygon
+1560,Садовое|Садове,village,settlement,POINT,settlement_point_no_polygon
+1561,Садовое|Садове,village,settlement,POINT,settlement_point_no_polygon
+1562,Салганы|Салгани,village,settlement,POINT,settlement_point_no_polygon
+1563,Санжейка|Санжійка,village,settlement,POINT,settlement_point_no_polygon
+1564,Светлогорское|Світлогірське,village,settlement,POINT,settlement_point_no_polygon
+1565,Светлодолинское|Світлодолинське,village,settlement,POINT,settlement_point_no_polygon
+1567,Свитанок|Світанок,village,settlement,POINT,settlement_point_no_polygon
+1569,Севериновка|Северинівка,village,settlement,POINT,settlement_point_no_polygon
+1570,Секретарёвка|Секретарівка,village,settlement,POINT,settlement_point_no_polygon
+1572,Семёновка|Semionovca,village,settlement,POINT,settlement_point_no_polygon
+1574,Сергеевка|Сергіївка,village,settlement,POINT,settlement_point_no_polygon
+1576,Слепушинское|Сліпушинське,village,settlement,POINT,settlement_point_no_polygon
+1577,Слободзея|Slobozia,village,settlement,POINT,settlement_point_no_polygon
+1578,Слободка|Слобідка,village,settlement,POINT,settlement_point_no_polygon
+1581,Солдатское|Солдатське,village,settlement,POINT,settlement_point_no_polygon
+1584,Солнечное|Сонячне,village,settlement,POINT,settlement_point_no_polygon
+1591,Ставки,village,settlement,POINT,settlement_point_no_polygon
+1592,Станислав|Станіслав,village,settlement,POINT,settlement_point_no_polygon
+1594,Старая Андрияшевка|Стара Андріяшівка,village,settlement,POINT,settlement_point_no_polygon
+1597,Старая Збурьевка|Стара Збур’ївка,village,settlement,POINT,settlement_point_no_polygon
+1599,Старая Эметовка|Стара Еметівка,village,settlement,POINT,settlement_point_no_polygon
+1600,Староказачье|Старокозаче,village,settlement,POINT,settlement_point_no_polygon
+1601,Староконстантиновка|Старокостянтинівка,village,settlement,POINT,settlement_point_no_polygon
+1602,Староселье|Старосілля,village,settlement,POINT,settlement_point_no_polygon
+1603,Старые Шомполы|Старі Шомполи,village,settlement,POINT,settlement_point_no_polygon
+1604,Степановка|Степанівка,village,settlement,POINT,settlement_point_no_polygon
+1608,Степовое|Степове,village,settlement,POINT,settlement_point_no_polygon
+1609,Степовое|Степове,village,settlement,POINT,settlement_point_no_polygon
+1610,Суклея,village,settlement,POINT,settlement_point_no_polygon
+1614,Сухое|Сухе,village,settlement,POINT,settlement_point_no_polygon
+1616,Сухолужье|Сухолужжя,village,settlement,POINT,settlement_point_no_polygon
+1617,Сухомлыново|Сухомлинове,village,settlement,POINT,settlement_point_no_polygon
+1618,Счастливое|Щасливе,village,settlement,POINT,settlement_point_no_polygon
+1622,Таирово|Таїрове,village,settlement,POINT,settlement_point_no_polygon
+1623,Талмазы|Talmaza,village,settlement,POINT,settlement_point_no_polygon
+1624,Ташино|Ташине,village,settlement,POINT,settlement_point_no_polygon
+1625,Тендровское|Тендрівське,village,settlement,POINT,settlement_point_no_polygon
+1626,Терновка|Тернівка,village,settlement,POINT,settlement_point_no_polygon
+1629,Томина Балка,village,settlement,POINT,settlement_point_no_polygon
+1632,Трояндовое|Трояндове,village,settlement,POINT,settlement_point_no_polygon
+1633,Труд-Уголок|Труд-Куток,village,settlement,POINT,settlement_point_no_polygon
+1634,Тудора|Tudora,village,settlement,POINT,settlement_point_no_polygon
+1637,Тузлы|Тузли,village,settlement,POINT,settlement_point_no_polygon
+1638,Удобное|Удобне,village,settlement,POINT,settlement_point_no_polygon
+1643,Ульяновка|Улянівка,village,settlement,POINT,settlement_point_no_polygon
+1644,Ульяновка|Улянівка,village,settlement,POINT,settlement_point_no_polygon
+1645,Усатово|Усатове,village,settlement,POINT,settlement_point_no_polygon
+1646,Усатово|Усатове,village,settlement,POINT,settlement_point_no_polygon
+1647,Успеновка|Успенівка,village,settlement,POINT,settlement_point_no_polygon
+1648,Уютное|Уютне,village,settlement,POINT,settlement_point_no_polygon
+1651,Фештелица/Фашталице|Feștelița,village,settlement,POINT,settlement_point_no_polygon
+1652,Фонтанка,village,settlement,POINT,settlement_point_no_polygon
+1653,Фрунзе,village,settlement,POINT,settlement_point_no_polygon
+1662,Христо-Ботово|Христо-Ботеве,village,settlement,POINT,settlement_point_no_polygon
+1663,Царичанка,village,settlement,POINT,settlement_point_no_polygon
+1666,Чабанское|Чабанське,village,settlement,POINT,settlement_point_no_polygon
+1667,Чеботарёвка|Чоботарівка,village,settlement,POINT,settlement_point_no_polygon
+1668,Червоная Горка|Червона Гірка,village,settlement,POINT,settlement_point_no_polygon
+1671,Черевичное|Черевичне,village,settlement,POINT,settlement_point_no_polygon
+1678,Черноморское|Чорноморське,village,settlement,POINT,settlement_point_no_polygon
+1679,Черняховское|Черняхівське,village,settlement,POINT,settlement_point_no_polygon
+1683,Чобручи|Cioburciu,village,settlement,POINT,settlement_point_no_polygon
+1688,Чумаки,village,settlement,POINT,settlement_point_no_polygon
+1689,Шабо,village,settlement,POINT,settlement_point_no_polygon
+1690,Шамановка|Шаманівка,village,settlement,POINT,settlement_point_no_polygon
+1694,Шевченково|Шевченкове,village,settlement,POINT,settlement_point_no_polygon
+1696,Шевченково|Шевченкове,village,settlement,POINT,settlement_point_no_polygon
+1697,Шевченково-Кут|Шевченкове-Кут,village,settlement,POINT,settlement_point_no_polygon
+1698,Шеметово|Шеметове,village,settlement,POINT,settlement_point_no_polygon
+1699,Шеметово|Шеметове,village,settlement,POINT,settlement_point_no_polygon
+1701,Широкая Балка|Широка Балка,village,settlement,POINT,settlement_point_no_polygon
+1704,Широкое|Широке,village,settlement,POINT,settlement_point_no_polygon
+1705,Широкое|Широке,village,settlement,POINT,settlement_point_no_polygon
+1709,Штефанешты|Ștefănești,village,settlement,POINT,settlement_point_no_polygon
+1712,Щербанка,village,settlement,POINT,settlement_point_no_polygon
+1713,Элеваторное|Елеваторне,village,settlement,POINT,settlement_point_no_polygon
+1714,Элеваторное|Елеваторне,village,settlement,POINT,settlement_point_no_polygon
+1715,Юрковка|Юрківка,village,settlement,POINT,settlement_point_no_polygon
+1716,Якова,village,settlement,POINT,settlement_point_no_polygon

@@ -501,11 +501,7 @@ class ParserBot:
                 final_path.unlink()
 
             async with self._download_semaphore:
-                await asyncio.to_thread(
-                    self.app.download_media,
-                    file_id,
-                    file_name=str(final_path)
-                )
+                await self.app.download_media(file_id, file_name=str(final_path))
 
             public_url = f"/media/events/{filename}"
             logger.debug(f"Downloaded photo to {final_path} → URL {public_url}")

@@ -70,6 +70,51 @@ if _missing("pybreaker"):
     sys.modules["pybreaker"] = _m
 
 
+# --- prometheus_client stub (metrics import) ---------------------------------
+if _missing("prometheus_client"):
+    _m = types.ModuleType("prometheus_client")
+
+    class _Counter:
+        def __init__(self, *a, **k):
+            pass
+        def labels(self, **kw):
+            return self
+        def inc(self, *a, **k):
+            pass
+
+    class _Histogram:
+        def __init__(self, *a, **k):
+            pass
+        def labels(self, **kw):
+            return self
+        def observe(self, *a, **k):
+            pass
+
+    class _Gauge:
+        def __init__(self, *a, **k):
+            pass
+        def set(self, *a, **k):
+            pass
+
+    class _Info:
+        def __init__(self, *a, **k):
+            pass
+        def info(self, *a, **k):
+            pass
+
+    def _generate_latest(*a, **k):
+        return b""
+
+    _m.Counter = _Counter
+    _m.Histogram = _Histogram
+    _m.Gauge = _Gauge
+    _m.Info = _Info
+    _m.generate_latest = _generate_latest
+    _m.CONTENT_TYPE_LATEST = "text/plain"
+    _m.REGISTRY = type("Registry", (), {"collect": lambda self: []})()
+    sys.modules["prometheus_client"] = _m
+
+
 def load_module_by_path(name: str, relpath: str):
     """Import a single module file directly, bypassing its package __init__.
 

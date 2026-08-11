@@ -209,3 +209,8 @@ class PhoneticIndex:
     @property
     def is_empty(self) -> bool:
         return not self._stem_index and not self._surface_phrases
+
+    def has_stem(self, stem: str) -> bool:
+        """Проверить наличие стема в индексе (для предфильтрации)."""
+        key = (stem,)
+        return key in self._stem_index

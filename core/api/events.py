@@ -196,7 +196,7 @@ async def get_events_handler(request: web.Request):
             headers={
                 'ETag': etag,
                 'X-Cache': 'HIT' if cache else 'MISS',
-                'Cache-Control': 'no-cache'  # Client must revalidate with server
+                'Cache-Control': 'private, max-age=5'
             }
         )
     except Exception as e:

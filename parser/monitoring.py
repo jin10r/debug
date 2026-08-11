@@ -77,6 +77,7 @@ class ParserBot:
         self._adaptive_pool_task: Optional[asyncio.Task] = None
         self._idle_seconds = 0
         self._backpressure_active = False
+        self._download_semaphore = asyncio.Semaphore(3)
 
     async def initialize(self) -> bool:
         """Инициализировать БД и Telegram клиент."""
@@ -499,7 +500,12 @@ class ParserBot:
                 logger.warning(f"Removing pre-existing symlink: {final_path}")
                 final_path.unlink()
 
-            await self.app.download_media(file_id, file_name=str(final_path))
+            async with self._download_semaphore:
+                await asyncio.to_thread(
+                    self.app.download_media,
+                    file_id,
+                    file_name=str(final_path)
+                )
 
             public_url = f"/media/events/{filename}"
             logger.debug(f"Downloaded photo to {final_path} → URL {public_url}")

@@ -5,6 +5,7 @@ import json as json_lib
 import logging
 import signal
 import sys
+import time
 from datetime import datetime, timezone
 from typing import Optional
 from enum import Enum
@@ -37,6 +38,7 @@ from .health import HealthServer
 from .layer_classifier import LayerClassifier
 from .word_tokenizer import tokenize
 from core.utils.text_preprocessor import preprocess_light, strip_tail, is_promotional
+from processor.metrics import processor_match_time_seconds, processor_tier_distribution
 
 logger = logging.getLogger(__name__)
 
@@ -500,6 +502,7 @@ class ProcessorBot:
 
     async def _process_row(self, row) -> Optional[dict]:
         """Полный цикл обработки одного сообщения: токенизация, поиск geo, вставка."""
+        start_time = time.perf_counter()
         message_id = row['message_id']
         event_time = row['event_time']
         raw_text = row['text'] or ''
@@ -520,6 +523,8 @@ class ProcessorBot:
                 description = raw_text
             else:
                 description = 'слишком длинное сообщение не является релевантной локацией'
+            processor_tier_distribution.labels(tier='no_match').inc()
+            processor_match_time_seconds.observe(time.perf_counter() - start_time)
             return self._enrich(
                 await self._insert_event(
                     message_id=message_id, event_time=event_time,
@@ -533,6 +538,18 @@ class ProcessorBot:
         entities = await self.matcher.find_geo(
             tokens=tokens, lemmas=lemmas, text=raw_text,
         )
+
+        if not entities:
+            processor_tier_distribution.labels(tier='no_match').inc()
+        else:
+            for ent in entities:
+                source = ent.get('source', 'unknown')
+                if source in ('stem_exact', 'stem_reorder'):
+                    processor_tier_distribution.labels(tier='tier1_stem').inc()
+                elif source == 'surface_typo':
+                    processor_tier_distribution.labels(tier='tier2_typo').inc()
+                elif source == 'surface_typo+semantic':
+                    processor_tier_distribution.labels(tier='tier3_semantic').inc()
 
         geo_ids = []
         geo_scores = []
@@ -549,6 +566,7 @@ class ProcessorBot:
         geo_texts = geo_texts[:5]
 
         if not geo_ids:
+            processor_match_time_seconds.observe(time.perf_counter() - start_time)
             return self._enrich(
                 await self._insert_event(
                     message_id=message_id, event_time=event_time,
@@ -559,7 +577,7 @@ class ProcessorBot:
                 tokens=tokens, geo_ids=geo_ids,
             )
 
-        return self._enrich(
+        result = self._enrich(
             await self._insert_event_from_candidates(
                 message_id=message_id, event_time=event_time,
                 description=raw_text, photo_path=None,
@@ -568,6 +586,8 @@ class ProcessorBot:
             ),
             tokens=tokens, geo_ids=geo_ids,
         )
+        processor_match_time_seconds.observe(time.perf_counter() - start_time)
+        return result
 
     @staticmethod
     def _enrich(result, *, tokens, geo_ids):

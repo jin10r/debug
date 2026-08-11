@@ -132,7 +132,7 @@ class WebSocketManager:
         ws_connections_active.set(0)
 
     async def _broadcast_payload(self, payload: str) -> int:
-        """Send payload string to all connected clients; remove dead ones. Returns success count."""
+        """Send payload string to all connected clients in chunks; remove dead ones."""
         snapshot = list(self.connections)
         if not snapshot:
             return 0
@@ -146,31 +146,40 @@ class WebSocketManager:
                 return False
 
         start = time.perf_counter()
-        async with self.broadcast_lock:
-            results = await asyncio.gather(*[_send(ws) for ws in snapshot], return_exceptions=True)
-        ws_broadcast_latency_seconds.observe(time.perf_counter() - start)
-
         success = 0
-        for ws, ok in zip(snapshot, results):
-            if ok is True:
-                success += 1
-            else:
-                ws_broadcast_errors_total.inc()
-                await self.unregister_connection(ws)
+        CHUNK_SIZE = 100
+
+        async with self.broadcast_lock:
+            for i in range(0, len(snapshot), CHUNK_SIZE):
+                chunk = snapshot[i:i + CHUNK_SIZE]
+                results = await asyncio.gather(*[_send(ws) for ws in chunk], return_exceptions=True)
+
+                for ws, ok in zip(chunk, results):
+                    if ok is True:
+                        success += 1
+                    else:
+                        ws_broadcast_errors_total.inc()
+                        await self.unregister_connection(ws)
+
+        ws_broadcast_latency_seconds.observe(time.perf_counter() - start)
         return success
 
     async def send_snapshot(self, events_data: dict, channel: str = 'events_new'):
-        """Broadcast a batch of recent events as a snapshot to all connected clients."""
+        """Broadcast recent events as a single FeatureCollection to all clients."""
         features = events_data.get('features', [])
         if not features or not self.connections:
             return
-        for feature in features:
-            payload = json.dumps({
-                'type': 'feature',
-                'data': feature,
-                'timestamp': datetime.now(timezone.utc).isoformat()
-            })
-            await self._broadcast_payload(payload)
+
+        payload = json.dumps({
+            'type': 'events_snapshot',
+            'data': {
+                'type': 'FeatureCollection',
+                'features': features
+            },
+            'timestamp': datetime.now(timezone.utc).isoformat()
+        })
+        await self._broadcast_payload(payload)
+
         end_payload = json.dumps({
             'type': 'events_snapshot_end',
             'count': len(features),

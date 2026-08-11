@@ -44,6 +44,22 @@ def _fuzzy_match(query: str, phrases: list, threshold: float):
     except Exception:
         return None
 
+
+def _batch_fuzzy_match(queries: list, phrases: list, threshold: float):
+    """Batch fuzzy matching: один IPC на всё сообщение."""
+    try:
+        results = rf_process.extract(
+            queries,
+            phrases,
+            scorer=fuzz.WRatio,
+            score_cutoff=threshold,
+            limit=1
+        )
+        return {q: r[0] for q, r in zip(queries, results) if r}
+    except Exception as e:
+        logger.warning(f"Batch fuzzy match failed: {e}")
+        return {}
+
 _LOC_PREPS: frozenset = frozenset({
     'на', 'по', 'в', 'у', 'до',
     'від', 'біля',
@@ -156,7 +172,7 @@ class GeoMatcher:
     def _candidates_sliding_window(
         self, clean_tokens: List[Token], clean_stems: List[str], max_window: Optional[int] = None,
     ) -> List[Candidate]:
-        """Генерация всех возможных N-грамм-кандидатов для поиска geo."""
+        """Генерация N-грамм с предфильтрацией: начинаем только с якорей."""
         if max_window is None:
             max_window = (
                 settings.similarity.max_sliding_window
@@ -166,8 +182,13 @@ class GeoMatcher:
         seen: Set[Tuple[int, int]] = set()
         n = len(clean_tokens)
         for start_i in range(n):
+            current_stem = clean_stems[start_i]
             prev_text = clean_tokens[start_i - 1].text.lower() if start_i > 0 else ''
             is_anchored = prev_text in _LOC_PREPS
+
+            if not is_anchored and current_stem and not self._index.has_stem(current_stem):
+                continue
+
             for end_i in range(start_i, min(start_i + max_window, n)):
                 if (start_i, end_i) in seen:
                     continue
@@ -179,31 +200,40 @@ class GeoMatcher:
                 out.append((surface_text, stem_tuple, start_i, end_i, end_i - start_i + 1, False, is_anchored))
         return out
 
+    async def _link_span_tier1(self, surface: str, stems: Tuple[str, ...], span: Tuple[int, int]) -> Optional[Dict]:
+        """Только Tier 1: точный стем-матч. Tier-2 вынесен в batch."""
+        if not surface or not stems:
+            return None
+
+        hit = self._index.query_stem_tuple(stems)
+        source = 'stem_exact'
+        if not hit and len(stems) >= 2:
+            hit = self._index.query_stem_tuple_sorted(stems)
+            source = 'stem_reorder'
+
+        if hit:
+            if len({e.street_id for e in hit}) > 1:
+                best = max(hit, key=lambda e: fuzz.ratio(surface, e.variant_text))
+            else:
+                best = hit[0]
+            return {
+                'geo_id': best.street_id,
+                'score': fuzz.ratio(surface, best.variant_text) / 100.0,
+                'matched_name': best.canonical_name,
+                'text': surface,
+                'source': source,
+                '_span': span,
+            }
+        return None
+
     async def _link_span(self, surface: str, stems: Tuple[str, ...], span: Tuple[int, int]) -> Optional[Dict]:
         """Поиск geo-объекта по тексту: Tier 1 (стемы) → Tier 2 (опечатки)."""
         if not surface:
             return None
 
-        # Tier 1: точный кортеж стемов — ядро распознавания.
-        if stems:
-            hit = self._index.query_stem_tuple(stems)
-            source = 'stem_exact'
-            if not hit and len(stems) >= 2:
-                hit = self._index.query_stem_tuple_sorted(stems)
-                source = 'stem_reorder'
-            if hit:
-                if len({e.street_id for e in hit}) > 1:
-                    best = max(hit, key=lambda e: fuzz.ratio(surface, e.variant_text))
-                else:
-                    best = hit[0]
-                return {
-                    'geo_id': best.street_id,
-                    'score': fuzz.ratio(surface, best.variant_text) / 100.0,
-                    'matched_name': best.canonical_name,
-                    'text': surface,
-                    'source': source,
-                    '_span': span,
-                }
+        result = await self._link_span_tier1(surface, stems, span)
+        if result:
+            return result
 
         # Tier 2: орфо-корректор по surface.
         typo_thresh = (
@@ -322,17 +352,68 @@ class GeoMatcher:
         )
 
         best_by_geo: Dict[int, Dict] = {}
+        tier2_queries = []
+        tier2_meta = []
+
         for surface, stem_tuple, start_i, end_i, _size, _gap, is_anchored in candidates:
             if surface in self._stopwords:
                 continue
-            result = await self._link_span(surface, stem_tuple, (start_i, end_i))
-            if result is None:
-                continue
-            result['_anchored'] = is_anchored
-            gid = result['geo_id']
-            existing = best_by_geo.get(gid)
-            if existing is None or result['score'] > existing['score']:
-                best_by_geo[gid] = result
+
+            result = await self._link_span_tier1(surface, stem_tuple, (start_i, end_i))
+            if result:
+                result['_anchored'] = is_anchored
+                gid = result['geo_id']
+                existing = best_by_geo.get(gid)
+                if existing is None or result['score'] > existing['score']:
+                    best_by_geo[gid] = result
+            else:
+                s_phrases, s_meta = self._index.surface_phrases()
+                if s_phrases and len(surface) >= 5:
+                    tier2_queries.append(surface)
+                    tier2_meta.append({
+                        'surface': surface,
+                        'span': (start_i, end_i),
+                        'is_anchored': is_anchored,
+                    })
+
+        if tier2_queries and self._executor:
+            typo_thresh = (
+                settings.similarity.surface_typo_threshold * 100
+                if settings and settings.similarity
+                and getattr(settings.similarity, 'surface_typo_threshold', None) is not None
+                else 90.0
+            )
+            s_phrases, s_meta = self._index.surface_phrases()
+
+            loop = asyncio.get_event_loop()
+            batch_results = await loop.run_in_executor(
+                self._executor,
+                _batch_fuzzy_match,
+                tier2_queries,
+                s_phrases,
+                typo_thresh
+            )
+
+            for i, surface in enumerate(tier2_queries):
+                if surface in batch_results:
+                    match, score, idx = batch_results[surface]
+                    if (surface[0] == match[0]
+                            and abs(len(match) - len(surface)) <= max(2, int(0.2 * len(surface)))):
+                        entry = s_meta[idx]
+                        meta = tier2_meta[i]
+                        result = {
+                            'geo_id': entry.street_id,
+                            'score': score / 100.0,
+                            'matched_name': entry.canonical_name,
+                            'text': surface,
+                            'source': 'surface_typo',
+                            '_span': meta['span'],
+                            '_anchored': meta['is_anchored'],
+                        }
+                        gid = result['geo_id']
+                        existing = best_by_geo.get(gid)
+                        if existing is None or result['score'] > existing['score']:
+                            best_by_geo[gid] = result
 
         if self._semantic_matcher and best_by_geo and text:
             semantic_threshold = (

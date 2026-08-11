@@ -10,14 +10,52 @@
   • semantic_missing_embedding_total — эмбеддинга нет, кандидат сохранён (keep);
   • geo_matches_total{source} — матчи по источнику (stem_exact / surface_typo /
     surface_typo+semantic) — из них считается доля surface_typo-матчей.
+  • processor_match_time_seconds — гистограмма latency обработки сообщения;
+  • processor_tier_distribution{tier} — распределение матчей по тирам.
 """
 
 import logging
 
-from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATEST, REGISTRY
+try:
+    from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST, REGISTRY
+except ImportError:
+    Counter = None
+    Histogram = None
+    generate_latest = None
+    CONTENT_TYPE_LATEST = None
+    REGISTRY = None
+
 from aiohttp import web
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================
+# No-op stubs when prometheus_client is absent
+# ============================================
+
+class _NoopMetric:
+    def __init__(self, *a, **k):
+        pass
+    def labels(self, **kw):
+        return self
+    def inc(self, *a, **k):
+        pass
+    def observe(self, *a, **k):
+        pass
+    def set(self, *a, **k):
+        pass
+    def info(self, *a, **k):
+        pass
+
+
+def _metric_cls(base):
+    return base if base is not None else _NoopMetric
+
+
+Counter = _metric_cls(Counter)
+Histogram = _metric_cls(Histogram)
+
 
 # ============================================
 # Semantic filter (ONNX rubert-tiny2)
@@ -54,9 +92,28 @@ geo_matches_total = Counter(
 )
 
 # Pre-warm серий: без этого панели показывают "No data" до первого матча.
-# Метрики существуют с момента старта процесса (как semantic_* счётчики).
 for _src in ('stem_exact', 'stem_reorder', 'surface_typo', 'surface_typo+semantic', 'unknown'):
     geo_matches_total.labels(source=_src).inc(0)
+
+
+# ============================================
+# Processor latency + tier distribution
+# ============================================
+
+processor_match_time_seconds = Histogram(
+    'processor_match_time_seconds',
+    'Histogram of message processing latency (find_geo + insert)',
+    buckets=[0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]
+)
+
+processor_tier_distribution = Counter(
+    'processor_tier_distribution',
+    'Distribution of geo matches by tier',
+    ['tier']
+)
+
+for _tier in ('tier1_stem', 'tier2_typo', 'tier3_semantic', 'no_match'):
+    processor_tier_distribution.labels(tier=_tier).inc(0)
 
 
 # Источники ограничены фиксированным набором (см. _link_span/filter_candidates),
@@ -74,7 +131,9 @@ def record_geo_matches(results) -> None:
 
 async def metrics_handler(request: web.Request):
     """Prometheus-эндпоинт: отдаёт метрики процессора в text-формате."""
+    if generate_latest is None or REGISTRY is None:
+        return web.Response(text="", content_type='text/plain')
     return web.Response(
         body=generate_latest(REGISTRY),
-        headers={'Content-Type': CONTENT_TYPE_LATEST}
+        headers={'Content-Type': CONTENT_TYPE_LATEST or 'text/plain'}
     )

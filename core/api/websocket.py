@@ -159,6 +159,26 @@ class WebSocketManager:
                 await self.unregister_connection(ws)
         return success
 
+    async def send_snapshot(self, events_data: dict, channel: str = 'events_new'):
+        """Broadcast a batch of recent events as a snapshot to all connected clients."""
+        features = events_data.get('features', [])
+        if not features or not self.connections:
+            return
+        for feature in features:
+            payload = json.dumps({
+                'type': 'feature',
+                'data': feature,
+                'timestamp': datetime.now(timezone.utc).isoformat()
+            })
+            await self._broadcast_payload(payload)
+        end_payload = json.dumps({
+            'type': 'events_snapshot_end',
+            'count': len(features),
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'channel': channel,
+        })
+        await self._broadcast_payload(end_payload)
+
     async def send_events_since(
         self,
         ws: web.WebSocketResponse,

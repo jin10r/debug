@@ -10,7 +10,7 @@
 
 import asyncio
 import logging
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 from typing import TYPE_CHECKING, Dict, List, Optional, Set, Tuple
 
 from rapidfuzz import fuzz
@@ -63,7 +63,7 @@ class GeoMatcher:
         # geo_id → type (street/village/town/...): пробрасывается в кандидатов,
         # чтобы pre-filter (midpoint/type_hint) мог работать.
         self._geo_types: Dict[int, str] = {}
-        self._executor: Optional[ThreadPoolExecutor] = None
+        self._executor: Optional[ProcessPoolExecutor] = None
         self._semantic_matcher: Optional["SemanticMatcher"] = None
 
     def set_semantic_matcher(self, matcher: "SemanticMatcher") -> None:
@@ -82,8 +82,8 @@ class GeoMatcher:
             await asyncio.to_thread(self._index.build, geo_rows)
             self._geo_types = {row['id']: row['type'] for row in geo_rows if row.get('type')}
             self._stopwords = {row['word'].strip().lower() for row in sw_rows if row['word']}
-            self._executor = ThreadPoolExecutor(max_workers=4)
-            logger.info(f"[Geo] Loaded {len(self._stopwords)} stopwords, {len(geo_rows)} objects, ThreadPoolExecutor initialized")
+            self._executor = ProcessPoolExecutor(max_workers=4)
+            logger.info(f"[Geo] Loaded {len(self._stopwords)} stopwords, {len(geo_rows)} objects, ProcessPoolExecutor initialized")
             self._initialized = True
             return True
         except Exception as exc:
@@ -128,7 +128,7 @@ class GeoMatcher:
         """Завершение работы: остановка пула потоков."""
         if self._executor:
             self._executor.shutdown(wait=True)
-            logger.info("[Geo] ThreadPoolExecutor shutdown")
+            logger.info("[Geo] ProcessPoolExecutor shutdown")
         self._executor = None
         self._semantic_matcher = None
 

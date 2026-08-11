@@ -1,108 +1,50 @@
-# Правила проекта — Survival Map
+# Правила проекта — Survival Map v2.0
 
 Единый документ правил для всех микросервисов. Каждый контейнер — независимый сервис.
 
 ---
 
-## Общие правила (все сервисы)
+## Глобальные правила
 
-### G-1: Каждый контейнер — независимый сервис
+### G-1: Single Source of Truth
 
-5 сервисов: `web`, `core`, `postgres`, `parser`, `processor`. Каждый — отдельный Dockerfile, отдельная точка входа, отдельные зависимости.
+PostgreSQL — единственное надежное хранилище состояния.
 
 ### G-2: Минимум зависимостей
 
-Каждый сервис содержит только необходимые ему библиотеки:
-- **web**: nginx + статика (node только при сборке)
-- **core**: aiohttp + aiogram + asyncpg + pyjwt
-- **parser**: kurigram + asyncpg + environs
-- **processor**: pymorphy3 + rapidfuzz + asyncpg + snowballstemmer
-- **postgres**: postgis/postgis + pg_cron
+Каждый сервис содержит только необходимые ему библиотеки.
 
-### G-3: Запуск одной командой
+### G-3: Fail Fast
 
-```bash
-docker-compose up --build
-```
+Валидация конфигурации при старте. Ошибки должны быть громкими.
 
-Без хелп-скриптов, без предварительных шагов (кроме `session.session` и `.env`).
+### G-4: Observability First
 
-### G-4: Параллельная сборка
+Структурированные логи (JSON), метрики.
 
-Все Dockerfile используют `--network=host` при build для параллельной сборки. Образы кэшируются через BuildKit (`--mount=type=cache`).
+### G-5: Security by Default
 
-### G-5: Кэширование сборки
+Запрет хардкод-секретов. Строгая валидация входных данных.
 
-| Сервис | Механизм кэширования |
-|--------|---------------------|
-| web | `--mount=type=cache,target=/root/.npm` |
-| core | `--mount=type=cache,target=/root/.cache/pip` + apt |
-| parser | Multi-stage: builder + runtime, pip cache |
-| processor | Multi-stage: builder + runtime, pip cache |
-| postgres | apt cache |
+### G-6: Idempotency
 
-### G-6: Внутренняя Docker-сеть
+Все операции записи идемпотентны (`ON CONFLICT`).
 
-| Сеть | Тип | Сервисы |
-|------|-----|---------|
-| `frontend` | bridge | web, core |
-| `backend` | bridge | core, parser, processor |
-| `db` | bridge, **internal: true** | postgres, parser, processor, core |
+### G-7: Resource Limits
 
-**Правило:** Только `web` имеет внешний порт (80). Все остальные — internal only.
-
-### G-7: Ресурсы контейнеров
-
-| Сервис | CPU limit | Memory limit | CPU reservation | Memory reservation |
-|--------|-----------|--------------|-----------------|-------------------|
-| postgres | 1.0 | 1G | 0.5 | 512M |
-| parser | 0.5 | 256M | 0.25 | 128M |
-| processor | 1.5 | 1G | 0.5 | 512M |
-| core | 1.0 | 768M | 0.25 | 128M |
-| web | 0.5 | 128M | 0.1 | 64M |
-
-### G-8: Безопасность контейнеров
-
-Все сервисы (кроме postgres):
-```yaml
-security_opt:
-  - no-new-privileges:true
-cap_drop:
-  - ALL
-```
-
-### G-9: Healthcheck
-
-Все сервисы имеют healthcheck. Порядок готовности: `postgres → parser/core/processor → web`.
-
-### G-10: Логирование
-
-Единый формат: `json-file` с ротацией (max 10MB × 5 файлов на сервис).
-
-```yaml
-x-default-logging: &default-logging
-  driver: json-file
-  options:
-    max-size: "10m"
-    max-file: "5"
-```
+Лимиты CPU/RAM в `docker-compose.yml` обязательны.
 
 ### G-11: Единый settings.py
 
-Все Python-сервисы (core, parser, processor) переиспользуют `core/settings.py` для конфигурации. Собственные настройки минимальны.
+Все Python-сервисы переиспользуют `core/settings.py`.
 
-### G-12: Restart policy
+### G-14: Модель в образе
 
-```yaml
-restart: unless-stopped
-```
+Веса LLM скачиваются только при сборке Dockerfile. В рантайме — запрещено.
 
-### G-13: Shared volumes
+### G-15 / G-16: Сессия без авторизации
 
-| Volume | Сервисы | Назначение |
-|--------|---------|-----------|
-| `postgres_data` | postgres | Данные PostgreSQL |
-| `events_media` | parser (rw), core (ro), web (ro) | Фотографии событий |
+`api_id/api_hash` только в `gen_session.py`. Рантайм-авторизация запрещена.
 
 ---
 
@@ -146,7 +88,10 @@ Telegram (MTProto) → parser (strip_tail + preprocess_light) → pending_events
 | Hardcoded credentials | Security | G-11 |
 | Внешние порты кроме 80 | Security | G-6 |
 | dev-bypass в production | Security | R-C10 |
+| Эфемерная генерация JWT_SECRET | Массовый logout при деплое | R-C8 |
+| Ручной DELETE по времени в events | Lock contention, ломает BRIN | R-DB2, R-DB3 |
+| ThreadPoolExecutor для rapidfuzz | GIL блокирует event loop | R-PR19 |
 
 ---
 
-*Правила проекта — июль 2026*
+*Правила проекта — август 2026*

@@ -2,7 +2,6 @@ from dataclasses import dataclass, field
 from environs import Env
 from typing import Optional
 import logging
-import secrets
 
 logger = logging.getLogger(__name__)
 
@@ -112,12 +111,6 @@ class BotConfig:
 
 @dataclass
 class JWTConfig:
-    # secret автогенерируется эфемерно в памяти при старте (см. _resolve_jwt_secret),
-    # если JWT_SECRET не задан в env. Это корректно, пока core — ОДИН процесс
-    # (main.py: AppRunner + asyncio.run, без воркеров/форка): секрет стабилен в
-    # течение жизни процесса. При масштабировании core на несколько реплик/воркеров
-    # эфемерные секреты разойдутся и сломают верификацию JWT между ними — тогда
-    # нужен общий секрет (задать JWT_SECRET в env или вынести в shared store).
     secret: str
     access_token_ttl: int = 900  # 15 minutes
     refresh_token_ttl: int = 86400  # 24 hours
@@ -277,25 +270,10 @@ class Settings:
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
 
 
-def _resolve_jwt_secret(env: Env, *, warn_ephemeral: bool = False) -> str:
-    """Получить секрет JWT: env-override (если задан и валиден) либо автогенерация.
-
-    JWT_SECRET больше НЕ обязателен в env. Логика:
-      - если JWT_SECRET задан в env и валиден (≥32 символов, не плейсхолдер) —
-        используется как опциональный override (обратная совместимость, общий
-        секрет для multi-replica деплоя);
-      - иначе — генерируется эфемерный секрет в памяти (secrets.token_urlsafe).
-        Стабилен в течение жизни процесса; при рестарте новый → ранее выданные
-        JWT инвалидируются (см. предупреждение в JWTConfig).
-
-    warn_ephemeral=True поднимает лог до WARNING — используется когда валидация
-    включена (production), где эфемерный секрет = инвалидация токенов при
-    рестарте и расхождение между репликами.
-
-    Никогда не бросает исключение — отсутствие/невалидность env-значения не
-    является ошибкой, секрет просто генерируется.
-    """
-    # Плейсхолдеры/слабые значения из примеров — игнорируем как «не задан».
+def _resolve_jwt_secret(env: Env) -> str:
+    secret = env.str("JWT_SECRET", None)
+    if not secret:
+        raise RuntimeError("FATAL: JWT_SECRET is required in environment (R-C8).")
     insecure_defaults = {
         "your-secret-key",
         "your-secret-key-change-in-production",
@@ -304,29 +282,15 @@ def _resolve_jwt_secret(env: Env, *, warn_ephemeral: bool = False) -> str:
         "changeme",
         "change-me",
     }
-
-    secret = env.str("JWT_SECRET", None)
-
-    if secret:
-        is_placeholder = secret.lower() in insecure_defaults or secret.startswith("your-secret")
-        if len(secret) >= 32 and not is_placeholder:
-            return secret  # валидный override из env
-        logger.warning(
-            "JWT_SECRET in env is invalid (placeholder or <32 chars) — ignoring, "
-            "generating an ephemeral secret instead."
+    if secret.lower() in insecure_defaults or secret.startswith("your-secret"):
+        raise RuntimeError(
+            "FATAL: JWT_SECRET is a placeholder — set a real secret (R-C8)."
         )
-
-    generated = secrets.token_urlsafe(48)
-    message = (
-        "JWT_SECRET not provided — generated an ephemeral per-process secret. "
-        "Tokens are invalidated on restart and diverge between replicas; "
-        "set a stable JWT_SECRET (≥32 chars) in env for production."
-    )
-    if warn_ephemeral:
-        logger.warning(message)
-    else:
-        logger.info(message)
-    return generated
+    if len(secret) < 32:
+        raise RuntimeError(
+            f"FATAL: JWT_SECRET must be >= 32 chars (got {len(secret)}) (R-C8)."
+        )
+    return secret
 
 
 def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> Settings:
@@ -336,8 +300,8 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
     изменить калибровку матчера / параметры БД / прокси и т.п., правится
     `core/settings.py` напрямую (не env).
 
-    Keep-list env: BOT_TOKEN, WEBAPP_URL, REDIRECT_URL. JWT_SECRET — опциональный
-    override автогенерации (см. _resolve_jwt_secret), в env не обязателен.
+    Keep-list env: BOT_TOKEN, WEBAPP_URL, REDIRECT_URL. JWT_SECRET — обязателен
+    при require_jwt=True (R-C8).
     CHANNEL_ID захардкожен в BotConfig (не env).
     """
     env = Env()
@@ -348,21 +312,13 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
             "TELEGRAM_VALIDATION_ENABLED", default=True
         )
         bot_token = env.str("BOT_TOKEN", "")
-        # No warning here — auth.py handles missing BOT_TOKEN with HTTP 500
-        # when validation is actually attempted.
-        jwt_config = (
-            JWTConfig(
-                secret=_resolve_jwt_secret(
-                    env,
-                    # Предупреждаем только там, где JWT реально используется:
-                    # core всегда получает BOT_TOKEN (docker-compose), а
-                    # parser/processor — нет, секрет им не нужен, и лишний
-                    # WARNING в их логах был бы шумом.
-                    warn_ephemeral=telegram_validation_enabled and bool(bot_token),
-                )
-            )
-            if require_jwt else None
-        )
+        try:
+            jwt_secret = _resolve_jwt_secret(env)
+            jwt_config = JWTConfig(secret=jwt_secret)
+        except RuntimeError:
+            if require_jwt:
+                raise
+            jwt_config = None
 
         ollama_host = env.str("OLLAMA_HOST", None)
 
@@ -397,4 +353,4 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
         raise ValueError(f"Configuration error: {e}")
 
 
-settings = load_settings(require_jwt=True)
+settings = load_settings(require_jwt=False)

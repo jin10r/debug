@@ -1,7 +1,7 @@
-# Rules — Parser Service
+# Rules — Parser Service v2.0
 
-**Сервис:** `parser/` (kurigram + text preprocessing + photo download)  
-**Точка входа:** `python -m parser.monitoring`  
+**Сервис:** `parser/` (kurigram + text preprocessing + photo download)
+**Точка входа:** `python -m parser.monitoring`
 **Порт:** 8765 (healthcheck only)
 
 ---
@@ -64,33 +64,32 @@ test -f /tmp/parser_heartbeat && [ $(( $(date +%s) - $(cat /tmp/parser_heartbeat
 
 **Правило:** Если heartbeat не обновляется >60s → контейнер перезапускается.
 
-### R-P5: Idempotent INSERT
+### R-P5: Idempotent Batch INSERT
 
-Все вставки в `pending_events` используют `ON CONFLICT DO NOTHING`:
+Для снижения I/O нагрузки разрешен и рекомендуется **Batch INSERT** (`asyncpg.executemany`) с накоплением в `pending_queue`. Задержка батчинга не должна превышать 1-2 секунды. Идемпотентность (`ON CONFLICT DO NOTHING`) обязательна.
 
-```sql
-INSERT INTO pending_events (message_id, text, event_time, photo_file_id)
-VALUES ($1, $2, $3, $4)
-ON CONFLICT (message_id, event_time) DO NOTHING
+```python
+# ❌ Неправильно: одиночный INSERT на каждое сообщение
+await conn.execute(
+    "INSERT INTO pending_events ... VALUES ($1, $2, $3) "
+    "ON CONFLICT ... DO NOTHING",
+    ...
+)
+
+# ✅ Правильно: Batch INSERT через executemany
+await conn.executemany(
+    "INSERT INTO pending_events (message_id, text, event_time) "
+    "VALUES ($1, $2, $3) "
+    "ON CONFLICT (message_id, event_time) DO NOTHING",
+    batch
+)
 ```
 
-**Правило:** Ретраи и backfill НЕ создают дубликатов.
-
----
-
-## 2. Правила работы с текстом
+**Правило:** Задержка батчинга ≤ 2 секунд. Ретраи и backfill НЕ создают дубликатов.
 
 ### R-P6: preprocess_light СОХРАНЯЕТ регистр
 
 `preprocess_light()` используется для `description` (отображается на фронтенде). Регистр, emoji, пунктуация — сохраняются.
-
-```python
-# ✅ Результат уходит на фронтенд
-description = preprocess_light(raw_text)  # "На Гаванной 🔥 блокпост"
-
-# ❌ Не использовать clean() для description
-description = clean(raw_text)  # "на гаванной блокпост" — потеря регистра
-```
 
 ### R-P7: strip_tail — МЯГКАЯ очистка
 
@@ -119,33 +118,13 @@ Emoji УДАЛЯЮТСЯ только перед токенизацией/мат
 
 **Правило:** Precision важнее recall — мягкая реклама намеренно не ловится.
 
----
-
-## 3. Правила работы с БД
-
 ### R-P11: Один пул соединений
 
 Parser использует один `asyncpg.Pool` на весь процесс. Пул создаётся при старте, закрывается при shutdown.
 
-```python
-self.__pool = await asyncpg.create_pool(
-    min_size=settings.db.pool_min_size,   # 5
-    max_size=settings.db.pool_max_size,   # 30
-    command_timeout=settings.db.command_timeout,  # 60s
-)
-```
-
 ### R-P12: Parameterized queries
 
-Все SQL-запросы используют параметризацию ($1, $2, ...). Конкатенация строк ЗАПРЕЩЕНА:
-
-```python
-# ✅ Правильно
-await conn.execute("INSERT INTO ... VALUES ($1, $2)", val1, val2)
-
-# ❌ SQL injection
-await conn.execute(f"INSERT INTO ... VALUES ('{val1}')")
-```
+Все SQL-запросы используют параметризацию ($1, $2, ...). Конкатенация строк ЗАПРЕЩЕНА.
 
 ### R-P13: Connection release
 
@@ -159,70 +138,25 @@ Parser слушает два канала:
 
 **Правило:** Каждый listener имеет own connection из пула + backoff reconnect.
 
----
-
-## 4. Правила безопасности
-
 ### R-P15: Path traversal protection
 
-Скачивание фото блокирует path traversal:
-
-```python
-final_path = (target_dir / filename).resolve()
-try:
-    final_path.relative_to(target_dir)
-except ValueError:
-    logger.error(f"Path traversal blocked: {final_path}")
-    return None
-```
+Скачивание фото блокирует path traversal.
 
 ### R-P16: Symlink protection
 
-Если `final_path` — symlink, он удаляется перед скачиванием:
-
-```python
-if final_path.is_symlink():
-    final_path.unlink()
-```
+Если `final_path` — symlink, он удаляется перед скачиванием.
 
 ### R-P17: Sanitize text
 
-Все тексты проходят `utf-8` sanitize:
-
-```python
-def _sanitize_text(text: Optional[str]) -> Optional[str]:
-    if not text:
-        return text
-    return text.encode('utf-8', errors='replace').decode('utf-8')
-```
+Все тексты проходят `utf-8` sanitize.
 
 ### R-P18: Proxy configuration
 
-SOCKS5/HTTP proxy настраивается через settings (не env для敏感ных данных):
-
-```python
-proxy_config = {
-    "scheme": settings.parser.proxy_scheme,
-    "hostname": proxy_host,
-    "port": settings.parser.proxy_port,
-}
-```
-
----
-
-## 5. Правила логирования
+SOCKS5/HTTP proxy настраивается через settings (не env для sensitive данных).
 
 ### R-P19: Structured logging
 
 Parser использует JSON-формат (по умолчанию) или текстовый — через `settings.app.log_format`.
-
-```python
-if _LOG_FORMAT == 'json':
-    from core.utils.logging_config import JSONFormatter
-    _formatter = JSONFormatter()
-else:
-    _formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-```
 
 ### R-P20: Log levels
 
@@ -232,62 +166,25 @@ else:
 - `ERROR` — ошибки обработки, DB-ошибки
 - `CRITICAL` — crash воркера (auto-respawn)
 
----
-
-## 6. Правила конфигурации
-
 ### R-P21: Settings из core/settings.py
 
-Parser переиспользует `core/settings.py` для всех настроек. Собственные настройкиparser — минимальны:
-
-```python
-@dataclass
-class ParserConfig:
-    history_limit: int = 100
-    events_media_dir: str = "/media/events"
-    socks5_host: Optional[str] = None
-    proxy_host: Optional[str] = None
-    proxy_scheme: str = "socks5"
-    proxy_port: int = 1080
-```
+Parser переиспользует `core/settings.py` для всех настроек.
 
 ### R-P22: Environment variables
 
-Только sensitive/per-deployment настройки через env:
-- `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`
-- `PROXY_HOST`, `PROXY_PORT`, `PROXY_SCHEME`
-
-Всё остальное — хардкод в `settings.py`.
-
----
-
-## 7. Правила тестирования
+Только sensitive/per-deployment настройки через env.
 
 ### R-P23: Минимальное покрытие
 
-Parser — простой сервис, основной фокус на интеграционных тестах:
-- Unit: `text_preprocessor.py` (strip_tail, preprocess_light, is_promotional)
-- Integration: DB operations (pending_events INSERT/SELECT)
-- E2E: Telegram → pending_events flow
+Parser — простой сервис, основной фокус на интеграционных тестах.
 
 ### R-P24: Mock Telegram messages
 
-Тесты используют mock-объекты для `pyrogram.Message`:
-
-```python
-class MockMessage:
-    def __init__(self, text, chat_id, message_id, date, photo=None):
-        self.text = text
-        self.chat = type('Chat', (), {'id': chat_id})()
-        self.id = message_id
-        self.date = date
-        self.photo = photo
-        self.caption = None
-```
+Тесты используют mock-объекты для `pyrogram.Message`.
 
 ---
 
-## 8. Антипаттерны (ЗАПРЕЩЕНО)
+## Антипаттерны (ЗАПРЕЩЕНО)
 
 | Антипаттерн | Почему | Правило |
 |-------------|--------|---------|
@@ -299,7 +196,8 @@ class MockMessage:
 | Отсутствие drain при shutdown | Потеря сообщений | R-P3 |
 | Ручной `pool.release()` без try/except | Утечка соединений | R-P13 |
 | Игнорирование `ON CONFLICT` | Дубликаты при ретраях | R-P5 |
+| Одиночный INSERT вместо Batch | Высокая I/O нагрузка | R-P5 |
 
 ---
 
-*Правила основаны на анализе кодовой базы parser/ — июль 2026*
+*Правила основаны на анализе кодовой базы parser/ — август 2026*

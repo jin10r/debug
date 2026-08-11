@@ -1,4 +1,4 @@
-# Rules — Core Service
+# Rules — Core Service v2.0
 
 **Сервис:** `core/` (aiohttp HTTP + WebSocket + aiogram Telegram bot)
 **Точка входа:** `python main.py`
@@ -34,7 +34,7 @@ requests.get(url)  # блокирует event loop
 ### R-C3: Graceful shutdown — orderly teardown
 
 При SIGTERM core:
-1. Устанавливает `shutdown_event` (bot polling + pg_notify listener выходят)
+1. Устанавливает `shutdown_event` (бот, WS, pg_notify, DB pool)
 2. Закрывает все WebSocket-соединения (close_all, timeout 5s)
 3. Останавливает bot polling (dp.stop_polling, timeout 3s)
 4. Останавливает pg_notify listener (timeout 3s)
@@ -59,17 +59,26 @@ app = web.Application(middlewares=[
 
 **Правило:** Порядок middleware фиксирован. Добавление нового middleware — только в конец chain (перед rate_limiter) или с пересчётом приоритетов.
 
-### R-C5: PostgreSQL LISTEN/NOTIFY как event bridge
+### R-C5: PostgreSQL LISTEN/NOTIFY + Catch-Up
 
-Core слушает каналы `events_new` и `events_cleaned` через dedicated connection из пула. При shutdown — UNLISTEN + release с timeout.
+Core слушает `events_new`. Так как `pg_notify` не гарантирует доставку при рестарте, Core при старте **ОБЯЗАН выполнить Catch-Up**: после подписки на `LISTEN` сделать `SELECT` событий за последние 5 минут и разослать их подключенным клиентам как `events_snapshot`.
 
 ```python
-conn = await db_pool.pool.acquire()
-await conn.add_listener('events_new', _on_notify)
-await conn.add_listener('events_cleaned', _on_notify)
+# После add_listener('events_new'):
+try:
+    async with db_pool.pool.acquire() as catchup_conn:
+        recent_events = await catchup_conn.fetch(
+            "SELECT id, event_time, description, layer, strategy, geom, photo_url, matches "
+            "FROM events "
+            "WHERE event_time > NOW() - INTERVAL '5 minutes' "
+            "ORDER BY event_time ASC"
+        )
+    if recent_events and ws_manager:
+        await ws_manager.send_snapshot(recent_events, channel='events_new')
+        logger.info(f"Catch-Up: sent {len(recent_events)} events_snapshot to WS clients")
+except Exception as e:
+    logger.warning(f"Catch-Up failed: {e}")
 ```
-
-**Правило:** pg_notify listener работает на отдельном соединении, НЕ на основном пуле. При потере соединения — автоматический reconnect не требуется (shutdown + restart).
 
 ### R-C6: Bot polling — handle_signals=False
 
@@ -78,10 +87,6 @@ await dp.start_polling(bot, handle_signals=False)
 ```
 
 **Правило:** aiogram НЕ ставит свои SIGTERM/SIGINT-хендлеры. Единый хендлер в `main.py` → `shutdown_event`.
-
----
-
-## 2. Правила аутентификации
 
 ### R-C7: Двухуровневая валидация
 
@@ -92,16 +97,33 @@ await dp.start_polling(bot, handle_signals=False)
 
 **Правило:** `/api/validate-init` → выдаёт JWT. Все остальные `/api/*` требуют JWT.
 
-### R-C8: JWT в memory-only
+### R-C8: JWT в ENV (Запрет эфемерной генерации)
 
-JWT secret генерируется эфемерно при старте, если не задан в env. Токены валидны только пока жив процесс core.
+`JWT_SECRET` **ОБЯЗАН** быть задан в переменных окружения. Эфемерная генерация (`secrets.token_urlsafe`) **КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНА**. Если `JWT_SECRET` отсутствует при старте, Core должен упасть с ошибкой (Fail Fast).
 
 ```python
-# core/settings.py
-generated = secrets.token_urlsafe(48)  # ephemeral secret
+def _resolve_jwt_secret(env: Env) -> str:
+    secret = env.str("JWT_SECRET", None)
+    if not secret:
+        raise RuntimeError("FATAL: JWT_SECRET is required in environment (R-C8).")
+    insecure_defaults = {
+        "your-secret-key",
+        "your-secret-key-change-in-production",
+        "your-secret-key-change-in-production-min-32-chars",
+        "secret",
+        "changeme",
+        "change-me",
+    }
+    if secret.lower() in insecure_defaults or secret.startswith("your-secret"):
+        raise RuntimeError(
+            "FATAL: JWT_SECRET is a placeholder — set a real secret (R-C8)."
+        )
+    if len(secret) < 32:
+        raise RuntimeError(
+            f"FATAL: JWT_SECRET must be >= 32 chars (got {len(secret)}) (R-C8)."
+        )
+    return secret
 ```
-
-**Правило:** При рестарте core все ранее выданные JWT инвалидируются. Для стабильности — задать `JWT_SECRET` в env (≥32 символов).
 
 ### R-C9: WebSocket auth — отдельный путь
 
@@ -112,7 +134,7 @@ generated = secrets.token_urlsafe(48)  # ephemeral secret
 {"type": "auth", "init_data": "..."} // Telegram initData
 ```
 
-**Правило:** До `auth_ok` сервер НЕ отправляет данные клиенту. При `TELEGRAM_VALIDATION_ENABLED=False` — dev-bypass (любой клиент).
+**Правило:** До `auth_ok` сервер НЕ отправляет данные клиенту.
 
 ### R-C10: Dev-bypass — ТОЛЬКО для разработки
 
@@ -122,10 +144,6 @@ if not settings.app.telegram_validation_enabled:
 ```
 
 **Правило:** При выключенной валидации core логирует WARNING. Никогда не деплоить с `TELEGRAM_VALIDATION_ENABLED=False` в production.
-
----
-
-## 3. Правила WebSocket
 
 ### R-C11: Per-feature protocol
 
@@ -171,14 +189,9 @@ events_data = await self.db_request.get_filtered_events_as_geojson(
 
 **Правило:** Snapshot отправляется по одному feature за сообщение (не массивом) для совместимости с медленными WebView.
 
----
-
-## 4. Правила работы с БД
-
 ### R-C15: asyncpg pool — min/max sizing
 
 ```python
-# core/db/dbconnect.py — Database class
 pool = await asyncpg.create_pool(
     min_size=2,
     max_size=10,
@@ -196,136 +209,17 @@ pool = await asyncpg.create_pool(
 
 Все SQL-запросы используют параметризацию ($1, $2, ...). Конкатенация строк ЗАПРЕЩЕНА.
 
-```python
-# ✅ Правильно
-rows = await conn.fetch("SELECT * FROM events WHERE layer = $1", layer)
-
-# ❌ SQL injection
-rows = await conn.fetch(f"SELECT * FROM events WHERE layer = '{layer}'")
-```
-
 ### R-C18: CacheManager — in-memory LRU
 
 ```python
 cache = CacheManager()  # OrderedDict LRU + TTL, async lock
 ```
 
-**Правило:** Кэш — in-memory, без Redis. При масштабировании core на несколько реплик — кэш не синхронизируется (пока неактуально).
+**Правило:** Кэш — in-memory, без Redis.
 
 ---
 
-## 5. Правила Telegram бота
-
-### R-C19: aiogram polling only
-
-Core использует aiogram ТОЛЬКО для bot commands (start, help). Парсинг каналов — в parser.
-
-**Запрещено:**
-- `client.get_chat_history()` в core
-- Мониторинг каналов через bot
-- Отправка сообщений в канал из core
-
-### R-C20: Bot session proxy
-
-Бот может использовать SOCKS5 proxy для Telegram API:
-
-```python
-_proxy_url = f"{settings.parser.proxy_scheme}://{_proxy_host}:{_proxy_port}"
-_bot_session = AiohttpSession(proxy=_proxy_url)
-```
-
-**Правило:** Proxy настраивается через settings (не env для sensitive данных).
-
----
-
-## 6. Правила Rate Limiting
-
-### R-C21: Two-level rate limiting
-
-| Уровень | Реализация | Лимит |
-|---------|-----------|-------|
-| Edge (nginx) | `limit_req_zone` | 10r/s api, 1r/s auth |
-| App (core) | `RateLimiter` middleware | 60 req/min default |
-
-**Правило:** Двухуровневый rate limiting обязателен. App-level дополняет edge-level.
-
-### R-C22: Per-endpoint overrides
-
-```python
-rate_limiter = RateLimiter(
-    default_limit=60,
-    window_seconds=60,
-    cleanup_interval=300
-)
-```
-
-**Правило:** `/api/validate-init` — строже (nginx burst=5). `/api/auth/refresh` — тоже строже.
-
----
-
-## 7. Правила безопасности
-
-### R-C23: CSRF middleware
-
-```python
-csrf_middleware  # HMAC токен, 1h TTL
-```
-
-**Правило:** POST-запросы к `/api/*` требуют CSRF-токен.
-
-### R-C24: No sensitive data in logs
-
-BOT_TOKEN, JWT_SECRET, POSTGRES_PASSWORD НЕ логируются.
-
-### R-C25: Security headers через nginx
-
-Core НЕ ставит security headers — это делает nginx (R-W18, R-W19).
-
----
-
-## 8. Правила мониторинга
-
-### R-C26: Healthcheck endpoints
-
-| Эндпоинт | Назначение | Проверяет |
-|----------|-----------|-----------|
-| `/health/live` | Liveness | Всегда 200 |
-| `/health/ready` | Readiness | DB connected |
-| `/health/detailed` | Details | DB + uptime + connections |
-
-**Правило:** `/health/ready` используется docker-compose healthcheck.
-
-### R-C27: Prometheus metrics
-
-```python
-setup_metrics_routes(app)  # /metrics
-```
-
-**Правило:** Метрики экспортируются, но нет сборщика (Prometheus/Grafana — рекомендация).
-
----
-
-## 9. Правила конфигурации
-
-### R-C28: Settings из core/settings.py
-
-Core переиспользует единый `core/settings.py` для всех настроек. Все сервисы (parser, processor, core) используют один и тот же Settings.
-
-### R-C29: Environment variables — только sensitive
-
-| Переменная | Обязательна | Описание |
-|-----------|-------------|----------|
-| `BOT_TOKEN` | да | Токен бота |
-| `POSTGRES_PASSWORD` | да | Пароль PostgreSQL |
-| `WEBAPP_URL` | нет | URL Mini App |
-| `REDIRECT_URL` | нет | Куда редиректить |
-| `TELEGRAM_VALIDATION_ENABLED` | нет | Dev-bypass (default: True) |
-
-**Правило:** Всё остальное — хардкод в `settings.py`.
-
----
-
-## 10. Антипаттерны (ЗАПРЕЩЕНО)
+## Антипаттерны (ЗАПРЕЩЕНО)
 
 | Антипаттерн | Почему | Правило |
 |-------------|--------|---------|
@@ -335,9 +229,10 @@ Core переиспользует единый `core/settings.py` для все�
 | `/ws` без auth | Открытый доступ | R-C9 |
 | Dev-bypass в production | Security | R-C10 |
 | handle_signals=True в aiogram | Двойной SIGTERM handler | R-C6 |
-| Redis кэш ( prematurely ) | Лишняя зависимость | R-C18 |
+| Эфемерный JWT_SECRET | Массовый logout | R-C8 |
+| Redis кэш (prematurely) | Лишняя зависимость | R-C18 |
 | Прямые SQL вне Request | Нарушение абстракции | R-C16 |
 
 ---
 
-*Правила основаны на анализе кодовой базы core/ — июль 2026*
+*Правила основаны на анализе кодовой базы core/ — август 2026*

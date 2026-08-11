@@ -175,7 +175,7 @@ services:
       # Стабильный секрет подписи JWT (≥32 симв.): токены переживают рестарт
       # core и общие для всех реплик. Если не задан — settings генерирует
       # эфемерный секрет на каждый старт (токены инвалидируются при рестарте).
-      JWT_SECRET: ${JWT_SECRET:-}
+      JWT_SECRET: ${JWT_SECRET}
       WEBAPP_URL: ${WEBAPP_URL:-}
       REDIRECT_URL: ${REDIRECT_URL:-}
       TELEGRAM_VALIDATION_ENABLED: ${TELEGRAM_VALIDATION_ENABLED:-True}

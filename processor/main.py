@@ -374,6 +374,14 @@ class ProcessorBot:
 
         while self._running:
             self.health_server.touch()
+            # R-PR4: memory fallback every iteration
+            if not self.health_server.check_memory():
+                if not self.health_server._memory_warning_sent:
+                    logger.warning("⚠️  RSS approaching 1GB limit — applying graceful degradation")
+                    self.health_server._memory_warning_sent = True
+                self._apply_memory_fallback()
+            else:
+                self.health_server._memory_warning_sent = False
             await asyncio.sleep(1)
 
     def _spawn_worker(self) -> asyncio.Task:
@@ -535,6 +543,11 @@ class ProcessorBot:
                 geo_scores.append(ent['score'])
                 geo_texts.append(ent['text'])
 
+        # R-PR10: hard cap at Top-5 to protect PostGIS process_candidates from CROSS JOIN blowup
+        geo_ids = geo_ids[:5]
+        geo_scores = geo_scores[:5]
+        geo_texts = geo_texts[:5]
+
         if not geo_ids:
             return self._enrich(
                 await self._insert_event(
@@ -621,6 +634,23 @@ class ProcessorBot:
         """Установка флага остановки процессора."""
         logger.info("Stop signal received — requesting graceful shutdown")
         self._running = False
+
+    def _apply_memory_fallback(self):
+        """Graceful degradation: gc, disable ONNX, shrink LRU."""
+        import gc
+        gc.collect()
+        if self.semantic_matcher:
+            try:
+                self.semantic_matcher.disable()
+                logger.info("SemanticMatcher disabled (memory fallback)")
+            except Exception as e:
+                logger.warning(f"Failed to disable SemanticMatcher: {e}")
+        if self.morph:
+            try:
+                self.morph.shrink_cache(max_size=5000)
+                logger.info("Morphology LRU shrunk to 5000 (memory fallback)")
+            except Exception as e:
+                logger.warning(f"Failed to shrink Morphology cache: {e}")
 
     async def shutdown(self):
         """Корректное завершение: остановка воркеров, закрытие соединений."""

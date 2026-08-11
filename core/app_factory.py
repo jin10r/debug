@@ -116,6 +116,17 @@ async def _run_pg_notify_listener(app: web.Application):
             await conn.add_listener('events_cleaned', _on_notify)
             logger.info("Listening for PostgreSQL NOTIFY on: events_new, events_cleaned")
 
+            # R-C5 Catch-Up: fetch recent events after LISTEN subscribe
+            try:
+                recent_events = await ws_manager.db_request.get_filtered_events_as_geojson(
+                    time_interval_minutes=5,
+                )
+                if recent_events and recent_events.get('features') and ws_manager:
+                    await ws_manager.send_snapshot(recent_events, channel='events_new')
+                    logger.info(f"Catch-Up: sent {len(recent_events['features'])} events_snapshot to WS clients")
+            except Exception as e:
+                logger.warning(f"Catch-Up failed: {e}")
+
             if shutdown_event:
                 await shutdown_event.wait()
         except asyncio.CancelledError:

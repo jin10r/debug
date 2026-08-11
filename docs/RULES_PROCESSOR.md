@@ -1,4 +1,4 @@
-# Rules — Processor Service (NLP Pipeline)
+# Rules — Processor Service (NLP Pipeline) v2.0
 
 **Сервис:** `processor/` (pymorphy3 + rapidfuzz + PostGIS)
 **Точка входа:** `python -m processor.main`
@@ -40,7 +40,7 @@ for _ in range(self._worker_concurrency):
 2. Все worker tasks отменяются через `task.cancel()`
 3. `asyncio.gather(*tasks, return_exceptions=True)` — ждём завершения
 4. UNLISTEN `geo_updated` + release connection
-    5. Закрытие GeoMatcher, DB pool
+5. Закрытие GeoMatcher, DB pool
 
 ```python
 async def shutdown(self):
@@ -54,53 +54,45 @@ async def shutdown(self):
 
 **Правило:** `stop_grace_period` в docker-compose ≥ 30s.
 
-### R-PR4: Heartbeat healthcheck
+### R-PR4: Heartbeat + Memory Fallback
 
-Processor пишет timestamp в `/tmp/processor_heartbeat` каждую секунду:
-
-```python
-@staticmethod
-def _write_heartbeat():
-    with open('/tmp/processor_heartbeat', 'w') as f:
-        f.write(str(int(datetime.now(timezone.utc).timestamp())))
-```
-
-Docker healthcheck:
-```bash
-test -f /tmp/processor_heartbeat && [ $(( $(date +%s) - $(cat /tmp/processor_heartbeat) )) -lt 60 ]
-```
-
-**Правило:** Если heartbeat не обновляется >60s + `start_period` 120s → контейнер перезапускается.
-
-### R-PR5: Worker auto-respawn
+Healthcheck должен мониторить RSS-память. Если потребление приближается к лимиту контейнера (1GB), Processor **ОБЯЗАН** применить graceful degradation (вызвать `gc.collect()`, отключить ONNX-модель, урезать LRU-кэши), чтобы предотвратить OOM Killer.
 
 ```python
-def _supervise_worker(self, task):
-    if not self._running:
-        return
-    exc = task.exception()
-    logger.critical(f"Worker died unexpectedly ({exc!r}) — respawning")
-    self._spawn_worker()
+def get_rss_mb(self) -> float:
+    try:
+        with open('/proc/self/status', 'r') as f:
+            for line in f:
+                if line.startswith('VmRSS:'):
+                    return int(line.split()[1]) / 1024  # kB → MB
+    except Exception:
+        pass
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024  # kB → MB
+
+def check_memory(self) -> bool:
+    rss_mb = self.get_rss_mb()
+    return rss_mb < 850  # hard limit 1GB, warn at 850MB
 ```
-
-**Правило:** Падший воркер автоматически пересоздаётся.
-
-### R-PR6: Retry with exponential backoff
 
 ```python
-# Transient errors — до 8 попыток
-# Permanent errors — до 3 попыток
-attempt < (8 if transient else 3)
-delay = min(2 ** attempt, 30)
+def _apply_memory_fallback(self):
+    import gc
+    gc.collect()
+    if self.semantic_matcher:
+        try:
+            self.semantic_matcher.disable()
+            logger.info("SemanticMatcher disabled (memory fallback)")
+        except Exception as e:
+            logger.warning(f"Failed to disable SemanticMatcher: {e}")
+    if self.morph:
+        try:
+            self.morph.shrink_cache(max_size=5000)
+            logger.info("Morphology LRU shrunk to 5000 (memory fallback)")
+        except Exception as e:
+            logger.warning(f"Failed to shrink Morphology cache: {e}")
 ```
 
-**Правило:** После исчерпания попыток → `mark_error` (статус 'error' в pending_events).
-
----
-
-## 2. Правила NLP-пайплайна
-
-### R-PR7: Tokenize → Lemmatize → Classify → FindGeo → Resolve → Insert
+### R-PR5: NLP-пайплайн — фиксированный порядок
 
 ```python
 tokens = tokenize(raw_text)
@@ -113,17 +105,18 @@ await self._insert_event_from_candidates(...)
 
 **Правило:** Порядок шагов фиксирован. Нельзя менять последовательность.
 
-### R-PR8: is_promotional → random strategy
-
-Промо/спам детектируется через `is_promotional()`. При срабатывании → `strategy=random`, сообщение НЕ игнорируется.
+### R-PR6: Retry with exponential backoff
 
 ```python
-if promotional or not raw_text or len(raw_text) > max_text_length:
-    return self._enrich(
-        await self._insert_event(..., strategy='random', geom_wkt=self._random_point()),
-        tokens=tokens, geo_ids=[],
-    )
+attempt < (8 if transient else 3)
+delay = min(2 ** attempt, 30)
 ```
+
+**Правило:** После исчерпания попыток → `mark_error` (статус 'error' в pending_events).
+
+### R-PR7: is_promotional → random strategy
+
+Промо/спам детектируется через `is_promotional()`. При срабатывании → `strategy=random`, сообщение НЕ игнорируется.
 
 **Правило:** Даже спам-сообщения попадают на карту (random точка).
 
@@ -131,7 +124,7 @@ if promotional or not raw_text or len(raw_text) > max_text_length:
 
 Любое сообщение из `pending_events` ДОЛЖНО попасть в `events` и быть видимым на карте.
 
-- **Распознанные локации:** normal strategy (single_match / intersection / street_segment / weighted_centroid) — точная геометрия
+- **Распознанные локации:** normal strategy — точная геометрия
 - **Нераспознанные / спам / пустые:** `strategy=random` — точка в зоне `question_overlay`
 
 **Запрещено:**
@@ -139,47 +132,18 @@ if promotional or not raw_text or len(raw_text) > max_text_length:
 - Отбрасывать сообщения после LLM-детекции спама — вместо этого `strategy=random`
 - Фильтровать сообщения по длине текста, промо-характеру или слою
 
-**Исключение:** Технические дубликаты (`ON CONFLICT DO NOTHING`). Сообщение признаётся дубликатом только при совпадении `(message_id, event_time)`.
+**Исключение:** Технические дубликаты (`ON CONFLICT DO NOTHING`).
+
+### R-PR10: process_candidates в PostGIS + Лимит Top-5
+
+Python **ДОЛЖЕН ограничивать** количество кандидатов, передаваемых в `process_candidates` (строго **Top-5** по `score`). Передача неограниченного списка запрещена, так как это вызывает CROSS JOIN и деградирует БД.
 
 ```python
-# ❌ НЕПРАВИЛЬНО: дроп при LLM junk
-if llm_result.get('layer') == 'junk':
-    return None  # нарушает R-PR8.1
-
-# ✅ ПРАВИЛЬНО: random strategy для junk
-if llm_result.get('layer') == 'junk':
-    layer = 'junk'
-    strategy = 'random'
+# R-PR10: hard cap at Top-5 to protect PostGIS process_candidates from CROSS JOIN blowup
+geo_ids = geo_ids[:5]
+geo_scores = geo_scores[:5]
+geo_texts = geo_texts[:5]
 ```
-
-### R-PR10: process_candidates в PostGIS
-
-Для 2+ кандидатов — INSERT через CTE с `process_candidates()`:
-
-```python
-_INSERT_EVENT_FROM_CANDIDATES = """
-    WITH pc AS (
-        SELECT result_geom, result_strategy, result_matches,
-               result_confidence, result_diagnostics
-        FROM process_candidates(
-            $6::int[], $7::double precision[], $8::text[],
-            $9::float, $10::float, $11::float
-        )
-    ),
-    inserted AS (
-        INSERT INTO events (...) SELECT ... FROM pc WHERE pc.result_geom IS NOT NULL
-        ON CONFLICT (message_id, event_time) DO NOTHING
-        RETURNING ...
-    ),
-    ...
-"""
-```
-
-**Правило:** Геометрия и стратегия вычисляются в PostGIS, НЕ в Python. SemanticResolver удалён.
-
----
-
-## 3. Правила работы с БД
 
 ### R-PR11: Pending events — SKIP LOCKED
 
@@ -219,18 +183,7 @@ SELECT i.id, i.layer, i.strategy FROM inserted i
 await self._listen_conn.add_listener("geo_updated", self._on_geo_updated)
 ```
 
-При `geo_updated` — перестройка PhoneticIndex:
-
-```python
-async def _on_geo_updated(self, conn, pid, channel, payload):
-    geo_id = json_lib.loads(payload).get('geo_id')
-    if geo_id:
-        task = asyncio.create_task(_reindex(self.matcher.reindex_geo, self.db.pool, geo_id))
-    else:
-        task = asyncio.create_task(_reindex(self.matcher.reindex_all, self.db.pool))
-```
-
-**Правило:** Reindex запускается как background task (не блокирует воркеры).
+При `geo_updated` — перестройка PhoneticIndex. Reindex запускается как background task (не блокирует воркеры).
 
 ### R-PR15: Один asyncpg pool
 
@@ -243,10 +196,6 @@ self.__pool = await asyncpg.create_pool(
 ```
 
 **Правило:** Один пул на весь процесс. Connection release — через `async with pool.acquire()`.
-
----
-
-## 4. Правила работы с NLP модулями
 
 ### R-PR16: Morphology — LRU cache
 
@@ -278,30 +227,20 @@ entities = await self.matcher.find_geo(tokens=tokens, lemmas=lemmas)
 
 ### R-PR19: ProcessPoolExecutor для fuzzy matching
 
+CPU-bound задачи (`rapidfuzz`) **ОБЯЗАНЫ** использовать `ProcessPoolExecutor`. Использование `ThreadPoolExecutor` **КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО** (из-за GIL).
+
 ```python
-# geo_matcher.py
 loop = asyncio.get_event_loop()
 result = await loop.run_in_executor(
     self._executor, _fuzzy_match, query, phrases, threshold
 )
 ```
 
-**Правило:** CPU-bound fuzzy matching вынесен в `ProcessPoolExecutor` для неблокирования event loop.
-
----
-
-## 5. Правила безопасности
+**Правило:** `_fuzzy_match` должна быть module-level функцией (picklable).
 
 ### R-PR20: Parameterized queries
 
 Все SQL-запросы используют параметризацию ($1, $2, ...).
-
-```python
-await conn.execute(
-    "INSERT INTO pending_events ... VALUES ($1, $2, $3, $4)",
-    message_id, text, event_time, photo_file_id,
-)
-```
 
 ### R-PR21: Sanitize text
 
@@ -327,10 +266,6 @@ def _random_point(self):
 
 **Правило:** Random точка генерируется внутри заданной зоны (question_overlay), не глобально.
 
----
-
-## 6. Правила логирования
-
 ### R-PR23: Structured logging
 
 ```python
@@ -349,20 +284,9 @@ else:
 - `ERROR` — ошибки обработки, DB-ошибки
 - `CRITICAL` — crash воркера (auto-respawn)
 
----
-
-## 7. Правила конфигурации
-
 ### R-PR25: Settings из core/settings.py
 
-Processor переиспользует `core/settings.py`. Собственные настройки минимальны:
-
-```python
-@dataclass
-class ProcessorConfig:
-    worker_concurrency: int = 5
-    poll_interval: float = 0.5
-```
+Processor переиспользует `core/settings.py`. Собственные настройки минимальны.
 
 ### R-PR26: Environment variables — только DB credentials
 
@@ -376,7 +300,7 @@ class ProcessorConfig:
 
 ---
 
-## 8. Антипаттерны (ЗАПРЕЩЕНО)
+## Антипаттерны (ЗАПРЕЩЕНО)
 
 | Антипаттерн | Почему | Правило |
 |-------------|--------|---------|
@@ -387,7 +311,11 @@ class ProcessorConfig:
 | Ручной pool.release() без try | Утечка соединений | R-PR15 |
 | Отсутствие SKIP LOCKED | Гонка воркеров | R-PR11 |
 | Hardcoded credentials | Security | R-PR26 |
+| ThreadPoolExecutor для rapidfuzz | GIL блокирует event loop | R-PR19 |
+| Неограниченный список кандидатов | CROSS JOIN деградирует БД | R-PR10 |
+| Отсутствие drain при shutdown | Потеря сообщений | R-PR3 |
+| Дроп сообщений при отсутствии гео | Событие не попадает на карту | R-PR8.1 |
 
 ---
 
-*Правила основаны на анализе кодовой базы processor/ — июль 2026*
+*Правила основаны на анализе кодовой базы processor/ — август 2026*

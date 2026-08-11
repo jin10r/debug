@@ -9,6 +9,12 @@ from core.settings import settings
 from core.app_factory import create_app
 from core.utils.logging_config import setup_logging
 
+if not settings.jwt or not settings.jwt.secret:
+    raise RuntimeError(
+        "FATAL: JWT_SECRET is required in environment (R-C8). "
+        "Set JWT_SECRET in .env or docker-compose.yml."
+    )
+
 # Configure structured logging — параметры из централизованного settings.
 setup_logging(
     level=getattr(logging, settings.app.log_level.upper(), logging.INFO),

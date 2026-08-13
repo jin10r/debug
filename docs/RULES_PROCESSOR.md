@@ -134,9 +134,15 @@ delay = min(2 ** attempt, 30)
 
 **Исключение:** Технические дубликаты (`ON CONFLICT DO NOTHING`).
 
-### R-PR10: process_candidates в PostGIS + Лимит Top-5
+### R-PR9: SemanticResolver исключён из геометрии
 
-Python **ДОЛЖЕН ограничивать** количество кандидатов, передаваемых в `process_candidates` (строго **Top-5** по `score`). Передача неограниченного списка запрещена, так как это вызывает CROSS JOIN и деградирует БД.
+`SemanticResolver` (и его наследники) НЕ ДОЛЖНЫ влиять на выбор стратегии геометрии или фильтрацию кандидатов. Его результаты используются ТОЛЬКО для отладки и логирования.
+
+**Правило:** Если `SemanticResolver` вернул `strategy` или отфильтровал `geo_ids`, эти данные игнорируются при вызове `process_candidates_v2`. Передача стратегии как 4-й параметр (`p_hint`) сохранена для совместимости, но функция её игнорирует.
+
+### R-PR10: process_candidates_v2 в PostGIS + Лимит Top-5
+
+Python **ДОЛЖЕН ограничивать** количество кандидатов, передаваемых в `process_candidates_v2` (строго **Top-5** по `score`). Передача неограниченного списка запрещена, так как это вызывает деградацию БД.
 
 ```python
 # R-PR10: hard cap at Top-5 to protect PostGIS process_candidates from CROSS JOIN blowup
@@ -144,6 +150,26 @@ geo_ids = geo_ids[:5]
 geo_scores = geo_scores[:5]
 geo_texts = geo_texts[:5]
 ```
+
+**Вызов из Python (4 параметра, без центра/радиуса):**
+
+```sql
+WITH pc AS (
+    SELECT result_strategy, result_geom, result_matches,
+           result_confidence, result_diagnostics
+    FROM process_candidates_v2(
+        $6::int[], $7::double precision[], $8::text[], $9::varchar
+    )
+),
+inserted AS (
+    INSERT INTO events (...) SELECT ... FROM pc
+    WHERE pc.result_strategy != 'random_null'
+    ON CONFLICT (message_id, event_time) DO NOTHING
+    RETURNING ...
+)
+```
+
+**Правило:** Если v2 вернул `random_null` (geom=NULL), processor генерирует случайную точку через `_random_point()` и вставляет со strategy=`random` (R-PR22). Random точка НЕ генерируется внутри SQL.
 
 ### R-PR11: Pending events — SKIP LOCKED
 
@@ -297,6 +323,24 @@ Processor переиспользует `core/settings.py`. Собственны�
 | `POSTGRES_DB` | нет | Имя БД (default: postgres) |
 
 **Правило:** Всё остальное — хардкод в `settings.py`.
+
+### R-PR27: Geometry-First (Отказ от семантических эвристик в геометрии)
+Processor НЕ ДОЛЖЕН анализировать семантику текста (предлоги «между/от/до», отрицания «не/нет», контекстные списки) для выбора стратегии геометрии или фильтрации кандидатов.
+Выбор стратегии (`single_match`, `intersection`, `street_segment`, `weighted_centroid`) определяется **ИСКЛЮЧИТЕЛЬНО** пространственными отношениями найденных кандидатов в функции `process_candidates()` (PostGIS).
+
+**Алгоритм принятия решений (PostGIS):**
+1. Наличие 2+ пересекающихся LINESTRING → `intersection` (POINT).
+2. Наличие «главной» LINESTRING, имеющей пространственную связь (пересечение или `ST_DWithin` ≤ 50м) с 2+ другими кандидатами → `street_segment` (LINESTRING).
+3. Отсутствие пересечений, компактный кластер (scatter ≤ 1500м) → `weighted_centroid` (POINT).
+4. 1 кандидат → `single_match`.
+5. 0 кандидатов или scatter > 1500м → `random`.
+
+**Запрещено:**
+- Pre-filter в Python на основе NLP-правил (удаление кандидатов из-за частицы «не»).
+- Передача «хинтов» (hints) из `SemanticResolver` в `process_candidates`.
+- Дроп кандидатов на основе контекста. Если `GeoMatcher` нашел топоним с `score >= threshold`, он передается в SQL.
+
+**Принцип:** «Если матчер нашел топоним, он участвует в геометрическом расчете. Топология OSM сама расставит точки над i`.
 
 ---
 

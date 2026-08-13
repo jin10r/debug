@@ -57,13 +57,14 @@ BEGIN
                     '{backfilled}',
                     'true'::jsonb
                 )
-            FROM process_candidates(
+            FROM process_candidates_v2(
                 ARRAY(SELECT (m->>'geo_id')::int FROM jsonb_array_elements(event_rec.matches) m),
                 ARRAY(SELECT (m->>'similarity')::float FROM jsonb_array_elements(event_rec.matches) m),
                 ARRAY(SELECT m->>'matched_text' FROM jsonb_array_elements(event_rec.matches) m),
-                30.83135, 46.49804, 0.045
+                NULL
             ) pc
-            WHERE e.id = event_rec.id;
+            WHERE e.id = event_rec.id
+              AND pc.result_strategy != 'random_null';
             
             v_updated_count := v_updated_count + 1;
         EXCEPTION

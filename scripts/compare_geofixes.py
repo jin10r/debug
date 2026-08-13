@@ -27,7 +27,6 @@ from core.utils.text_preprocessor import is_promotional
 from processor.geo_matcher import GeoMatcher
 from processor.morphology import Morphology
 from processor.phonetic_index import PhoneticIndex
-from processor.semantic_resolver import SemanticResolver
 from processor.word_tokenizer import tokenize
 
 
@@ -59,13 +58,10 @@ async def main(csv_path: str) -> None:
         print('GeoMatcher init failed')
         return
 
-    resolver = SemanticResolver(morph, index)
-    await resolver.initialize(pool)
-
     from core.settings import settings
     qo = settings.question_overlay
     center_lon, center_lat, radius = qo.center_lon, qo.center_lat, qo.radius
-    max_text_length = settings.similarity.max_text_length
+    max_text_length = settings.parser.max_text_length
 
     stats_old: dict = {}
     stats_new: dict = {}
@@ -95,30 +91,14 @@ async def main(csv_path: str) -> None:
             if not geo_ids:
                 new_strategy, new_geom = 'random', 'POINT'
             else:
-                strategy = None
-                if len(geo_ids) > 1:
-                    resolved = await resolver.resolve(
-                        text=raw_text, tokens=tokens, lemmas=lemmas,
-                        candidates=entities)
-                    if resolved is not None:
-                        strategy = resolved.get('strategy')
-                        rids = resolved.get('geo_ids')
-                        if rids is not None:
-                            id_set = set(rids)
-                            geo_ids = [g for g in geo_ids if g in id_set]
-                            geo_scores = [s for g, s in zip(geo_ids, geo_scores)
-                                          if g in id_set]
-                            geo_texts = [t for g, t in zip(geo_ids, geo_texts)
-                                         if g in id_set]
                 async with pool.acquire() as conn:
                     pc = await conn.fetchrow(
                         """SELECT ST_GeometryType(result_geom) AS gtype,
                                   result_strategy AS strat
-                           FROM process_candidates($1::int[], $2::float[],
-                                                   $3::text[], $4::varchar,
-                                                   $5, $6, $7)""",
+                           FROM process_candidates_v2($1::int[], $2::float[],
+                                                       $3::text[], $4::varchar)""",
                         geo_ids, [float(s) for s in geo_scores], geo_texts,
-                        strategy, center_lon, center_lat, radius)
+                        None)
                 new_strategy = pc['strat']
                 new_geom = (pc['gtype'] or '?').replace('ST_', '') if pc['gtype'] else '?'
 

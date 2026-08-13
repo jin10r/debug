@@ -114,20 +114,21 @@ SELECT geom FROM geo WHERE id = $1;  -- может быть invalid
 
 | Стратегия | Тип геометрии | Когда |
 |-----------|---------------|-------|
-| `random` | POINT | 0 совпадений |
-| `single_match` | Любой | 1 совпадение (score >= 0.85) |
-| `intersection` | POINT | 2+ пересекающихся объекта |
-| `street_segment` | LINESTRING | Линия, пересекающая 2+ объекта (сегмент ≤ 2000м) |
-| `weighted_centroid` | POINT | 2+ объекта, scatter ≤ 1500м |
+| `random` | POINT | 0 совпадений (генерируется processor) |
+| `random_null` | NULL | Внутренний маркер: v2 не смог вычислить геометрию |
+| `single_match` | Любой | 1 совпадение (score >= 0.70) |
+| `intersection` | POINT | Компактный кластер кандидатов (spread <= 40м), нет валидного street_segment |
+| `street_segment` | LINESTRING / MULTILINESTRING | Линия, имеющая связь с 2+ кандидатами (ST_Intersects или ST_DWithin <= 50м) |
+| `weighted_centroid` | POINT | 2+ объекта, scatter <= 1500м, нет линии/сегмента |
 
-**Правило:** `random`, `intersection`, `weighted_centroid` ВСЕГДА возвращают POINT (валидация через триггер). `street_segment` всегда возвращает LINESTRING. `single_match` может быть любым типом.
+**Правило:** `random`, `intersection`, `weighted_centroid` ВСЕГДА возвращают POINT (валидация через триггер). `street_segment` возвращает LINESTRING или MULTILINESTRING. `single_match` может быть любым типом. `random_null` имеет geom=NULL и НЕ проходит триггер — processor конвертирует в `random` перед INSERT.
 
-**Описание стратегий:**
-- `single_match`: выбирается один кандидат с highest score. При score >= 0.85 → full confidence (weight ×0.4). При score < 0.85 → `random`.
-- `intersection`: пересечение геометрий двух кандидатов. Harmonic mean * 1.0 + bonus 0.3. Допускается если один >= 0.95, второй >= 0.80.
-- `street_segment`: сегмент линии между первым и последним пересечением с объектами. Вес 0.9. Сегмент ≤ 2000м.
-- `weighted_centroid`: Weighted centroid из пересечений пар (вес ×2.5) и центроидов кандидатов (вес ×1.0). Scatter ≤ 1500м. Confidence = AVG(base_score) * 0.85 - scatter_penalty.
-- `random`: случайная точка в зоне `question_overlay`.
+**Описание стратегий v2:**
+- `single_match`: выбирается один кандидат с highest score. При score >= 0.70 → участвует в гипотезах. При anti-list guard (сильный выброс >2000м) → принудительный single_match.
+- `intersection`: среднее координат всех кандидатов. Только если spread <= 40м. Не переопределяет валидный `street_segment`.
+- `street_segment`: сегмент главной линии между первым и последним якорем. Главная линия: connection_count >= 2, tiebreak по score desc, длина desc. MULTILINESTRING → longest component. Сегмент 50–2500м. Boundary protection: GREATEST(0.001, ...) / LEAST(0.999, ...).
+- `weighted_centroid`: Weighted centroid из пересечений пар (вес ×2.5) и центроидов кандидатов (вес ×1.0). Scatter <= 1500м. Не применяется если есть валидная линия.
+- `random_null`: 0 валидных кандидатов (score < 0.70 или невалидная геометрия). Processor генерирует случайную точку в зоне `question_overlay` (R-PR22).
 
 ### R-DB9: Валидация geometry ↔ strategy
 
@@ -140,81 +141,78 @@ IF NEW.strategy IN ('random', 'weighted_centroid', 'intersection')
 END IF;
 
 IF NEW.strategy = 'street_segment'
-   AND ST_GeometryType(NEW.geom) != 'ST_LineString' THEN
-    RAISE EXCEPTION 'strategy "street_segment" требует LINESTRING-геометрию';
+   AND ST_GeometryType(NEW.geom) NOT LIKE 'ST_LineString%' THEN
+    RAISE EXCEPTION 'strategy "street_segment" требует LINESTRING/MULTILINESTRING-геометрию';
 END IF;
 ```
 
-**Правило:** Невалидная комбинация → INSERT/UPDATE отклоняется с ошибкой.
+**Правило:** `random_null` имеет geom=NULL и НЕ проходит через триггер — processor конвертирует в `random` перед INSERT. Невалидная комбинация → INSERT/UPDATE отклоняется с ошибкой.
 
-### R-DB10: process_candidates — контракт функции
+### R-DB10: process_candidates_v2 — контракт функции
 
 ```sql
-CREATE OR REPLACE FUNCTION process_candidates(
-    p_geo_ids           INT[]   DEFAULT NULL,
-    p_scores            FLOAT[] DEFAULT NULL,
-    p_matched_texts     TEXT[]  DEFAULT NULL,
-    p_center_lon        FLOAT   DEFAULT 30.83135,
-    p_center_lat        FLOAT   DEFAULT 46.49804,
-    p_radius            FLOAT   DEFAULT 0.045
+CREATE OR REPLACE FUNCTION process_candidates_v2(
+    p_geo_ids            INTEGER[]   DEFAULT NULL,
+    p_scores             DOUBLE PRECISION[] DEFAULT NULL,
+    p_texts              TEXT[]      DEFAULT NULL,
+    p_hint               VARCHAR     DEFAULT NULL
 )
-RETURNS TABLE(
-    result_geom       GEOMETRY,
-    result_strategy   VARCHAR(40),
-    result_matches    JSONB,
-    result_confidence FLOAT,
-    result_diagnostics JSONB
+RETURNS TABLE (
+    result_strategy      TEXT,
+    result_geom          GEOMETRY(4326),
+    result_matches       JSONB,
+    result_confidence    DOUBLE PRECISION,
+    result_diagnostics   JSONB
 )
 ```
 
 **Входные параметры:**
 - `p_geo_ids` — массив ID гео-объектов (из NLP-матчера)
 - `p_scores` — массив similarity scores (0.0–1.0)
-- `p_matched_texts` — массив matched_text для штрафа коротких совпадений
-- `p_center_lon/lat` — центр зоны для `random`
-- `p_radius` — радиус зоны для `random`
+- `p_texts` — массив matched_text для дедупликации и diagnostics
+- `p_hint` — игнорируется (совместимость со старыми инструментами)
 
 **Выход:**
-- `result_geom` — итоговая геометрия (POINT для random/intersection/weighted_centroid/single_match_point, LINESTRING для street_segment)
-- `result_strategy` — `random` | `single_match` | `intersection` | `street_segment` | `weighted_centroid`
+- `result_strategy` — `random_null` | `single_match` | `intersection` | `street_segment` | `weighted_centroid`
+- `result_geom` — итоговая геометрия (POINT для random/intersection/weighted_centroid/single_match, LINESTRING/MULTILINESTRING для street_segment, NULL для random_null)
 - `result_matches` — JSONB массив всех кандидатов (geo_id, name, similarity, matched_text)
-- `result_confidence` — итоговый score (0.0–1.0+)
+- `result_confidence` — итоговый score (0.0–1.0)
 - `result_diagnostics` — JSONB с типом гипотезы, geo_ids, score
 
 **Внутренняя логика:**
-1. Фильтрация по району (если есть district в кандидатах)
-2. Штраф за короткие совпадения: length < 3 → *0.7, только цифры → *0.6
-3. Дедупликация по `ST_AsText(ST_SnapToGrid(geom, 0.0001))`
-4. Генерация 4 гипотез (H1–H4)
-5. Выбор лучшей по приоритету: intersection (5) > street_segment (4) > weighted_centroid (3) > single_match (1)
-6. Fallback: если нет гипотез → лучший кандидат или random
+1. Дедупликация по geo_id (max score), фильтр score >= 0.70, лимит 10 кандидатов
+2. Загрузка `geo.geom_m` (3857) для быстрых ST_DWithin/ST_Distance
+3. split на lines (LINESTRING/MULTILINESTRING) и points (POINT/POLYGON)
+4. connections: ST_Intersects OR ST_DWithin(50m) между lines и всеми кандидатами
+5. Main Line Election: line с connection_count >= 2, tiebreak score desc, length desc
+6. Normalize Main Line: LINESTRING as-is; MULTILINESTRING → longest component
+7. Street Segment: project anchors via ST_LineLocatePoint, build ST_LineSubstring с boundary protection, validate 50–2500m
+8. Intersection: compact anchor cluster (radius <= 40m), только если нет валидного street_segment
+9. Weighted Centroid: scatter <= 1500м, только если нет линии/сегмента
+10. Anti-list Guard: сильный кандидат (score >= 0.85) на расстоянии >2000м от выбранной геометрии → fallback single_match
+11. Single Match: лучший кандидат по score, tiebreak тип (line > point), длина, geo_id
+12. Random Null: 0 валидных кандидатов → strategy='random_null', geom=NULL
 
 **Вызов из Python (CTE pipeline):**
 
 ```sql
 WITH pc AS (
-    SELECT result_geom, result_strategy, result_matches,
+    SELECT result_strategy, result_geom, result_matches,
            result_confidence, result_diagnostics
-    FROM process_candidates(
-        $6::int[], $7::double precision[], $8::text[],
-        $9::float, $10::float, $11::float
+    FROM process_candidates_v2(
+        $6::int[], $7::double precision[], $8::text[], $9::varchar
     )
 ),
 inserted AS (
-    INSERT INTO events (...) SELECT ... FROM pc WHERE pc.result_geom IS NOT NULL
+    INSERT INTO events (...) SELECT ... FROM pc
+    WHERE pc.result_strategy != 'random_null'
     ON CONFLICT (message_id, event_time) DO NOTHING
     RETURNING ...
 ),
-meta_upd AS (
-    UPDATE events_meta SET version = version + 1 ...
-),
-notify_call AS (
-    SELECT pg_notify('events_new', ...)
-)
-SELECT i.id FROM inserted i;
+...
 ```
 
-**Правило:** INSERT + meta-update + pg_notify — один SQL-запрос.
+**Правило:** `random_null` не вставляется. Processor генерирует случайную точку и вставляет со strategy=`random` (R-PR22). INSERT + meta-update + pg_notify — один SQL-запрос.
 
 ---
 

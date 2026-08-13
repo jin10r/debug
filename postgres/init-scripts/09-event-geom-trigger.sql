@@ -21,7 +21,7 @@ BEGIN
     END IF;
 
     IF NEW.strategy = 'street_segment'
-       AND ST_GeometryType(NEW.geom) != 'ST_LineString' THEN
+       AND ST_GeometryType(NEW.geom) NOT LIKE 'ST_LineString%' THEN
         RAISE EXCEPTION
             'strategy "street_segment" требует LINESTRING-геометрию, получено: %',
             ST_GeometryType(NEW.geom);

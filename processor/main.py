@@ -37,7 +37,7 @@ from .geo_matcher import GeoMatcher
 from .health import HealthServer
 from .layer_classifier import LayerClassifier
 from .word_tokenizer import tokenize
-from core.utils.text_preprocessor import preprocess_light, strip_tail, is_promotional
+from core.utils.text_preprocessor import strip_tail, is_promotional
 from processor.metrics import processor_match_time_seconds, processor_tier_distribution
 
 logger = logging.getLogger(__name__)
@@ -149,11 +149,10 @@ _INSERT_EVENT_SIMPLE = """
 
 _INSERT_EVENT_FROM_CANDIDATES = """
     WITH pc AS (
-        SELECT result_geom, result_strategy, result_matches,
+        SELECT result_strategy, result_geom, result_matches,
                result_confidence, result_diagnostics
-        FROM process_candidates(
-            $6::int[], $7::double precision[], $8::text[],
-            $9::float, $10::float, $11::float
+        FROM process_candidates_v2(
+            $6::int[], $7::double precision[], $8::text[], $9::varchar
         )
     ),
     inserted AS (
@@ -164,7 +163,7 @@ _INSERT_EVENT_FROM_CANDIDATES = """
                pc.result_strategy, pc.result_geom, pc.result_matches,
                pc.result_confidence, pc.result_diagnostics
         FROM pc
-        WHERE pc.result_geom IS NOT NULL
+        WHERE pc.result_strategy != 'random_null'
         ON CONFLICT (message_id, event_time) DO NOTHING
         RETURNING id, event_time, geom, layer, strategy, description,
                   photo_url, matches
@@ -604,20 +603,22 @@ class ProcessorBot:
     async def _insert_event_from_candidates(self, *, message_id, event_time,
                                               description, photo_path, layer,
                                               geo_ids, geo_scores, geo_texts):
-        """Вставка события с вызовом process_candidates для разрешения кандидатов."""
+        """Вставка события с вызовом process_candidates_v2 для разрешения кандидатов."""
         scores_array = [float(s) for s in geo_scores]
-        if settings and hasattr(settings, 'question_overlay'):
-            qo = settings.question_overlay
-            center_lon, center_lat, radius = qo.center_lon, qo.center_lat, qo.radius
-        else:
-            center_lon, center_lat, radius = 30.83135, 46.49804, 0.045
-        return await self._run_insert(
+        result = await self._run_insert(
             _INSERT_EVENT_FROM_CANDIDATES,
             (message_id, event_time, description, photo_path, layer,
-             geo_ids, scores_array, geo_texts,
-             center_lon, center_lat, radius),
+             geo_ids, scores_array, geo_texts, None),
             message_id=message_id,
         )
+        if result is None:
+            result = await self._insert_event(
+                message_id=message_id, event_time=event_time,
+                description=description, photo_path=photo_path,
+                layer=layer, strategy='random',
+                geom_wkt=self._random_point(),
+            )
+        return result
 
     async def _run_insert(self, sql, params, *, message_id):
         """Выполнение SQL-запроса вставки события и возврат результата."""

@@ -52,8 +52,8 @@ PostgreSQL — единственное надежное хранилище со
 
 ```
 Telegram (MTProto) → parser (strip_tail + preprocess_light) → pending_events
-    → processor (tokenize → lemmatize → classify → find_geo → resolve → INSERT)
-    → postgres (process_candidates CTE + pg_notify)
+    → processor (tokenize → lemmatize → classify → find_geo → resolve → process_candidates_v2)
+    → postgres (geometry-first CTE + pg_notify)
     → core (LISTEN events_new → WebSocket broadcast)
     → web (nginx reverse proxy + Leaflet PWA)
     → Browser / Telegram WebView
@@ -83,7 +83,7 @@ Telegram (MTProto) → parser (strip_tail + preprocess_light) → pending_events
 | Синхронные вызовы в async hot path | Блокирует event loop | R-P2, R-C2 |
 | SQL-конкатенация | SQL injection | R-P12, R-C17 |
 | INSERT без ON CONFLICT | Дубликаты при ретраях | R-P5, R-PR12 |
-| Дроп сообщения при спаме/нет гео | Событие не попадает на карту | R-PR8.1 |
+| Дроп сообщений при спаме/нет гео | Событие не попадает на карту | R-PR8.1 |
 | Отсутствие drain при shutdown | Потеря сообщений | R-P3, R-C3, R-PR3 |
 | Hardcoded credentials | Security | G-11 |
 | Внешние порты кроме 80 | Security | G-6 |
@@ -91,6 +91,7 @@ Telegram (MTProto) → parser (strip_tail + preprocess_light) → pending_events
 | Эфемерная генерация JWT_SECRET | Массовый logout при деплое | R-C8 |
 | Ручной DELETE по времени в events | Lock contention, ломает BRIN | R-DB2, R-DB3 |
 | ThreadPoolExecutor для rapidfuzz | GIL блокирует event loop | R-PR19 |
+| Семантические эвристики текста для геометрии | Нарушение Geometry-First, неточность | R-PR27, R-DB8 |
 
 ---
 

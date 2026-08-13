@@ -511,18 +511,12 @@ class ProcessorBot:
         lemmas = self.morph.lemmatize_tokens(tokens)
         layer = self.layer_classifier.classify(lemmas)
 
-        max_text_length = (
-            settings.similarity.max_text_length
-            if settings and settings.similarity else 380
-        )
         promotional = is_promotional(raw_text)
-        if promotional or not raw_text or len(raw_text) > max_text_length:
+        if promotional or not raw_text:
             if not raw_text:
                 description = 'без описания'
-            elif promotional:
-                description = raw_text
             else:
-                description = 'слишком длинное сообщение не является релевантной локацией'
+                description = '[promotional content]'
             processor_tier_distribution.labels(tier='no_match').inc()
             processor_match_time_seconds.observe(time.perf_counter() - start_time)
             return self._enrich(

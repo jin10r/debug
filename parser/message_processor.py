@@ -6,6 +6,7 @@ NLP pipeline (tokenize, lemmatize, classify, geo) is handled by processor servic
 
 import asyncio
 
+from core.settings import settings
 from core.utils.text_preprocessor import strip_tail, preprocess_light, is_promotional
 
 
@@ -30,6 +31,8 @@ class MessageProcessor:
 
         cleaned = strip_tail(text)
         description = preprocess_light(cleaned)
+        if len(description) > settings.parser.max_text_length:
+            description = 'слишком длиннное сообщение, не является релевантной локацией'
         tokens = len(description.split())
         promo = is_promotional(description)
 

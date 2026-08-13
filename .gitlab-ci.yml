@@ -96,6 +96,19 @@ backend-tests:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH'
 
+# ── Parser: поведенческий контроль MAX_TEXT_LENGTH фильтра ───────────────────
+parser-length-filter:
+  stage: test
+  image: $PYTHON_IMAGE
+  before_script:
+    - python -V
+    - pip install -r requirements.txt -r parser/requirements.txt -r requirements-dev.txt
+  script:
+    - pytest -q tests/test_parser_length_filter.py -v
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+
 # ── Frontend: строгая проверка типов и сборка ────────────────────────────────
 frontend-build:
   stage: test

@@ -199,6 +199,9 @@ class ParserConfig:
     # Каталог хранения медиафайлов (фотографии событий).
     events_media_dir: str = "/media/events"
 
+    # Макс. длина текста (символов) после preprocess_light для вставки в pending_events.
+    max_text_length: int = 380
+
     # SOCKS5/HTTP proxy для pyrogram.
     socks5_host: Optional[str] = None
     proxy_host: Optional[str] = None

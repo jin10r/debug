@@ -372,6 +372,8 @@ class ParserBot:
         raw_text = self._extract_text(message)
         stripped = strip_tail(raw_text)
         preserved = self._sanitize_text(preprocess_light(stripped)) or ''
+        if len(preserved) > settings.parser.max_text_length:
+            preserved = 'слишком длиннное сообщение, не является релевантной локацией'
 
         photo_file_id = None
         if message.photo:

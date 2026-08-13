@@ -521,7 +521,8 @@ class ProcessorBot:
             return self._enrich(
                 await self._insert_event(
                     message_id=message_id, event_time=event_time,
-                    description=description, photo_path=None,
+                    description=description,
+                    photo_path=row.get('photo_file_id'),
                     layer=layer, strategy='random',
                     geom_wkt=self._random_point(),
                 ),

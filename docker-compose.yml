@@ -59,10 +59,6 @@ services:
         reservations:
           cpus: '0.5'
           memory: 512M
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
     restart: unless-stopped
     logging: *default-logging
 

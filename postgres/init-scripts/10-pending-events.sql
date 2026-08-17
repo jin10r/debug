@@ -20,18 +20,30 @@ CREATE INDEX IF NOT EXISTS idx_pending_events_status
     WHERE status = 'pending';
 
 -- NOTIFY parser о необходимости скачать фото после обработки events.
+-- ВАЖНО: event_id берётся из events (резолв по message_id+event_time),
+-- а НЕ NEW.id — id в pending_events и events не совпадают (разные sequences),
+-- иначе photo_url никогда не привязывается к событию.
 CREATE OR REPLACE FUNCTION notify_photo_download()
 RETURNS TRIGGER AS $$
+DECLARE
+    v_event_id BIGINT;
 BEGIN
     IF NEW.status = 'done' AND OLD.status IS DISTINCT FROM 'done'
        AND NEW.photo_file_id IS NOT NULL THEN
-        PERFORM pg_notify('photo_download',
-            jsonb_build_object(
-                'event_id', NEW.id,
-                'message_id', NEW.message_id,
-                'photo_file_id', NEW.photo_file_id
-            )::text
-        );
+        SELECT e.id INTO v_event_id
+        FROM events e
+        WHERE e.message_id = NEW.message_id
+          AND e.event_time = NEW.event_time
+        LIMIT 1;
+        IF v_event_id IS NOT NULL THEN
+            PERFORM pg_notify('photo_download',
+                jsonb_build_object(
+                    'event_id', v_event_id,
+                    'message_id', NEW.message_id,
+                    'photo_file_id', NEW.photo_file_id
+                )::text
+            );
+        END IF;
     END IF;
     RETURN NEW;
 END;

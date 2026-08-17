@@ -203,14 +203,16 @@ window.createGeometryCollection = function(map, coords, properties) {
     return elements;
 };
 
-// Оборачивает слова matched_part в <strong> в уже HTML-экранированном тексте.
-// matched_part — лемматизированный n-грамм ("молодёжный виноградово").
+// Оборачивает слова matched_text в <strong> в уже HTML-экранированном тексте.
+// matched_text — лемматизированный n-грамм ("молодёжный виноградово"),
+// совпавший фрагмент сообщения (surface из матчера).
 // Стемный regex: первые max(4, len-2) символов слова леммы + любой суффикс
 // → "молодёжн" совпадает с "молодёжной" в description.
 function _highlightMatchedParts(escapedText: string, matches: Array<Record<string, unknown>> | undefined): string {
     if (!matches || !matches.length) return escapedText;
     const parts = [...new Set(
-        matches.map(m => m.matched_part as string).filter(p => p && p.trim().length > 1)
+        matches.map(m => (m.matched_text as string) || (m.matched_part as string))
+            .filter(p => p && p.trim().length > 1)
     )];
     let result = escapedText;
     for (const part of parts) {

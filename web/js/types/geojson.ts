@@ -58,6 +58,8 @@ export interface EventProperties {
     matches?: Array<{
         type: string;
         confidence: number;
+        /** Lemmatized matched surface (e.g. "нерубайской") used for popup highlighting */
+        matched_text?: string;
         [key: string]: unknown;
     }>;
     

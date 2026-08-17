@@ -1,0 +1,17 @@
+# Processor service — NLP pipeline (pymorphy3 + rapidfuzz + PostGIS)
+# All versions pinned with == for reproducible Docker builds.
+asyncpg==0.30.0
+mawo-pymorphy3==1.0.4
+snowballstemmer==2.2.0
+rapidfuzz==3.9.7
+aiohttp==3.14.3
+environs==11.2.1
+prometheus-client==0.19.0
+
+# Optional: Semantic matcher (ONNX rubert-tiny2) — disabled by default
+# (settings.similarity.semantic_enabled=False).
+# Install with: pip install -e ".[semantic]" or: pip install -r requirements.txt -r requirements-semantic.txt
+# semantic:
+#     onnxruntime==1.19.2
+#     tokenizers==0.19.1
+#     numpy==1.26.4

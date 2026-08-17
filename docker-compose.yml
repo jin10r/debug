@@ -1,0 +1,415 @@
+# Docker Compose - Survival Map v3
+# Architecture: Parser (kurigram) → Processor (NLP) → PostgreSQL → Core (API)
+
+# Shared logging config — json-file с ротацией (max 50MB на сервис: 5×10MB).
+# Без этого docker накапливает логи без ограничений и съедает диск.
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+# Shared PostgreSQL credentials (единый источник для всех сервисов)
+x-pg-env: &pg-env
+  POSTGRES_USER: ${POSTGRES_USER:-postgres}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+  POSTGRES_DB: ${POSTGRES_DB:-postgres}
+
+# Shared DNS
+x-dns: &dns
+  dns:
+    - 9.9.9.9
+    - 1.1.1.1
+
+services:
+  # =============================================================================
+  # PostgreSQL - основной storage с PostGIS
+  # =============================================================================
+  postgres:
+    image: survival_postgres:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.postgres
+      network: host
+    container_name: postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+      # Role-specific timeouts
+      PARSER_STATEMENT_TIMEOUT: 60000
+      CORE_STATEMENT_TIMEOUT: 30000
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - db
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres && psql -U postgres -d postgres -c 'SELECT pg_is_in_recovery()' | grep -q 'f' && psql -U postgres -d postgres -c 'SELECT 1'"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 180s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    restart: unless-stopped
+    logging: *default-logging
+
+  # =============================================================================
+  # Parser - Telegram клиент (kurigram) + предобработка текста + фото
+  # =============================================================================
+  parser:
+    image: survival_parser:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.parser
+      network: host
+    container_name: parser
+    stop_grace_period: 60s
+    environment:
+      <<: *pg-env
+      PROXY_HOST: ${PROXY_HOST:-}
+      PROXY_PORT: ${PROXY_PORT:-1080}
+      PROXY_SCHEME: ${PROXY_SCHEME:-socks5}
+    <<: *dns
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    volumes:
+      - ./parser/session.session:/app/parser/session.session:rw
+      - events_media:/media/events:rw
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend
+      - db
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/parser_heartbeat && [ $$(( $$(date +%s) - $$(cat /tmp/parser_heartbeat) )) -lt 60 ]"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: false
+    tmpfs:
+      - /tmp:noexec,nosuid,size=100m
+    restart: unless-stopped
+    logging: *default-logging
+
+  # =============================================================================
+  # Processor - NLP pipeline (pymorphy3 + rapidfuzz + PostGIS + ONNX)
+  # =============================================================================
+  processor:
+    image: survival_processor:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.processor
+      network: host
+    container_name: processor
+    stop_grace_period: 30s
+    environment:
+      <<: *pg-env
+    <<: *dns
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend
+      - db
+    expose:
+      - "8765"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8765/health/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 120s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          # Память: DAWG pymorphy3 (~20MB) + LRU-кэши + ONNX runtime
+          cpus: '1.5'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+    logging: *default-logging
+
+  # =============================================================================
+  # Core - API сервер (опционально)
+  # =============================================================================
+  core:
+    image: survival_core:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.core
+      network: host
+    container_name: core
+    stop_grace_period: 30s
+    environment:
+      <<: *pg-env
+      BOT_TOKEN: ${BOT_TOKEN}
+      # Стабильный секрет подписи JWT (≥32 симв.): токены переживают рестарт
+      # core и общие для всех реплик. Если не задан — settings генерирует
+      # эфемерный секрет на каждый старт (токены инвалидируются при рестарте).
+      JWT_SECRET: ${JWT_SECRET}
+      WEBAPP_URL: ${WEBAPP_URL:-}
+      REDIRECT_URL: ${REDIRECT_URL:-}
+      TELEGRAM_VALIDATION_ENABLED: ${TELEGRAM_VALIDATION_ENABLED:-True}
+      PROXY_HOST: ${PROXY_HOST:-}
+      PROXY_PORT: ${PROXY_PORT:-1080}
+      PROXY_SCHEME: ${PROXY_SCHEME:-socks5}
+    <<: *dns
+    volumes:
+      - events_media:/media/events:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - frontend
+      - backend
+      - db
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; exit(urllib.request.urlopen('http://localhost:8080/health').status != 200)\""]
+      interval: 30s
+      timeout: 10s
+      start_period: 40s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 768M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+    logging: *default-logging
+
+  # =============================================================================
+  # Web - reverse proxy + статика фронтенда
+  # =============================================================================
+  web:
+    image: survival_web:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      network: host
+    container_name: web
+    stop_grace_period: 30s
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - events_media:/media/events:ro
+    depends_on:
+      core:
+        condition: service_healthy
+    networks:
+      - frontend
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost/health/ready || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 128M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # NET_BIND_SERVICE — для bind на 80, остальные drop'нуты.
+    cap_add:
+      - NET_BIND_SERVICE
+      - CHOWN
+      - SETGID
+      - SETUID
+      - DAC_OVERRIDE
+    restart: unless-stopped
+    logging: *default-logging
+
+  # =============================================================================
+  # Monitoring: postgres-exporter + Prometheus + Grafana
+  # =============================================================================
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: postgres-exporter
+    command:
+      - '--config.file=/etc/postgres_exporter/postgres_exporter.yml'
+    environment:
+      # Подключение к БД (internal-сеть db, TCP — требует scram-sha-256 пароль).
+      DATA_SOURCE_NAME: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-postgres}?sslmode=disable
+      # Кастомные SQL-метрики (pg_stat_activity, pg_stat_statements_top,
+      # pg_bloat, pg_replication_lag) — те самые запросы из queries.yml.
+      PG_EXPORTER_EXTEND_QUERY_PATH: /etc/postgres_exporter/queries.yml
+    volumes:
+      - ./postgres/config/queries.yml:/etc/postgres_exporter/queries.yml:ro
+      # Пустой дефолтный конфиг — убирает warn "Error loading config" при старте.
+      - ./postgres/config/postgres_exporter.yml:/etc/postgres_exporter/postgres_exporter.yml:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - db
+    expose:
+      - "9187"
+    # Без healthcheck: образ собран на distroless (нет /bin/sh для CMD-SHELL),
+    # а живость сервиса и так видна в Prometheus -> Status -> Targets.
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+        reservations:
+          cpus: '0.05'
+          memory: 32M
+    restart: unless-stopped
+    logging: *default-logging
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    depends_on:
+      postgres-exporter:
+        condition: service_started  # у exporter нет healthcheck (distroless)
+    networks:
+      - backend
+      - db
+    ports:
+      - "9090:9090"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/healthy >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+    logging: *default-logging
+
+  grafana:
+    build:
+      context: .
+      dockerfile: Dockerfile.grafana
+    image: survival_grafana:latest
+    container_name: grafana
+    environment:
+      # Анонимный доступ — только чтение (Viewer): дашборды видны без логина,
+      # правки и настройки — только после входа (admin/admin → сменить через
+      # GRAFANA_ADMIN_PASSWORD).
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      # Live не используется — отключаем: иначе браузер с устаревшей cookie
+      # раз в ~30с долбит /api/live/ws с "user token not found" в логах.
+      GF_LIVE_ENABLED: "false"
+      GF_DATABASE_SQLITE_TIMEOUT: "10000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      # Provisioning: datasource Prometheus + дашборды (перечитаются автоматически)
+      - ./prometheus/grafana-provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./prometheus/grafana-provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    networks:
+      - backend
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 256M
+        reservations:
+          cpus: '0.05'
+          memory: 32M
+    restart: unless-stopped
+    logging: *default-logging
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
+  db:
+    driver: bridge
+    internal: true  # No external access
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  postgres_data:
+    driver: local
+  events_media:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local

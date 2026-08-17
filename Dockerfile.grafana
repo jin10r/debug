@@ -1,0 +1,27 @@
+#syntax=docker/dockerfile:1
+# Custom Grafana image — fixes the xychart duplicate plugin registration bug.
+#
+# In grafana-oss:11.1.0, the image ships TWO plugin.json files with id="xychart":
+#   - public/app/plugins/panel/xychart/plugin.json          (legacy v1)
+#   - public/app/plugins/panel/xychart/v2/plugin.json        (current v2)
+# Both register the same pluginId → "plugin xychart is already registered".
+# We remove the legacy v1 manifest at build time (runs as root during build).
+FROM grafana/grafana-oss:11.1.0
+
+USER root
+
+# Remove the legacy v1 xychart plugin.json that conflicts with v2.
+RUN rm -f /usr/share/grafana/public/app/plugins/panel/xychart/plugin.json \
+    && echo "Fixed xychart duplicate plugin registration"
+
+# Create entrypoint wrapper that cleans stale plugins from the persistent
+# volume on each container start (runs as root for file access, then execs
+# /run.sh which drops to the grafana user internally).
+RUN echo '#!/bin/sh' > /usr/local/bin/grafana-init.sh \
+    && echo 'rm -rf /var/lib/grafana/plugins/xychart* /var/lib/grafana/plugins/geostatus* 2>/dev/null || true' >> /usr/local/bin/grafana-init.sh \
+    && echo 'exec /run.sh' >> /usr/local/bin/grafana-init.sh \
+    && chmod +x /usr/local/bin/grafana-init.sh
+
+USER grafana
+
+ENTRYPOINT ["/usr/local/bin/grafana-init.sh"]

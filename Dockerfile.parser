@@ -1,0 +1,50 @@
+# Dockerfile.parser — Parser service (kurigram + text preprocessing + photo download)
+# Multi-stage build для минимизации размера образа
+
+# =============================================================================
+# Stage 1: Builder
+# =============================================================================
+FROM python:3.11.10-slim-bookworm AS builder
+
+WORKDIR /build
+
+COPY parser/requirements.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --user --no-cache-dir -r requirements.txt && \
+    find /root/.local -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true && \
+    find /root/.local -type f -name "*.pyc" -delete && \
+    find /root/.local -type f -name "*.pyo" -delete && \
+    find /root/.local -type f -name "*.md" -delete
+
+ENV PATH="/root/.local/bin:$PATH"
+RUN python -c "from pyrogram import Client; print('✅ kurigram OK')"
+
+# =============================================================================
+# Stage 2: Runtime (минимальный образ)
+# =============================================================================
+FROM python:3.11.10-slim-bookworm
+
+WORKDIR /app
+
+ENV PYTHONUNBUFFERED="1"
+ENV PYTHONDONTWRITEBYTECODE="1"
+ENV PATH="/home/parser/.local/bin:$PATH"
+
+COPY --from=builder /root/.local /home/parser/.local
+
+RUN --mount=type=cache,target=/var/cache/apt,id=parser-runtime \
+    apt-get update && apt-get install -y --no-install-recommends procps \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -m -u 1000 parser && \
+    chmod 1777 /tmp && \
+    mkdir -p /media/events && \
+    chown -R parser:parser /app /home/parser/.local /media/events
+
+COPY --chown=parser:parser parser/ ./parser/
+COPY --chown=parser:parser core/ ./core/
+
+USER parser
+
+CMD ["python", "-m", "parser.monitoring"]

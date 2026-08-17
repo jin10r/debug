@@ -63,6 +63,10 @@ class PhoneticIndex:
         # Surface-фразы — сырые алиасы (lowercase, clean()) для Tier 2 (опечатки).
         self._surface_phrases: List[str] = []
         self._surface_phrase_meta: List[PhoneticEntry] = []
+        # Множество ВСЕХ отдельных стемов, встречающихся в любом ключе индекса
+        # (в т.ч. внутри многословных: "застав" из ('2', 'застав')). Нужен для
+        # предфильтра слайдинг-окна — см. has_stem_anywhere().
+        self._all_stems: set = set()
 
     # ----------------------------------------------------------- helpers
 
@@ -142,6 +146,10 @@ class PhoneticIndex:
         self._stem_index_sorted = new_stem_index_sorted
         self._surface_phrases = new_surface_phrases
         self._surface_phrase_meta = new_surface_meta
+        all_stems = set()
+        for key in new_stem_index:
+            all_stems.update(key)
+        self._all_stems = all_stems
 
         logger.info(
             f"[PhoneticIndex] built: {len(new_surface_phrases)} surface phrases, "
@@ -182,6 +190,10 @@ class PhoneticIndex:
         self._stem_index_sorted = new_stem_index_sorted
         self._surface_phrases = new_surface_phrases
         self._surface_phrase_meta = new_surface_meta
+        all_stems = set()
+        for key in new_stem_index:
+            all_stems.update(key)
+        self._all_stems = all_stems
         logger.info(f"[PhoneticIndex] reindexed street {street_id}")
 
     # ---------------------------------------------------------------- queries
@@ -214,3 +226,13 @@ class PhoneticIndex:
         """Проверить наличие стема в индексе (для предфильтрации)."""
         key = (stem,)
         return key in self._stem_index
+
+    def has_stem_anywhere(self, stem: str) -> bool:
+        """Стем встречается в составе ЛЮБОГО ключа индекса (в т.ч. многословного).
+
+        Для предфильтра слайдинг-окна: первый токен многословного имени
+        ("застава" из "2 застава") не имеет собственного ключа ('застав',), но
+        входит в ключ ('2', 'застав') — позиция всё равно должна генерировать
+        кандидатов, иначе имя в начале сообщения теряется.
+        """
+        return stem in self._all_stems

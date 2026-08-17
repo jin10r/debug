@@ -2,8 +2,8 @@
 Reusable input validation primitives for sensitive modules.
 
 Defense-in-depth: every user-facing entry point (API handlers, WebSocket
-messages, Telegram initData, CSRF tokens) validates through these helpers
-before touching business logic or the database.
+messages, Telegram initData) validates through these helpers before touching
+business logic or the database.
 
 Conventions:
   - Reject first, accept second: return None/False/raise on any anomaly.
@@ -26,16 +26,12 @@ MAX_INIT_DATA_LEN = 4096
 MAX_BOT_TOKEN_LEN = 256
 MAX_BODY_BYTES = 1_048_576  # 1 MB — generous for GeoJSON event payloads
 MAX_MEDIA_FILE_BYTES = 10 * 1024 * 1048  # 10 MB
-MAX_CSRF_TOKEN_LEN = 256
 MAX_JWT_LEN = 8192
 MAX_LAYER_NAME_LEN = 32
 
 # Telegram user IDs are integers (64-bit positive).
 _VALID_USER_ID_RE = re.compile(r'^\d{1,19}$')
 _VALID_LAYER_RE = re.compile(r'^[a-z_]{1,32}$')
-
-# CSRF token format: {unix_timestamp}.{64-hex-char HMAC-SHA256}
-_VALID_CSRF_RE = re.compile(r'^\d{10}\.[a-f0-9]{64}$')
 
 # Bot token format: <digits>:<alphanumeric-with-colons-and-dashes>
 # This is a basic sanity check — real security comes from HMAC verification.
@@ -199,28 +195,6 @@ def validate_bot_token(token: str) -> str:
 def validate_max_age_hours(max_age_hours: int) -> int:
     """Validate max_age_hours parameter (must be 0 < value <= 720)."""
     return validate_int(max_age_hours, "max_age_hours", 0, 720)
-
-
-# ---------------------------------------------------------------------------
-# CSRF token validation
-# ---------------------------------------------------------------------------
-
-def validate_csrf_token_format(token: str) -> str:
-    """Validate CSRF token format: {10-digit-timestamp}.{64-hex-hmac}.
-
-    Raises ValueError if the format doesn't match the expected pattern.
-    """
-    if not isinstance(token, str):
-        raise ValueError("CSRF token must be a string")
-    if '\x00' in token:
-        raise ValueError("CSRF token contains null bytes")
-    if len(token) > MAX_CSRF_TOKEN_LEN:
-        raise ValueError(f"CSRF token exceeds maximum length of {MAX_CSRF_TOKEN_LEN}")
-    if not _VALID_CSRF_RE.match(token):
-        raise ValueError(
-            "CSRF token has invalid format (expected: <10-digit-timestamp>.<64-hex-char-hmac>)"
-        )
-    return token
 
 
 # ---------------------------------------------------------------------------

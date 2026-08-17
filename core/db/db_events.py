@@ -277,7 +277,12 @@ class EventOperations:
             return {'type': 'FeatureCollection', 'features': []}
 
     async def get_events_snapshot_as_geojson(self, limit: int = 5000) -> Dict:
-        """Fetch snapshot of all events as GeoJSON (used for resync)."""
+        """Fetch snapshot of recent events as GeoJSON (used for resync).
+
+        Ограничено окном 60 минут (единый TTL для всех уровней, H3):
+        иначе клиент получал до 48 часов партиций, хотя store-клиента
+        живёт 60 минут и фильтрует 15/30/60.
+        """
         query = """
             SELECT json_build_object(
                 'type', 'FeatureCollection',
@@ -304,6 +309,7 @@ class EventOperations:
             FROM (
                 SELECT *
                 FROM events
+                WHERE event_time >= NOW() - INTERVAL '60 minutes'
                 ORDER BY id
                 LIMIT $1
             ) e

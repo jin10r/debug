@@ -184,7 +184,18 @@ class GeoMatcher:
             prev_text = clean_tokens[start_i - 1].text.lower() if start_i > 0 else ''
             is_anchored = prev_text in _LOC_PREPS
 
-            if not is_anchored and current_stem and not self._index.has_stem(current_stem):
+            # Предфильтр-якорь: пропускаем позицию, если её одиночный токен не
+            # может быть началом матча. Помимо точного стема учитываем:
+            #  - has_stem_anywhere: стем входит в ЛЮБОЙ (в т.ч. многословный)
+            #    ключ индекса — иначе "Застава 2" в начале сообщения терялось
+            #    (стем 'застав' есть только в паре ('2', 'застав'));
+            #  - длину поверхности >= 5: кандидат для Tier 2 (орфо-корректор),
+            #    который матчит по сырому surface, а не по стему — опечатка в
+            #    начале сообщения иначе не доходила до Tier 2 вовсе.
+            if (not is_anchored and current_stem
+                    and not self._index.has_stem(current_stem)
+                    and not self._index.has_stem_anywhere(current_stem)
+                    and len(clean_tokens[start_i].text) < 5):
                 continue
 
             for end_i in range(start_i, min(start_i + max_window, n)):
@@ -225,7 +236,11 @@ class GeoMatcher:
         return None
 
     async def _link_span(self, surface: str, stems: Tuple[str, ...], span: Tuple[int, int]) -> Optional[Dict]:
-        """Поиск geo-объекта по тексту: Tier 1 (стемы) → Tier 2 (опечатки)."""
+        """Поиск geo-объекта по тексту: Tier 1 (стемы) → Tier 2 (опечатки).
+
+        NOTE: в find_geo() Tier 2 выполняется батчем (tier2_queries), этот метод
+        используется только извне/тестами — держать guards консистентными.
+        """
         if not surface:
             return None
 
@@ -271,6 +286,7 @@ class GeoMatcher:
             if s_match:
                 cand, score, idx = s_match
                 if (surface[0] == cand[0]
+                        and surface[:3] == cand[:3]
                         and abs(len(cand) - len(surface)) <= max(2, int(0.2 * len(surface)))):
                     entry = s_meta[idx]
                     return {
@@ -373,7 +389,7 @@ class GeoMatcher:
                         'is_anchored': is_anchored,
                     })
 
-        if tier2_queries and self._executor:
+        if tier2_queries:
             typo_thresh = (
                 settings.similarity.surface_typo_threshold * 100
                 if settings and settings.similarity
@@ -382,19 +398,30 @@ class GeoMatcher:
             )
             s_phrases, s_meta = self._index.surface_phrases()
 
-            loop = asyncio.get_event_loop()
-            batch_results = await loop.run_in_executor(
-                self._executor,
-                _batch_fuzzy_match,
-                tier2_queries,
-                s_phrases,
-                typo_thresh
-            )
+            if self._executor:
+                loop = asyncio.get_event_loop()
+                batch_results = await loop.run_in_executor(
+                    self._executor,
+                    _batch_fuzzy_match,
+                    tier2_queries,
+                    s_phrases,
+                    typo_thresh
+                )
+            else:
+                # Без пула потоков (тесты, деградация, сбой инициализации
+                # executor) — синхронный Tier 2. Иначе typo-кандидаты молча
+                # отбрасывались: batch-блок был целиком завязан на executor.
+                batch_results = {}
+                for surface in tier2_queries:
+                    m = _fuzzy_match(surface, s_phrases, typo_thresh)
+                    if m:
+                        batch_results[surface] = m
 
             for i, surface in enumerate(tier2_queries):
                 if surface in batch_results:
                     match, score, idx = batch_results[surface]
                     if (surface[0] == match[0]
+                            and surface[:3] == match[:3]
                             and abs(len(match) - len(surface)) <= max(2, int(0.2 * len(surface)))):
                         entry = s_meta[idx]
                         meta = tier2_meta[i]

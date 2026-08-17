@@ -1,4 +1,4 @@
-"""Main entry point for the Temperature Optimization application"""
+"""Main entry point for the Survival Map core service (aiohttp + bot)."""
 import asyncio
 import logging
 import signal

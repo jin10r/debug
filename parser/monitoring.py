@@ -200,21 +200,28 @@ class ParserBot:
         async def handle_message(client: Client, message: Message):
             if not self._running:
                 return
-            
-            # Backpressure: если очередь переполнена, пропускаем с логом
-            if self._backpressure_active:
-                try:
-                    await asyncio.wait_for(
-                        self._pending_queue.put(message), 
-                        timeout=0.1
-                    )
-                except asyncio.TimeoutError:
-                    logger.warning(
-                        f"Message {message.id} dropped: queue full (backpressure)"
-                    )
-                    return
-            else:
-                await self._pending_queue.put(message)
+
+            # put_nowait — НЕ блокируем хендлер pyrogram: при полной очереди
+            # QueueFull выбрасывается мгновенно. Вместо дропа пишем сообщение
+            # НАПРЯМУЮ в pending_events (at-least-once): очередь — это буфер
+            # скорости, а не фильтр потерь (раньше переполнение = потеря
+            # события навсегда, без DLQ и повторной выборки).
+            try:
+                self._pending_queue.put_nowait(message)
+                return
+            except asyncio.QueueFull:
+                logger.warning(
+                    f"Message {message.id}: queue full ({self._pending_queue.qsize()}/65) "
+                    "— direct DB write (backpressure)"
+                )
+            except Exception as e:
+                logger.error(f"Message {message.id}: enqueue failed: {e}")
+
+            try:
+                await self._process_message(message)
+            except Exception as e:
+                self._errors += 1
+                logger.error(f"Message {message.id}: direct write failed: {e}")
 
         try:
             if not self.app.is_connected:
@@ -239,6 +246,11 @@ class ParserBot:
             self._photo_listener_task = asyncio.create_task(
                 self._run_photo_download_listener()
             )
+
+            # H4: догоняем фото, чей NOTIFY photo_download был потерян
+            # (parser был недоступен/рестартовал в момент перехода status→'done'
+            # — триггер больше не сработает).
+            await self._recover_missing_photos()
 
             while self._running:
                 self._write_heartbeat()
@@ -453,6 +465,39 @@ class ParserBot:
                 )
             except asyncio.CancelledError:
                 raise
+
+    async def _recover_missing_photos(self):
+        """Найти события без photo_url, чьё скачивание не было запрошено.
+
+        Триггер notify_photo_download шлёт NOTIFY только в момент перехода
+        pending_events.status → 'done'. Если parser в этот момент не слушал
+        канал (старт/рестарт), NOTIFY теряется и фото не скачивается никогда.
+        Догоняющий запрос при старте закрывает этот пробел.
+        """
+        try:
+            rows = await self.db.pool.fetch(
+                """SELECT e.id AS event_id, pe.message_id, pe.photo_file_id
+                   FROM pending_events pe
+                   JOIN events e
+                     ON e.message_id = pe.message_id
+                    AND e.event_time = pe.event_time
+                   WHERE pe.status = 'done'
+                     AND pe.photo_file_id IS NOT NULL
+                     AND e.photo_url IS NULL"""
+            )
+        except Exception as e:
+            logger.warning(f"Photo recovery query failed: {e}")
+            return
+        if not rows:
+            return
+        logger.info(f"Recovering {len(rows)} missing photo download(s)")
+        for row in rows:
+            try:
+                await self._download_photo_by_notify(dict(row))
+            except Exception as e:
+                logger.warning(
+                    f"Photo recovery failed for event {row['event_id']}: {e}"
+                )
 
     async def _download_photo_by_notify(self, data: dict):
         """Скачать фото по file_id из NOTIFY payload."""

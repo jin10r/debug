@@ -21,7 +21,6 @@ from core.api.routes import setup_routes
 from core.api.auth import init_cache
 from core.api.websocket import WebSocketManager
 from core.middlewares.jwt_auth import jwt_auth_middleware
-from core.middlewares.csrf import csrf_middleware
 from core.middlewares.body_size_limit import body_size_limit_middleware
 
 logger = logging.getLogger(__name__)
@@ -327,10 +326,14 @@ async def create_app():
         cleanup_interval=300
     )
 
+    # Middleware chain. CSRF-проверка удалена: клиент авторизуется ТОЛЬКО
+    # через Authorization: Bearer (JWT в sessionStorage) — cookie session_token
+    # нигде не устанавливается, поэтому csrf_middleware всегда проходил
+    # насквозь (мёртвый код). Bearer-токены браузер не отправляет
+    # автоматически, CORS выключен (same-origin) — CSRF-вектор отсутствует.
     app = web.Application(middlewares=[
         logging_middleware,
         body_size_limit_middleware,
-        csrf_middleware,
         jwt_auth_middleware,
         rate_limiter.middleware
     ])

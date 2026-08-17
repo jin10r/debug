@@ -233,7 +233,7 @@ function renderFeature(feature) {
 
 ```typescript
 // local_cache.ts
-const CACHE_KEY = 'survival_events';
+const CACHE_KEY = 'events_geojson';
 const CACHE_TTL = 60 * 60 * 1000;  // 1 час
 
 export function saveEvents(events: EventFeature[]): void {

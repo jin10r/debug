@@ -50,13 +50,20 @@ requests.get(url)  # блокирует event loop
 ```python
 app = web.Application(middlewares=[
     logging_middleware,       # 1. Логирование
-    csrf_middleware,          # 2. CSRF защита
+    body_size_limit_middleware,  # 2. Лимит тела запроса
     jwt_auth_middleware,      # 3. JWT аутентификация
     rate_limiter.middleware   # 4. Rate limiting
 ])
 ```
 
 **Правило:** Порядок middleware фиксирован. Добавление нового middleware — только в конец chain (перед rate_limiter) или с пересчётом приоритетов.
+
+**CSRF:** не используется. Клиент авторизуется ТОЛЬКО через `Authorization: Bearer`
+(JWT в sessionStorage); cookie `session_token` нигде не устанавливается, поэтому
+stateless CSRF-проверка всегда проходила насквозь (мёртвый код). Bearer-токены
+браузер не отправляет автоматически, CORS выключен (same-origin) — CSRF-вектор
+отсутствует. Если когда-либо будет введена cookie-аутентификация — вернуть
+`csrf_middleware` (модуль сохранён в истории git).
 
 ### R-C5: PostgreSQL LISTEN/NOTIFY + Catch-Up
 

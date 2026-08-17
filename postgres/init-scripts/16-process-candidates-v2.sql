@@ -32,7 +32,8 @@ DECLARE
 
     v_score_threshold   DOUBLE PRECISION := 0.70;
     v_dwithin_m         DOUBLE PRECISION := 50.0;
-    v_cluster_radius_m  DOUBLE PRECISION := 40.0;
+    v_intersection_radius_m DOUBLE PRECISION := 200.0;
+    v_close_radius_m    DOUBLE PRECISION := 40.0;
     v_wc_max_scatter_m  DOUBLE PRECISION := 1500.0;
     v_ss_min_segment_m  DOUBLE PRECISION := 50.0;
     v_ss_max_segment_m  DOUBLE PRECISION := 2500.0;
@@ -271,47 +272,77 @@ BEGIN
 
     -- ── H3: intersection ──────────────────────────────────────────────────────
     -- Только если нет валидного street_segment.
-    -- Компактный кластер: все кандидаты укладываются в радиус <= 40м.
-    all_anchors AS (
+    -- Якоря = РЕАЛЬНЫЕ точки пересечения пар кандидатов (ST_Intersection),
+    -- а не середины геометрий: для длинных улиц середины далеки от перекрёстка.
+    -- Для не-пересекающихся пар — середина кратчайшей линии, если зазор <= 40м
+    -- (компактный кластер POI) или <= 200м и хотя бы один из пары — линия.
+    pair_intersections AS (
         SELECT
-            ST_PointOnSurface(c.geom) AS anchor_4326,
-            ST_Transform(ST_PointOnSurface(c.geom), 3857) AS anchor_m,
-            c.score
-        FROM candidates c
+            ST_PointOnSurface(ST_Intersection(a.geom_m, b.geom_m)) AS pt_m,
+            a.id AS id_a,
+            b.id AS id_b
+        FROM candidates a
+        CROSS JOIN candidates b
+        WHERE a.id < b.id
+          AND ST_Intersects(a.geom_m, b.geom_m)
+          AND NOT ST_IsEmpty(ST_Intersection(a.geom_m, b.geom_m))
+    ),
+    pair_closest AS (
+        SELECT
+            ST_LineInterpolatePoint(ST_ShortestLine(a.geom_m, b.geom_m), 0.5) AS pt_m,
+            a.id AS id_a,
+            b.id AS id_b
+        FROM candidates a
+        CROSS JOIN candidates b
+        WHERE a.id < b.id
+          AND NOT ST_Intersects(a.geom_m, b.geom_m)
+          AND (
+              ST_Distance(a.geom_m, b.geom_m) <= v_close_radius_m
+              OR (
+                  ST_Distance(a.geom_m, b.geom_m) <= v_intersection_radius_m
+                  AND (
+                      ST_GeometryType(a.geom) IN ('ST_LineString', 'ST_MultiLineString')
+                      OR ST_GeometryType(b.geom) IN ('ST_LineString', 'ST_MultiLineString')
+                  )
+              )
+          )
+    ),
+    intersection_anchors AS (
+        SELECT pt_m FROM pair_intersections
+        UNION ALL
+        SELECT pt_m FROM pair_closest
     ),
     anchor_cluster AS (
         SELECT
             ST_MaxDistance(
-                ST_Collect(aa.anchor_m),
-                ST_Centroid(ST_Collect(aa.anchor_m))
+                ST_Collect(ia.pt_m),
+                ST_Centroid(ST_Collect(ia.pt_m))
             ) AS spread_m,
             COUNT(*) AS cnt
-        FROM all_anchors aa
+        FROM intersection_anchors ia
     ),
     hypothesis_intersection AS (
         SELECT
             'intersection'::TEXT AS strategy,
             ST_Transform(
                 ST_SetSRID(
-                    ST_MakePoint(
-                        AVG(ST_X(aa.anchor_m)),
-                        AVG(ST_Y(aa.anchor_m))
-                    ),
+                    ST_Centroid(ST_Collect(ia.pt_m)),
                     3857
                 ),
                 4326
             ) AS geom,
-            (2 * AVG(c.score) * AVG(c.score) / (AVG(c.score) + AVG(c.score) + 0.001))::DOUBLE PRECISION AS total_score,
+            (SELECT AVG(c.score) FROM candidates c)::DOUBLE PRECISION AS total_score,
             jsonb_build_object(
                 'type', 'intersection',
                 'geo_ids', (SELECT array_agg(id) FROM candidates),
-                'spread_m', ac.spread_m
+                'spread_m', ac.spread_m,
+                'pair_count', ac.cnt
             ) AS diagnostics
-        FROM all_anchors aa
-        CROSS JOIN candidates c
+        FROM intersection_anchors ia
         CROSS JOIN anchor_cluster ac
-        WHERE ac.spread_m <= v_cluster_radius_m
-          AND ac.cnt >= 2
+        WHERE ac.spread_m <= v_intersection_radius_m
+          AND ac.cnt >= 1
+          AND (SELECT COUNT(*) FROM candidates) >= 2
         GROUP BY ac.spread_m, ac.cnt
     ),
 
@@ -412,29 +443,6 @@ BEGIN
         LIMIT 1
     ),
 
-    -- ── Anti-list Guard: сильный кандидат-выброс (>2000м) → fallback на него ──
-    anti_list_check AS (
-        SELECT
-            CASE
-                WHEN bh.strategy IS NOT NULL
-                 AND EXISTS (
-                     SELECT 1
-                     FROM candidates c
-                     WHERE c.score >= v_anti_list_score
-                       AND ST_Distance(
-                               ST_Transform(bh.geom, 3857),
-                               ST_Transform(ST_PointOnSurface(c.geom), 3857)
-                           ) > v_anti_list_m
-                 )
-                THEN 'single_match'
-                ELSE bh.strategy
-            END AS safe_strategy,
-            bh.geom,
-            bh.total_score,
-            bh.diagnostics
-        FROM best_hypothesis bh
-    ),
-
     -- ── Single-match fallback: лучший кандидат по score ──────────────────────
     best_single AS (
         SELECT
@@ -458,12 +466,42 @@ BEGIN
         LIMIT 1
     ),
 
+    -- ── Anti-list Guard: сильный кандидат-выброс (>2000м от ГЕОМЕТРИИ
+    --    кандидата, а не от его середины) → полный fallback на best_single ────
+    anti_list_trigger AS (
+        SELECT
+            bh.strategy,
+            bh.geom,
+            bh.total_score,
+            bh.diagnostics,
+            bh.strategy IS NOT NULL
+            AND EXISTS (
+                SELECT 1
+                FROM candidates c
+                WHERE c.score >= v_anti_list_score
+                  AND ST_Distance(
+                          ST_Transform(bh.geom, 3857),
+                          c.geom_m
+                      ) > v_anti_list_m
+            ) AS triggered
+        FROM best_hypothesis bh
+    ),
+    anti_list_check AS (
+        SELECT
+            CASE WHEN alt.triggered THEN 'single_match' ELSE alt.strategy END AS safe_strategy,
+            CASE WHEN alt.triggered THEN bs.geom ELSE alt.geom END AS safe_geom,
+            CASE WHEN alt.triggered THEN bs.total_score ELSE alt.total_score END AS safe_confidence,
+            CASE WHEN alt.triggered THEN bs.diagnostics ELSE alt.diagnostics END AS safe_diagnostics
+        FROM anti_list_trigger alt
+        CROSS JOIN best_single bs
+    ),
+
     final_result AS (
         SELECT
             COALESCE(alc.safe_strategy, 'single_match') AS strategy,
-            COALESCE(alc.geom, bs.geom) AS geom,
-            COALESCE(alc.total_score, bs.total_score) AS confidence,
-            COALESCE(alc.diagnostics, bs.diagnostics) AS diagnostics
+            COALESCE(alc.safe_geom, bs.geom) AS geom,
+            COALESCE(alc.safe_confidence, bs.total_score) AS confidence,
+            COALESCE(alc.safe_diagnostics, bs.diagnostics) AS diagnostics
         FROM anti_list_check alc
         LEFT JOIN best_single bs ON 1=1
     )

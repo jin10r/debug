@@ -16,7 +16,6 @@ from core.utils.cache import CacheManager
 from core.handlers import basic_router
 from core.middlewares.dbmiddleware import DbMiddleware
 from core.middlewares.ratelimit import RateLimiter
-from core.utils.metrics import setup_metrics_routes, set_application_info, metrics_middleware
 from core.utils.logging_config import setup_logging, logging_middleware
 from core.api.routes import setup_routes
 from core.api.auth import init_cache
@@ -330,7 +329,6 @@ async def create_app():
 
     app = web.Application(middlewares=[
         logging_middleware,
-        metrics_middleware,
         body_size_limit_middleware,
         csrf_middleware,
         jwt_auth_middleware,
@@ -349,8 +347,6 @@ async def create_app():
     app.on_startup.append(on_startup)
     app.on_shutdown.append(on_shutdown)
 
-    set_application_info(version='2.0.0')
-    setup_metrics_routes(app)
     setup_routes(app)
 
     # CORS: фронтенд приходит через тот же nginx (same-origin) — CORS вообще

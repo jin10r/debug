@@ -8,13 +8,6 @@ import numpy as np
 import onnxruntime as ort
 from tokenizers import Tokenizer
 
-from processor.metrics import (
-    semantic_checked_total,
-    semantic_accepted_total,
-    semantic_rejected_total,
-    semantic_missing_embedding_total,
-)
-
 logger = logging.getLogger(__name__)
 
 FUZZY_CONFIDENT_THRESHOLD = 0.85
@@ -176,13 +169,11 @@ class SemanticMatcher:
         query_emb = self._embed_single(message_text.lower())
 
         for cand in gray_zone:
-            semantic_checked_total.inc()
             cand_emb = self._find_alias_embedding(cand, query_emb)
             if cand_emb is None:
                 # Эмбеддинга нет (редкий кейс) — не молча дропаем кандидата:
                 # отсутствие эмбеддинга ≠ отсутствие улицы. Консервативно
                 # сохраняем кандидата (как accepted) с логом на DEBUG.
-                semantic_missing_embedding_total.inc()
                 logger.debug(
                     f"No embedding for {cand.get('matched_name')} — keeping "
                     f"candidate (fuzzy={cand['score']:.2f})"
@@ -193,12 +184,10 @@ class SemanticMatcher:
             similarity = float(np.dot(query_emb, cand_emb))
 
             if similarity >= threshold:
-                semantic_accepted_total.inc()
                 cand["semantic_score"] = similarity
                 cand["source"] = cand.get("source", "") + "+semantic"
                 accepted.append(cand)
             else:
-                semantic_rejected_total.inc()
                 logger.debug(
                     f"Semantic reject: '{message_text[:60]}' vs "
                     f"'{cand.get('matched_name')}' "

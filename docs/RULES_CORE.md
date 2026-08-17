@@ -50,10 +50,9 @@ requests.get(url)  # блокирует event loop
 ```python
 app = web.Application(middlewares=[
     logging_middleware,       # 1. Логирование
-    metrics_middleware,       # 2. Prometheus метрики
-    csrf_middleware,          # 3. CSRF защита
-    jwt_auth_middleware,      # 4. JWT аутентификация
-    rate_limiter.middleware   # 5. Rate limiting
+    csrf_middleware,          # 2. CSRF защита
+    jwt_auth_middleware,      # 3. JWT аутентификация
+    rate_limiter.middleware   # 4. Rate limiting
 ])
 ```
 

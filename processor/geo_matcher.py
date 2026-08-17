@@ -23,8 +23,6 @@ from .word_tokenizer import Token
 if TYPE_CHECKING:
     from .semantic_matcher import SemanticMatcher
 
-from processor.metrics import record_geo_matches
-
 try:
     from core.settings import settings
 except Exception:
@@ -304,7 +302,6 @@ class GeoMatcher:
         for r in results:
             r.pop('_span', None)
             r['type'] = self._geo_types.get(r['geo_id'], '')
-        record_geo_matches(results)
         source_stats = {}
         for r in results:
             source_stats[r['source']] = source_stats.get(r['source'], 0) + 1

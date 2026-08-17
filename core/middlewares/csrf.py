@@ -35,7 +35,6 @@ CSRF_EXEMPT_PATHS = {
     '/health/live',
     '/health/ready',
     '/health/detailed',
-    '/metrics',
     '/api/validation-config',
     '/api/validate-init',
     '/api/auth/refresh',

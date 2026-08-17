@@ -6,8 +6,6 @@ from datetime import datetime, timezone
 
 from aiohttp import web
 
-from processor.metrics import metrics_handler
-
 logger = logging.getLogger(__name__)
 
 
@@ -65,7 +63,6 @@ class HealthServer:
         app = web.Application()
         app.router.add_get("/health/live", self.handle_live)
         app.router.add_get("/health/ready", self.handle_ready)
-        app.router.add_get("/metrics", metrics_handler)
 
         runner = web.AppRunner(app)
         await runner.setup()

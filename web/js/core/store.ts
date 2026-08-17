@@ -63,6 +63,8 @@ export interface SurvivalState {
     getAllEvents: () => EventFeatureCollection;
     /** ISO-8601 timestamp of the newest event, or null when empty. */
     getLatestTimestamp: () => string | null;
+    /** Max numeric event id in the store, or null when empty. */
+    getLatestId: () => number | null;
 }
 
 /** Extract a stable id from a feature. */
@@ -279,6 +281,25 @@ export const store = createStore<SurvivalState>()((set, get) => ({
             if (t && (!max || t > max)) max = t;
         }
         return max ? max.toISOString() : null;
+    },
+
+    /**
+     * Max numeric event id in the store, or null when empty.
+     *
+     * Водяной знак для WS catch-up. В отличие от getLatestTimestamp,
+     * id монотонен по моменту ВСТАВКИ в БД: исторические сообщения
+     * (backfill) получают новые id, но event_time в прошлом — поэтому
+     * catch-up по id доставляет их, а по времени — теряет навсегда.
+     */
+    getLatestId: () => {
+        let max: number | null = null;
+        for (const f of get().eventsById.values()) {
+            const id = getEventId(f);
+            if (id == null) continue;
+            const n = typeof id === 'number' ? id : Number(id);
+            if (!Number.isNaN(n) && (max === null || n > max)) max = n;
+        }
+        return max;
     }
 }));
 

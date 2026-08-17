@@ -25,7 +25,8 @@ class EventOperations:
         self,
         time_interval_minutes: int,
         layers: Optional[List[str]] = None,
-        since_timestamp: Optional[str] = None
+        since_timestamp: Optional[str] = None,
+        after_id: Optional[int] = None
     ) -> Dict:
         """Вернуть последние события в формате GeoJSON FeatureCollection.
 
@@ -33,11 +34,15 @@ class EventOperations:
             time_interval_minutes: Верхняя граница возраста событий (в минутах).
             layers: Опциональный фильтр по слоям.
             since_timestamp: ISO-8601 строка (например '2026-05-18T16:37:07.000Z').
-                Если задана — возвращаются только события новее этого момента
-                (catch-up после переподключения). Окно time_interval_minutes
-                по-прежнему применяется как верхняя граница.
-                Строка конвертируется в timezone-aware datetime перед передачей
-                в asyncpg: колонка event_time имеет тип timestamptz.
+                Если задана — возвращаются только события новее этого момента.
+                Окно time_interval_minutes по-прежнему применяется как верхняя
+                граница. Строка конвертируется в timezone-aware datetime перед
+                передачей в asyncpg: колонка event_time имеет тип timestamptz.
+            after_id: Если задан — возвращаются только события с id > after_id
+                (catch-up по id). Это ПРЕДПОЧТИТЕЛЬНЫЙ водяной знак для WS:
+                id (SERIAL) монотонен по моменту вставки, тогда как event_time
+                у исторических (backfill) сообщений лежит в прошлом. Catch-up
+                только по времени такие события теряет навсегда.
         """
         base_query = """
             SELECT json_build_object(
@@ -73,6 +78,10 @@ class EventOperations:
             if since_dt is not None:
                 params.append(since_dt)
                 where_clauses.append(f"event_time > ${len(params)}")
+
+        if after_id is not None:
+            params.append(after_id)
+            where_clauses.append(f"id > ${len(params)}")
 
         if layers:
             valid_layers = [layer for layer in layers if layer]

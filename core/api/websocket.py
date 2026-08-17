@@ -172,23 +172,33 @@ class WebSocketManager:
     async def send_events_since(
         self,
         ws: web.WebSocketResponse,
-        since_timestamp: Optional[str] = None
+        since_timestamp: Optional[str] = None,
+        since_id: Optional[int] = None
     ):
         """
         Send individual GeoJSON features to a client.
-        If since_timestamp is None — send all events from last 60 min (initial load).
-        If set — send only events newer than that timestamp (catch-up after reconnect).
+
+        Watermark priority: since_id (max event id the client already has)
+        wins over since_timestamp. `id` is monotonic by INSERT time, while
+        event_time of backfilled historical messages lies in the past — a
+        time-based catch-up would skip those events forever. With since_id,
+        the server returns every event with id > since_id within the 60-min
+        window, including backfill and healing any cache gaps.
+
+        If both are None — send all events from last 60 min (initial load).
         """
         try:
             events_data = await self.db_request.get_filtered_events_as_geojson(
                 time_interval_minutes=60,
-                since_timestamp=since_timestamp
+                since_timestamp=None if since_id is not None else since_timestamp,
+                after_id=since_id
             )
 
             features = events_data.get('features', [])
             logger.info(
                 f"Sending {len(features)} features to client "
-                f"(since={since_timestamp or 'initial'})"
+                f"(after_id={since_id or 'initial'}, "
+                f"since={'' if since_id is not None else (since_timestamp or 'initial')})"
             )
 
             for feature in features:
@@ -407,7 +417,14 @@ async def websocket_handler(request: web.Request):
                             continue
 
                         since_timestamp = data.get('since_timestamp')  # ISO string or null
-                        await ws_manager.send_events_since(ws, since_timestamp)
+                        since_id_raw = data.get('since_id')  # int or null
+                        since_id = None
+                        if since_id_raw is not None:
+                            try:
+                                since_id = int(since_id_raw)
+                            except (TypeError, ValueError):
+                                logger.warning(f"Invalid since_id '{since_id_raw}', ignoring")
+                        await ws_manager.send_events_since(ws, since_timestamp, since_id)
 
                 except json.JSONDecodeError:
                     logger.warning("Invalid JSON received from WebSocket client")

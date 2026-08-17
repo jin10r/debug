@@ -4,7 +4,7 @@
  * Protocol (client → server):
  *   {type: "auth", token_type: "bearer", token: "..."}
  *   {type: "auth", token_type: "telegram_init_data", init_data: "..."}
- *   {type: "get_events", since_timestamp: "<ISO>" | null}
+ *   {type: "get_events", since_timestamp: "<ISO>" | null, since_id: <int> | null}
  *   {type: "ping"}
  *
  * Protocol (server → client):
@@ -110,8 +110,15 @@ export class WebSocketManager {
 
     /** Request events from server — called after auth_ok is received */
     private requestEvents(): void {
-        const since = window.store?.getState?.().getLatestTimestamp?.() ?? null;
-        console.log('[WS] Requesting events since:', since ?? 'initial load');
+        const state = window.store?.getState?.();
+        const since = state?.getLatestTimestamp?.() ?? null;
+        // Catch-up watermark = max event id. event_time НЕ годится: backfill
+        // исторических сообщений даёт новые id при старом event_time, и
+        // catch-up по времени такие события теряет навсегда (баг «2 события
+        // на карте»). id монотонен по вставке — after_id доставляет всё.
+        const sinceId = state?.getLatestId?.() ?? null;
+        console.log('[WS] Requesting events since:', since ?? 'initial load',
+            '| since_id:', sinceId ?? 'initial');
 
         // Enter snapshot mode: features until events_snapshot_end are a batch
         // sync and must not raise per-event notifications.
@@ -127,7 +134,7 @@ export class WebSocketManager {
             this.finishSnapshot();
         }, this.SNAPSHOT_TIMEOUT_MS);
 
-        this.sendMessage({ type: 'get_events', since_timestamp: since });
+        this.sendMessage({ type: 'get_events', since_timestamp: since, since_id: sinceId });
     }
 
     /** Flush the buffered snapshot batch and leave snapshot mode. */

@@ -43,10 +43,12 @@ WebSocket протокол работает с отдельными Feature (н�
 ```
 Server → Client: {type: "feature", data: GeoJSON Feature}
 Server → Client: {type: "events_snapshot_end"}
-Client → Server: {type: "get_events", since_timestamp: "..."}
+Client → Server: {type: "get_events", since_timestamp: "...", since_id: <int>}
 ```
 
 **Правило:** Снапшот (batch sync) буферизуется и отдаётся тихо. Live push — мгновенно.
+
+**Catch-up watermark:** клиент шлёт `since_id` = max event id в store (см. `getLatestId`). `event_time` для водяного знака НЕ годится: backfill исторических сообщений даёт новые id при старом `event_time`, и catch-up по времени такие события теряет навсегда (баг «2 события на карте»). Сервер при наличии `since_id` игнорирует `since_timestamp`.
 
 ### R-W4: Self-healing WebSocket
 

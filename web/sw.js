@@ -6,7 +6,7 @@
 
 // __BUILD_ID__ подставляется на сборке (Dockerfile.web) — таймстамп билда.
 // Любой деплой меняет CACHE_VERSION → старая оболочка инвалидируется в activate.
-const CACHE_VERSION = '__BUILD_ID__-2';
+const CACHE_VERSION = '__BUILD_ID__-3';
 const SHELL_CACHE = `survival-shell-${CACHE_VERSION}`;
 const TILE_CACHE = `survival-tiles-${CACHE_VERSION}`;
 const TILE_CACHE_LIMIT = 1000;
@@ -79,7 +79,21 @@ function shellCacheKey(url) {
 }
 
 function isTileRequest(url) {
-    return /tile\.openstreetmap\.org|basemaps\.cartocdn\.com/.test(url);
+    // Растровые тайлы OSM/Carto + векторные (.pbf) и растровые (.png) тайлы
+    // OpenFreeMap. У OpenFreeMap тайлы идут по версионированному подпутю
+    // (/planet/<снимок>/{z}/{x}/{y}.pbf, /natural_earth/ne2sr/...), поэтому
+    // матчим директорию, а не конкретный снимок: при обновлении данных
+    // провайдером старые ключи просто перестают запрашиваться.
+    return /tile\.openstreetmap\.org|basemaps\.cartocdn\.com|tiles\.openfreemap\.org\/(planet|natural_earth)\//.test(url);
+}
+
+function isOpenFreeMapStaticRequest(url) {
+    // Стиль (style.json), глифы (/fonts/*.pbf) и спрайты (/sprites/*) —
+    // маленькие стабильные файлы, без них подложка не рендерится. Плюс
+    // TileJSON /planet (список тайловых URL). Кэшируем cache-first, как
+    // оболочку приложения: они переживают офлайн и не раздувают лимит тайлов.
+    return /tiles\.openfreemap\.org\/(styles|fonts|sprites)\//.test(url)
+        || /tiles\.openfreemap\.org\/planet$/.test(url);
 }
 
 async function trimCache(cacheName, limit) {
@@ -125,6 +139,33 @@ self.addEventListener('fetch', (event) => {
                 caches.open(SHELL_CACHE).then((c) => c.put(req, copy));
                 return res;
             }).catch(() => caches.match(req))
+        );
+        return;
+    }
+
+    // OpenFreeMap style/glyphs/sprites/TileJSON — cache-first with a
+    // background refresh. OpenFreeMap отдаёт Access-Control-Allow-Origin: *,
+    // поэтому ответы читаемы SW-ом и их можно кэшировать.
+    if (isOpenFreeMapStaticRequest(url)) {
+        event.respondWith(
+            caches.open(SHELL_CACHE).then(async (cache) => {
+                const cached = await cache.match(req);
+                if (cached) {
+                    fetch(req).then((res) => {
+                        if (res && res.status === 200) cache.put(req, res.clone());
+                    }).catch(() => {});
+                    return cached;
+                }
+                try {
+                    const res = await fetch(req);
+                    if (res && res.status === 200) cache.put(req, res.clone());
+                    return res;
+                } catch (e) {
+                    // Offline и стиль не закэширован — отдаём ошибку сети;
+                    // подложка уже загруженных тайлов остаётся на canvas.
+                    return Response.error();
+                }
+            })
         );
         return;
     }

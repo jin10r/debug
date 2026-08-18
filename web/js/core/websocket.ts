@@ -21,7 +21,6 @@ export class WebSocketManager {
     public isConnected = false;
 
     private reconnectAttempts = 0;
-    private readonly maxReconnectAttempts = 10;
     private readonly baseReconnectDelay = 1000;
     private readonly reconnectMultiplier = 1.5;
     private reconnectTimer: number | null = null;
@@ -269,10 +268,8 @@ export class WebSocketManager {
         this.stopHeartbeat();
         this.onConnectionStatusChange?.(false);
 
-        if (event.code !== 1000 && this.reconnectAttempts < this.maxReconnectAttempts) {
+        if (event.code !== 1000) {
             this.scheduleReconnect();
-        } else if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-            console.error('[WS] Max reconnect attempts reached — offline mode');
         }
     }
 
@@ -295,7 +292,7 @@ export class WebSocketManager {
         // Jitter ±20% — чтобы множество клиентов не ломились на reconnect синхронно.
         const delay = Math.round(base * (0.8 + Math.random() * 0.4));
 
-        console.log(`[WS] Reconnect in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+        console.log(`[WS] Reconnect in ${delay}ms (attempt ${this.reconnectAttempts})`);
         this.reconnectTimer = window.setTimeout(() => {
             this.reconnectTimer = null;
             this.connect();
@@ -427,7 +424,7 @@ export class WebSocketManager {
         }
         this.receivingSnapshot = false;
         this.snapshotBuffer = [];
-        this.reconnectAttempts = this.maxReconnectAttempts; // prevent auto-reconnect
+        this.reconnectAttempts = Infinity; // prevent auto-reconnect
         this.ws?.close(1000, 'client disconnect');
         this.ws = null;
         this.isConnected = false;

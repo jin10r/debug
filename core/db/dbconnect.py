@@ -60,9 +60,9 @@ class Request:
         """Fetch all geo records as GeoJSON."""
         return await self.geo.get_all_geo_as_geojson()
 
-    async def get_filtered_events_as_geojson(self, time_interval_minutes: int, layers: Optional[List[str]] = None, since_timestamp: Optional[str] = None, after_id: Optional[int] = None) -> Dict:
+    async def get_filtered_events_as_geojson(self, time_interval_minutes: int, layers: Optional[List[str]] = None, since_timestamp: Optional[str] = None, after_id: Optional[int] = None, after_message_id: Optional[int] = None) -> Dict:
         """Fetch filtered events as GeoJSON."""
-        return await self.events.get_filtered_events_as_geojson(time_interval_minutes, layers, since_timestamp, after_id)
+        return await self.events.get_filtered_events_as_geojson(time_interval_minutes, layers, since_timestamp, after_id, after_message_id)
 
     async def get_incremental_events(
         self,
@@ -89,9 +89,13 @@ class Request:
         """Get minimum event id currently present in DB."""
         return await self.events.get_events_min_id()
 
-    async def get_events_updates_as_geojson(self, after_id: int, limit: int = 2000) -> Dict:
-        """Fetch incremental updates by id > after_id (last 60 minutes)."""
-        return await self.events.get_events_updates_as_geojson(after_id, limit)
+    async def get_events_updates_as_geojson(self, after_id: Optional[int] = None, after_message_id: Optional[int] = None, limit: int = 2000) -> Dict:
+        """Fetch incremental updates by id after_id / message_id after_message_id (last 60 minutes)."""
+        return await self.events.get_events_updates_as_geojson(after_id, after_message_id, limit)
+
+    async def get_events_message_id_range(self) -> tuple:
+        """Get (min, max) message_id present in events table."""
+        return await self.events.get_events_message_id_range()
 
     async def get_events_snapshot_as_geojson(self, limit: int = 5000) -> Dict:
         """Fetch snapshot of last 60 minutes events."""

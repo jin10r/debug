@@ -173,32 +173,60 @@ class WebSocketManager:
         self,
         ws: web.WebSocketResponse,
         since_timestamp: Optional[str] = None,
-        since_id: Optional[int] = None
+        since_id: Optional[int] = None,
+        since_message_id: Optional[int] = None
     ):
         """
         Send individual GeoJSON features to a client.
 
-        Watermark priority: since_id (max event id the client already has)
-        wins over since_timestamp. `id` is monotonic by INSERT time, while
-        event_time of backfilled historical messages lies in the past — a
-        time-based catch-up would skip those events forever. With since_id,
-        the server returns every event with id > since_id within the 60-min
-        window, including backfill and healing any cache gaps.
+        Watermark priority: since_message_id > since_id > since_timestamp.
+        message_id (Telegram) стабилен между рестартами БД: события
+        пере-вставляются с теми же message_id, тогда как id события
+        перезапускается с 1 — поэтому catch-up идёт по message_id.
 
-        If both are None — send all events from last 60 min (initial load).
+        Если since_message_id вне текущего диапазона message_id в БД —
+        кэш клиента устарел или чужой (рестарт БД, чистка партиций):
+        сначала шлём {type:'resync_required'}, затем полный snapshot
+        60-мин окна. Флаг идёт ДО features, чтобы клиент успел очистить
+        store до приёма данных.
         """
+        resync = False
+        if since_message_id is not None:
+            min_mid, max_mid = await self.db_request.get_events_message_id_range()
+            if since_message_id > max_mid or (min_mid > 0 and since_message_id < min_mid - 1):
+                resync = True
+                logger.info(
+                    f"Client watermark out of DB range: since_message_id={since_message_id}, "
+                    f"DB=[{min_mid}..{max_mid}] — sending resync_required + full snapshot"
+                )
+
         try:
+            if resync:
+                await ws.send_str(json.dumps({
+                    'type': 'resync_required',
+                    'timestamp': datetime.now(timezone.utc).isoformat()
+                }))
+                since_timestamp = None
+                since_id = None
+                since_message_id = None
+
             events_data = await self.db_request.get_filtered_events_as_geojson(
                 time_interval_minutes=60,
-                since_timestamp=None if since_id is not None else since_timestamp,
-                after_id=since_id
+                since_timestamp=(
+                    None if (since_id is not None or since_message_id is not None)
+                    else since_timestamp
+                ),
+                after_id=since_id,
+                after_message_id=since_message_id
             )
 
             features = events_data.get('features', [])
             logger.info(
                 f"Sending {len(features)} features to client "
-                f"(after_id={since_id or 'initial'}, "
-                f"since={'' if since_id is not None else (since_timestamp or 'initial')})"
+                f"(after_message_id={since_message_id or 'initial'}, "
+                f"after_id={since_id or 'initial'}, "
+                f"since={'' if since_message_id is not None else (since_timestamp or 'initial')}, "
+                f"resync={resync})"
             )
 
             for feature in features:
@@ -417,14 +445,29 @@ async def websocket_handler(request: web.Request):
                             continue
 
                         since_timestamp = data.get('since_timestamp')  # ISO string or null
-                        since_id_raw = data.get('since_id')  # int or null
                         since_id = None
+                        since_id_raw = data.get('since_id')  # int or null
                         if since_id_raw is not None:
                             try:
                                 since_id = int(since_id_raw)
                             except (TypeError, ValueError):
                                 logger.warning(f"Invalid since_id '{since_id_raw}', ignoring")
-                        await ws_manager.send_events_since(ws, since_timestamp, since_id)
+
+                        # Основной водяной знак — message_id (стабилен между
+                        # рестартами БД); since_id остаётся fallback'ом.
+                        since_message_id = None
+                        since_message_id_raw = data.get('since_message_id')  # int or null
+                        if since_message_id_raw is not None:
+                            try:
+                                since_message_id = int(since_message_id_raw)
+                            except (TypeError, ValueError):
+                                logger.warning(
+                                    f"Invalid since_message_id '{since_message_id_raw}', ignoring"
+                                )
+
+                        await ws_manager.send_events_since(
+                            ws, since_timestamp, since_id, since_message_id
+                        )
 
                 except json.JSONDecodeError:
                     logger.warning("Invalid JSON received from WebSocket client")

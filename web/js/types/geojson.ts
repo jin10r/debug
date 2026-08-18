@@ -32,7 +32,14 @@ export type EventStrategy = 'exact' | 'random' | 'unknown';
 export interface EventProperties {
     /** Unique event ID */
     id: string | number;
-    
+
+    /**
+     * Telegram message ID — стабильный идентификатор между рестартами БД:
+     * события пере-вставляются с теми же message_id, тогда как id события
+     * перезапускается. Первичный ключ dedup и водяной знак catch-up.
+     */
+    message_id?: string | number;
+
     /** Event description */
     description: string;
     
@@ -190,6 +197,7 @@ declare global {
             loadEvents(): Promise<void>;
             startPersisting(): void;
             stopPersisting(): void;
+            invalidate(): Promise<void>;
         };
 
         store: {

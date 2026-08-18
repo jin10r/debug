@@ -18,8 +18,12 @@ import { EventFeature, EventFeatureCollection, EventLayer } from '../types/geojs
 const TTL_MS = 60 * 60 * 1000;
 /** Tolerance for events slightly ahead of the server clock. */
 const FUTURE_TOLERANCE_MS = 5 * 60 * 1000;
-/** TTL prune / clock re-evaluation interval. */
-const TICK_INTERVAL_MS = 30 * 1000;
+/**
+ * TTL prune / clock re-evaluation interval. 15 с — события, выпавшие за
+ * 60-мин окно, удаляются из store и localStorage не позднее чем через
+ * 15 секунд после пересечения границы.
+ */
+const TICK_INTERVAL_MS = 15 * 1000;
 
 export type TimeFilter = 15 | 30 | 60;
 
@@ -65,13 +69,21 @@ export interface SurvivalState {
     getLatestTimestamp: () => string | null;
     /** Max numeric event id in the store, or null when empty. */
     getLatestId: () => number | null;
+    /**
+     * Max message_id in the store, or null when empty. Основной водяной знак
+     * для WS/REST catch-up: message_id стабилен между рестартами БД
+     * (пере-вставка сохраняет Telegram message_id), id события —
+     * перезапускается и не годится.
+     */
+    getLatestMessageId: () => number | null;
 }
 
 /** Extract a stable id from a feature. */
 export function getEventId(feature: EventFeature): string | number | null {
     const p = feature?.properties;
     if (!p) return null;
-    const id = p.id ?? p.event_id ?? p._id ?? p.uid ?? null;
+    // message_id — первичный dedup-ключ: переживает рестарты БД.
+    const id = p.message_id ?? p.id ?? p.event_id ?? p._id ?? p.uid ?? null;
     return id as string | number | null;
 }
 
@@ -298,6 +310,24 @@ export const store = createStore<SurvivalState>()((set, get) => ({
             if (id == null) continue;
             const n = typeof id === 'number' ? id : Number(id);
             if (!Number.isNaN(n) && (max === null || n > max)) max = n;
+        }
+        return max;
+    },
+
+    /**
+     * Max message_id в store. Fallback на id события, если message_id
+     * отсутствует (старые кэши). Используется как catch-up watermark.
+     */
+    getLatestMessageId: () => {
+        let max: number | null = null;
+        for (const f of get().eventsById.values()) {
+            const mid = f.properties?.message_id;
+            if (mid == null) continue;
+            const n = typeof mid === 'number' ? mid : Number(mid);
+            if (!Number.isNaN(n) && (max === null || n > max)) max = n;
+        }
+        if (max === null) {
+            return get().getLatestId();
         }
         return max;
     }

@@ -4,12 +4,14 @@
  * Protocol (client → server):
  *   {type: "auth", token_type: "bearer", token: "..."}
  *   {type: "auth", token_type: "telegram_init_data", init_data: "..."}
- *   {type: "get_events", since_timestamp: "<ISO>" | null, since_id: <int> | null}
+ *   {type: "get_events", since_timestamp: "<ISO>" | null, since_id: <int> | null, since_message_id: <int> | null}
  *   {type: "ping"}
  *
  * Protocol (server → client):
  *   {type: "auth_ok"}
  *   {type: "feature",        data: GeoJSON Feature}
+ *   {type: "resync_required"}        — кэш клиента устарел: очистить store+localStorage
+ *   {type: "events_snapshot_end", ...}
  *   {type: "events_cleaned", data: {...}}
  *   {type: "pong",           timestamp: "..."}
  */
@@ -111,12 +113,14 @@ export class WebSocketManager {
     private requestEvents(): void {
         const state = window.store?.getState?.();
         const since = state?.getLatestTimestamp?.() ?? null;
-        // Catch-up watermark = max event id. event_time НЕ годится: backfill
-        // исторических сообщений даёт новые id при старом event_time, и
-        // catch-up по времени такие события теряет навсегда (баг «2 события
-        // на карте»). id монотонен по вставке — after_id доставляет всё.
+        // Catch-up watermark = max message_id: стабилен между рестартами БД
+        // (события пере-вставляются с теми же Telegram message_id), тогда
+        // как id события перезапускается — since_id не годится как
+        // watermark (баг «biggе кэш vs сервер» после down -v).
+        const sinceMessageId = state?.getLatestMessageId?.() ?? null;
         const sinceId = state?.getLatestId?.() ?? null;
         console.log('[WS] Requesting events since:', since ?? 'initial load',
+            '| since_message_id:', sinceMessageId ?? 'initial',
             '| since_id:', sinceId ?? 'initial');
 
         // Enter snapshot mode: features until events_snapshot_end are a batch
@@ -133,7 +137,12 @@ export class WebSocketManager {
             this.finishSnapshot();
         }, this.SNAPSHOT_TIMEOUT_MS);
 
-        this.sendMessage({ type: 'get_events', since_timestamp: since, since_id: sinceId });
+        this.sendMessage({
+            type: 'get_events',
+            since_timestamp: since,
+            since_id: sinceId,
+            since_message_id: sinceMessageId
+        });
     }
 
     /** Flush the buffered snapshot batch and leave snapshot mode. */
@@ -252,6 +261,18 @@ export class WebSocketManager {
             case 'events_cleaned':
                 console.log('[WS] events_cleaned notification');
                 window.store?.getState?.().pruneExpired?.();
+                break;
+
+            case 'resync_required':
+                // Водяной знак клиента вне диапазона БД (рестарт БД/чистка
+                // партиций) — кэш устарел или чужой. Очищаем store и
+                // localStorage: следующие features — полный snapshot 60-мин
+                // окна (requestEvents уже в режиме snapshot-буфера).
+                console.warn('[WS] resync_required: cache out of sync — clearing store & local cache');
+                window.store?.getState?.().clearEvents?.();
+                if (typeof window.localCache?.invalidate === 'function') {
+                    window.localCache.invalidate();
+                }
                 break;
 
             default:

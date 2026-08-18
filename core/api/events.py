@@ -62,7 +62,34 @@ async def post_events_updates_handler(request: web.Request):
             status=400
         )
 
-    if after_id > 0:
+    # Основной водяной знак — after_message_id (стабилен между рестартами
+    # БД); after_id остаётся fallback'ом для старых клиентов.
+    after_message_id_raw = data.get('after_message_id')
+    after_message_id = None
+    if after_message_id_raw is not None:
+        try:
+            after_message_id = int(after_message_id_raw)
+            if after_message_id < 0:
+                raise ValueError("after_message_id must be >= 0")
+        except (ValueError, TypeError) as e:
+            return web.json_response(
+                {'error': f'Invalid after_message_id: must be a non-negative integer'},
+                status=400
+            )
+
+    if after_message_id is not None:
+        # Водяной знак вне текущего диапазона БД → кэш клиента устарел
+        # (рестарт БД/чистка партиций) → клиент должен ресинхронизироваться.
+        min_mid, max_mid = await db_request.get_events_message_id_range()
+        if after_message_id > max_mid or (min_mid > 0 and after_message_id < min_mid - 1):
+            return web.json_response(
+                {
+                    'resync_required': True,
+                    'reason': f'after_message_id={after_message_id} outside DB range [{min_mid}..{max_mid}]'
+                },
+                status=409
+            )
+    elif after_id > 0:
         min_id = await db_request.get_events_min_id()
         if min_id and after_id < (min_id - 1):
             return web.json_response({'resync_required': True}, status=409)
@@ -76,7 +103,11 @@ async def post_events_updates_handler(request: web.Request):
         limit = 2000
 
     meta = await db_request.get_events_meta()
-    geojson_data = await db_request.get_events_updates_as_geojson(after_id=after_id, limit=limit)
+    geojson_data = await db_request.get_events_updates_as_geojson(
+        after_id=after_id if after_id > 0 else None,
+        after_message_id=after_message_id,
+        limit=limit
+    )
 
     updated_at = meta.get('updated_at')
     updated_at_str = updated_at.isoformat() if updated_at else None

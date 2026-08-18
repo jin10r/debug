@@ -104,3 +104,9 @@ model/models/
 model/.cache/
 data/
 Archive.zip
+
+# Events export files (not committed)
+events_exporrrt.csv
+events_exporrrtt.csv
+events_exporrrtt.csv
+evvents_exporrrtt.csv

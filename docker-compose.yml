@@ -78,7 +78,7 @@ services:
       PROXY_HOST: ${PROXY_HOST:-}
       PROXY_PORT: ${PROXY_PORT:-1080}
       PROXY_SCHEME: ${PROXY_SCHEME:-socks5}
-      PARSER_HISTORY_LIMIT: ${PARSER_HISTORY_LIMIT:-1000}
+      PARSER_HISTORY_LIMIT: ${PARSER_HISTORY_LIMIT:-65}
     <<: *dns
     extra_hosts:
       - host.docker.internal:host-gateway
@@ -116,15 +116,15 @@ services:
     logging: *default-logging
 
   # =============================================================================
-  # Processor - NLP pipeline (pymorphy3 + rapidfuzz + PostGIS + ONNX)
+  # NLP Processor - NLP pipeline (pymorphy3 + rapidfuzz + PostGIS + ONNX)
   # =============================================================================
-  processor:
+  nlp_processor:
     image: survival_processor:latest
     build:
       context: .
       dockerfile: Dockerfile.processor
       network: host
-    container_name: processor
+    container_name: nlp_processor
     stop_grace_period: 30s
     environment:
       <<: *pg-env

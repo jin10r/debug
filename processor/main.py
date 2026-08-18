@@ -36,7 +36,7 @@ from .geo_matcher import GeoMatcher
 from .health import HealthServer
 from .layer_classifier import LayerClassifier
 from .word_tokenizer import tokenize
-from core.utils.text_preprocessor import strip_tail, is_promotional
+from core.utils.text_preprocessor import strip_tail, is_promotional, truncate_for_geo
 
 logger = logging.getLogger(__name__)
 
@@ -512,7 +512,9 @@ class ProcessorBot:
             if not raw_text:
                 description = 'без описания'
             else:
-                description = '[promotional content]'
+                # Сохраняем оригинальный текст промо-сообщения,
+                # обрезая до допустимой длины для отображения.
+                description = truncate_for_geo(raw_text, settings.parser.max_text_length)
             return self._enrich(
                 await self._insert_event(
                     message_id=message_id, event_time=event_time,

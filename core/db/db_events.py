@@ -26,7 +26,8 @@ class EventOperations:
         time_interval_minutes: int,
         layers: Optional[List[str]] = None,
         since_timestamp: Optional[str] = None,
-        after_id: Optional[int] = None
+        after_id: Optional[int] = None,
+        after_message_id: Optional[int] = None
     ) -> Dict:
         """Вернуть последние события в формате GeoJSON FeatureCollection.
 
@@ -43,6 +44,11 @@ class EventOperations:
                 id (SERIAL) монотонен по моменту вставки, тогда как event_time
                 у исторических (backfill) сообщений лежит в прошлом. Catch-up
                 только по времени такие события теряет навсегда.
+            after_message_id: Если задан — возвращаются только события с
+                message_id > after_message_id. message_id (Telegram) стабилен
+                между рестартами БД: события пере-вставляются с теми же
+                message_id, тогда как id события перезапускается. Именно этот
+                водяной знак используют WS/REST catch-up.
         """
         base_query = """
             SELECT json_build_object(
@@ -52,6 +58,7 @@ class EventOperations:
                     'geometry', ST_AsGeoJSON(geom)::json,
                     'properties', json_build_object(
                         'id', id,
+                        'message_id', message_id,
                         'description', description,
                         'layer', layer,
                         'strategy', strategy,
@@ -82,6 +89,10 @@ class EventOperations:
         if after_id is not None:
             params.append(after_id)
             where_clauses.append(f"id > ${len(params)}")
+
+        if after_message_id is not None:
+            params.append(after_message_id)
+            where_clauses.append(f"message_id > ${len(params)}")
 
         if layers:
             valid_layers = [layer for layer in layers if layer]
@@ -155,6 +166,7 @@ class EventOperations:
                     'geometry', ST_AsGeoJSON(geom)::json,
                     'properties', json_build_object(
                         'id', id,
+                        'message_id', message_id,
                         'description', description,
                         'layer', layer,
                         'strategy', strategy,
@@ -231,9 +243,54 @@ class EventOperations:
             logger.error(f"Failed to get min events id: {e}", exc_info=True)
             return 0
 
-    async def get_events_updates_as_geojson(self, after_id: int, limit: int = 2000) -> Dict:
-        """Fetch events with id > after_id, limited to last 60 minutes, as GeoJSON."""
+    async def get_events_message_id_range(self) -> tuple:
+        """Get (min, max) message_id currently present in events.
+
+        Водяной знак catch-up клиента сверяется с этим диапазоном:
+        watermark вне диапазона = устаревший/чужой кэш → resync. message_id
+        (Telegram) стабилен между рестартами БД в отличие от id события.
+        """
         query = """
+            SELECT COALESCE(MIN(message_id), 0), COALESCE(MAX(message_id), 0)
+            FROM events
+        """
+        try:
+            async with self.db.pool.acquire() as connection:
+                row = await asyncio.wait_for(
+                    connection.fetchrow(query),
+                    timeout=settings.db.command_timeout,
+                )
+            if not row:
+                return (0, 0)
+            return (int(row[0] or 0), int(row[1] or 0))
+        except Exception as e:
+            logger.error(f"Failed to get message_id range: {e}", exc_info=True)
+            return (0, 0)
+
+    async def get_events_updates_as_geojson(
+        self,
+        after_id: Optional[int] = None,
+        after_message_id: Optional[int] = None,
+        limit: int = 2000
+    ) -> Dict:
+        """Fetch events with id > after_id (or message_id > after_message_id),
+        limited to last 60 minutes, as GeoJSON.
+
+        Watermark priority: after_message_id (стабилен между рестартами БД,
+        Telegram message_id пере-вставляется без изменений) берётся в
+        приоритет над after_id — по нему идёт catch-up клиентов.
+        """
+        conditions = ["event_time >= NOW() - INTERVAL '60 minutes'"]
+        params: List[Any] = []
+        if after_message_id is not None:
+            params.append(after_message_id)
+            conditions.append(f"message_id > ${len(params)}")
+        elif after_id is not None:
+            params.append(after_id)
+            conditions.append(f"id > ${len(params)}")
+        params.append(limit)
+
+        query = f"""
             SELECT json_build_object(
                 'type', 'FeatureCollection',
                 'features', COALESCE(
@@ -243,6 +300,7 @@ class EventOperations:
                             'geometry', ST_AsGeoJSON(geom)::json,
                             'properties', json_build_object(
                                 'id', id,
+                                'message_id', message_id,
                                 'description', description,
                                 'layer', layer,
                                 'strategy', strategy,
@@ -259,16 +317,15 @@ class EventOperations:
             FROM (
                 SELECT *
                 FROM events
-                WHERE id > $1
-                  AND event_time >= NOW() - INTERVAL '60 minutes'
+                WHERE {' AND '.join(conditions)}
                 ORDER BY id
-                LIMIT $2
+                LIMIT ${len(params)}
             ) e
         """
         try:
             async with self.db.pool.acquire() as connection:
                 result = await asyncio.wait_for(
-                    connection.fetchval(query, after_id, limit),
+                    connection.fetchval(query, *params),
                     timeout=settings.db.command_timeout,
                 )
             return json.loads(result) if result else {'type': 'FeatureCollection', 'features': []}
@@ -293,6 +350,7 @@ class EventOperations:
                             'geometry', ST_AsGeoJSON(geom)::json,
                             'properties', json_build_object(
                                 'id', id,
+                                'message_id', message_id,
                                 'description', description,
                                 'layer', layer,
                                 'strategy', strategy,

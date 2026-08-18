@@ -58,6 +58,7 @@ declare global {
             loadEvents(): Promise<void>;
             startPersisting(): void;
             stopPersisting(): void;
+            invalidate(): Promise<void>;
         };
 
         /** Reactive store (zustand vanilla) — see js/core/store.ts */

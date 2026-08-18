@@ -66,6 +66,21 @@ export class LocalCache {
         }
     }
 
+    /**
+     * Полный сброс кэша (resync): удалить персистентный снапшот.
+     * Вызывается при {type: 'resync_required'} от сервера — кэш клиента
+     * устарел или чужой (рестарт БД, чистка партиций). Последующий
+     * debounced-save перезапишет ключ актуальным содержимым store.
+     */
+    async invalidate(): Promise<void> {
+        try {
+            await this.storage.removeItem(CACHE_KEY);
+            console.log('[LocalCache] Invalidated (cached events removed)');
+        } catch (error) {
+            console.error('[LocalCache] invalidate error:', error);
+        }
+    }
+
     /** Debounced save trigger to coalesce rapid store changes. */
     private scheduleSave(): void {
         if (this.saveTimer !== null) return;

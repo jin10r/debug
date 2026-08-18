@@ -38,6 +38,7 @@ logging.root.setLevel(_LOG_LEVEL)
 
 from core.db.db_adapter import DBAdapter
 from core.utils.text_preprocessor import strip_tail, preprocess_light
+from parser.message_processor import truncate_for_geo
 
 logger = logging.getLogger(__name__)
 
@@ -384,8 +385,7 @@ class ParserBot:
         raw_text = self._extract_text(message)
         stripped = strip_tail(raw_text)
         preserved = self._sanitize_text(preprocess_light(stripped)) or ''
-        if len(preserved) > settings.parser.max_text_length:
-            preserved = 'слишком длиннное сообщение, не является релевантной локацией'
+        preserved = truncate_for_geo(preserved, settings.parser.max_text_length)
 
         photo_file_id = None
         if message.photo:

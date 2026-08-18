@@ -45,5 +45,19 @@ def test_digit_ya_fusion():
     assert texts(tokenize("1-я станция")) == ["1я", "станция"]
 
 
+def test_ordinal_suffix_fusions():
+    assert texts(tokenize("7го км")) == ["7го", "км"]
+    assert texts(tokenize("7-го км")) == ["7го", "км"]
+    assert texts(tokenize("5-й станции")) == ["5й", "станции"]
+    assert texts(tokenize("3-е Фонтана")) == ["3е", "Фонтана"]
+    assert texts(tokenize("10-м Апреля")) == ["10м", "Апреля"]
+
+
+def test_plain_digit_followed_by_word_not_fused():
+    assert texts(tokenize("10 минут")) == ["10", "минут"]
+    assert texts(tokenize("7 станция")) == ["7", "станция"]
+    assert texts(tokenize("11 ст Фонтана")) == ["11", "ст", "Фонтана"]
+
+
 def test_digits_kept_inside_words():
     assert texts(tokenize("h1 патруль")) == ["h1", "патруль"]

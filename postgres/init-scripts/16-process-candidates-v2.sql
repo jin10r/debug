@@ -37,7 +37,7 @@ DECLARE
     v_wc_max_scatter_m  DOUBLE PRECISION := 1500.0;
     v_ss_min_segment_m  DOUBLE PRECISION := 50.0;
     v_ss_max_segment_m  DOUBLE PRECISION := 2500.0;
-    v_anti_list_m       DOUBLE PRECISION := 2000.0;
+    v_anti_list_m       DOUBLE PRECISION := 3000.0;
     v_anti_list_score   DOUBLE PRECISION := 0.85;
 BEGIN
     v_scores := COALESCE(
@@ -375,13 +375,28 @@ BEGIN
             c.score * 1.0 AS weight
         FROM candidates c
     ),
+    -- Scatter считается по ЯКОРЯМ пар (точки пересечений + середины
+    -- кратчайших линий для пар с зазором <= 800м), а не по мидпоинтам
+    -- геометрий: мидпоинты длинных улиц раздували scatter (Курская ×
+    -- Марсельская: реальный зазор пары 1148м, а scatter по мидпоинтам 1593м).
+    wc_pair_anchors AS (
+        SELECT pt_m FROM wc_intersections
+        UNION ALL
+        SELECT
+            ST_LineInterpolatePoint(ST_ShortestLine(a.geom_m, b.geom_m), 0.5) AS pt_m
+        FROM candidates a
+        CROSS JOIN candidates b
+        WHERE a.id < b.id
+          AND NOT ST_Intersects(a.geom_m, b.geom_m)
+          AND ST_Distance(a.geom_m, b.geom_m) <= 800.0
+    ),
     wc_scatter AS (
         SELECT
             ST_MaxDistance(
                 ST_Collect(wp.pt_m),
                 ST_Centroid(ST_Collect(wp.pt_m))
             ) AS distance_m
-        FROM wc_points wp
+        FROM wc_pair_anchors wp
     ),
     hypothesis_weighted_centroid AS (
         SELECT
@@ -466,8 +481,11 @@ BEGIN
         LIMIT 1
     ),
 
-    -- ── Anti-list Guard: сильный кандидат-выброс (>2000м от ГЕОМЕТРИИ
+    -- ── Anti-list Guard: сильный кандидат-выброс (>3000м от ГЕОМЕТРИИ
     --    кандидата, а не от его середины) → полный fallback на best_single ────
+    -- Калибровка: 3000м спасает правильный intersection-якорь id 383
+    -- (Филатова×ИнтоСана 28м, но «Дом мебели» в 2789м) и режет FP-пины
+    -- «петрово» 27км, «зелёное» 133км, «центральное» 250км.
     anti_list_trigger AS (
         SELECT
             bh.strategy,

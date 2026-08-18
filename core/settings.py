@@ -346,6 +346,7 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
                 socks5_host=env.str("PROXY_HOST", None),
                 proxy_port=env.int("PROXY_PORT", 1080),
                 proxy_scheme=env.str("PROXY_SCHEME", "socks5"),
+                history_limit=env.int("PARSER_HISTORY_LIMIT", 100),
             ),
             question_overlay=QuestionOverlayConfig(),
             ollama=OllamaConfig(

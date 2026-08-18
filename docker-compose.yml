@@ -78,6 +78,7 @@ services:
       PROXY_HOST: ${PROXY_HOST:-}
       PROXY_PORT: ${PROXY_PORT:-1080}
       PROXY_SCHEME: ${PROXY_SCHEME:-socks5}
+      PARSER_HISTORY_LIMIT: ${PARSER_HISTORY_LIMIT:-1000}
     <<: *dns
     extra_hosts:
       - host.docker.internal:host-gateway

@@ -42,10 +42,10 @@ $$ LANGUAGE plpgsql;
 -- safe_geom_from_text вычисляется один раз в подзапросе; строки с NULL-геометрией
 -- (битый WKT) отсекаются — остальные грузятся.
 INSERT INTO geo(names, type, geom)
-SELECT names_arr, type, ST_SimplifyPreserveTopology(geom, 0.0002)
+SELECT names_arr, type, geom
 FROM (
     SELECT
-        string_to_array(names, '|') AS names_arr,
+        string_to_array(names, '|') AS names_arr,  -- разбиваем по pipe на массив
         safe_geom_from_text(wkt_geom, 4326)         AS geom,
         type
     FROM temp_geo_wkt

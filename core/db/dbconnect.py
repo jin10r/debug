@@ -60,9 +60,9 @@ class Request:
         """Fetch all geo records as GeoJSON."""
         return await self.geo.get_all_geo_as_geojson()
 
-    async def get_filtered_events_as_geojson(self, time_interval_minutes: int, layers: Optional[List[str]] = None, since_timestamp: Optional[str] = None) -> Dict:
+    async def get_filtered_events_as_geojson(self, time_interval_minutes: int, layers: Optional[List[str]] = None, since_timestamp: Optional[str] = None, after_id: Optional[int] = None) -> Dict:
         """Fetch filtered events as GeoJSON."""
-        return await self.events.get_filtered_events_as_geojson(time_interval_minutes, layers, since_timestamp)
+        return await self.events.get_filtered_events_as_geojson(time_interval_minutes, layers, since_timestamp, after_id)
 
     async def get_incremental_events(
         self,

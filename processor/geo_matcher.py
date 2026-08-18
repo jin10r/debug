@@ -21,9 +21,8 @@ from .phonetic_index import PhoneticIndex
 from .word_tokenizer import Token
 
 if TYPE_CHECKING:
+    from .phonetic_index import PhoneticEntry
     from .semantic_matcher import SemanticMatcher
-
-from processor.metrics import record_geo_matches
 
 try:
     from core.settings import settings
@@ -46,24 +45,47 @@ def _fuzzy_match(query: str, phrases: list, threshold: float):
 
 
 def _batch_fuzzy_match(queries: list, phrases: list, threshold: float):
-    """Batch fuzzy matching: один IPC на всё сообщение."""
-    try:
-        results = rf_process.extract(
-            queries,
-            phrases,
-            scorer=fuzz.WRatio,
-            score_cutoff=threshold,
-            limit=1
-        )
-        return {q: r[0] for q, r in zip(queries, results) if r}
-    except Exception as e:
-        logger.warning(f"Batch fuzzy match failed: {e}")
-        return {}
+    """Batch fuzzy matching: один IPC на всё сообщение.
+
+    rapidfuzz.process.extract(queries=list, ...) в 3.9.x молча возвращает
+    пустой список (баг версии), поэтому каждый запрос матчим отдельным
+    extractOne — иначе Tier 2 мёртв на проде (ProcessPoolExecutor).
+    """
+    results = {}
+    for q in queries:
+        try:
+            match = rf_process.extractOne(
+                q, phrases, scorer=fuzz.WRatio, score_cutoff=threshold,
+            )
+            if match:
+                results[q] = match
+        except Exception as e:
+            logger.warning(f"Batch fuzzy match failed for {q!r}: {e}")
+    return results
+
+
+def _typo_len_guard(surface: str) -> int:
+    """Допустимая разница длин surface↔кандидат для Tier 2 (орфо-корректор).
+
+    Старый max(2, 20%) резал реальные опечатки длинных имён
+    («Туристическая»→«Туристская», diff=3). Для поверхностей >=10 символов
+    допуск расширен до max(3, 25%); короткие остаются на max(2, 20%).
+    """
+    if len(surface) >= 10:
+        return max(3, int(0.25 * len(surface)))
+    return max(2, int(0.2 * len(surface)))
 
 _LOC_PREPS: frozenset = frozenset({
     'на', 'по', 'в', 'у', 'до',
     'від', 'біля',
     'около', 'возле', 'вдоль',
+})
+
+# Шумовые служебные токены («ст.», «ул.», «г.» + суффиксы порядковых),
+# пропускаемые слайдинг-окном: «11 ст. Фонтана» → ключ (11, фонтана),
+# совпадающий с именем «11 Фонтана» из справочника.
+_NOISE_TOKENS: frozenset = frozenset({
+    'ст', 'ул', 'вул', 'пр', 'пер', 'ш', 'им', 'г', 'го', 'й', 'ій', 'йй',
 })
 
 # Типы в порядке приоритета: settlement выше street
@@ -154,6 +176,18 @@ class GeoMatcher:
             return set(getattr(settings.similarity, 'punctuation_tokens', ()))
         return {'#', '/', ',', '.', '(', ')', '!', '?', '-', '«', '»', '"', ':', ';'}
 
+    def _is_short_settlement(self, entry: "PhoneticEntry") -> bool:
+        """Guard Tier 2: короткие settlement-имена (<=6 символов) не матчатся.
+
+        Короткие топонимы («Малое», «Петрово») частотны по всей области —
+        distant-спаривание через орфо-корректор даёт пин за десятки км.
+        Длинные имена остаются — их анти-list (SQL) отсекает по дистанции.
+        """
+        return (
+            self._geo_types.get(entry.street_id) in ('village', 'town')
+            and len(entry.canonical_name or '') <= 6
+        )
+
     def _strip_noise(self, tokens: List[Token], lemmas: List[Lemma]) -> Tuple[List[Token], List[Lemma]]:
         """Удаление шумовых (пунктуационных) токенов из последовательности."""
         if len(tokens) != len(lemmas):
@@ -178,6 +212,19 @@ class GeoMatcher:
                 settings.similarity.max_sliding_window
                 if settings and settings.similarity else 3
             )
+        # NOISE-gap: шумовые токены («ст.», «ул.», «г.», суффиксы порядковых)
+        # выкидываются ДО генерации окон — «11 ст. Фонтана» даёт окна как
+        # «11 Фонтана», и Tier 1 попадает в ключ справочника напрямую.
+        sig_tokens: List[Token] = []
+        sig_stems: List[str] = []
+        for t, s in zip(clean_tokens, clean_stems):
+            if (t.text or '').strip().lower() in _NOISE_TOKENS:
+                continue
+            sig_tokens.append(t)
+            sig_stems.append(s)
+        clean_tokens, clean_stems = sig_tokens, sig_stems
+        if not clean_tokens:
+            return []
         out = []
         seen: Set[Tuple[int, int]] = set()
         n = len(clean_tokens)
@@ -186,7 +233,18 @@ class GeoMatcher:
             prev_text = clean_tokens[start_i - 1].text.lower() if start_i > 0 else ''
             is_anchored = prev_text in _LOC_PREPS
 
-            if not is_anchored and current_stem and not self._index.has_stem(current_stem):
+            # Предфильтр-якорь: пропускаем позицию, если её одиночный токен не
+            # может быть началом матча. Помимо точного стема учитываем:
+            #  - has_stem_anywhere: стем входит в ЛЮБОЙ (в т.ч. многословный)
+            #    ключ индекса — иначе "Застава 2" в начале сообщения терялось
+            #    (стем 'застав' есть только в паре ('2', 'застав'));
+            #  - длину поверхности >= 5: кандидат для Tier 2 (орфо-корректор),
+            #    который матчит по сырому surface, а не по стему — опечатка в
+            #    начале сообщения иначе не доходила до Tier 2 вовсе.
+            if (not is_anchored and current_stem
+                    and not self._index.has_stem(current_stem)
+                    and not self._index.has_stem_anywhere(current_stem)
+                    and len(clean_tokens[start_i].text) < 5):
                 continue
 
             for end_i in range(start_i, min(start_i + max_window, n)):
@@ -227,7 +285,11 @@ class GeoMatcher:
         return None
 
     async def _link_span(self, surface: str, stems: Tuple[str, ...], span: Tuple[int, int]) -> Optional[Dict]:
-        """Поиск geo-объекта по тексту: Tier 1 (стемы) → Tier 2 (опечатки)."""
+        """Поиск geo-объекта по тексту: Tier 1 (стемы) → Tier 2 (опечатки).
+
+        NOTE: в find_geo() Tier 2 выполняется батчем (tier2_queries), этот метод
+        используется только извне/тестами — держать guards консистентными.
+        """
         if not surface:
             return None
 
@@ -273,8 +335,11 @@ class GeoMatcher:
             if s_match:
                 cand, score, idx = s_match
                 if (surface[0] == cand[0]
-                        and abs(len(cand) - len(surface)) <= max(2, int(0.2 * len(surface)))):
+                        and surface[:3] == cand[:3]
+                        and abs(len(cand) - len(surface)) <= _typo_len_guard(surface)):
                     entry = s_meta[idx]
+                    if self._is_short_settlement(entry):
+                        return None
                     return {
                         'geo_id': entry.street_id,
                         'score': score / 100.0,
@@ -304,7 +369,6 @@ class GeoMatcher:
         for r in results:
             r.pop('_span', None)
             r['type'] = self._geo_types.get(r['geo_id'], '')
-        record_geo_matches(results)
         source_stats = {}
         for r in results:
             source_stats[r['source']] = source_stats.get(r['source'], 0) + 1
@@ -376,7 +440,7 @@ class GeoMatcher:
                         'is_anchored': is_anchored,
                     })
 
-        if tier2_queries and self._executor:
+        if tier2_queries:
             typo_thresh = (
                 settings.similarity.surface_typo_threshold * 100
                 if settings and settings.similarity
@@ -385,21 +449,34 @@ class GeoMatcher:
             )
             s_phrases, s_meta = self._index.surface_phrases()
 
-            loop = asyncio.get_event_loop()
-            batch_results = await loop.run_in_executor(
-                self._executor,
-                _batch_fuzzy_match,
-                tier2_queries,
-                s_phrases,
-                typo_thresh
-            )
+            if self._executor:
+                loop = asyncio.get_event_loop()
+                batch_results = await loop.run_in_executor(
+                    self._executor,
+                    _batch_fuzzy_match,
+                    tier2_queries,
+                    s_phrases,
+                    typo_thresh
+                )
+            else:
+                # Без пула потоков (тесты, деградация, сбой инициализации
+                # executor) — синхронный Tier 2. Иначе typo-кандидаты молча
+                # отбрасывались: batch-блок был целиком завязан на executor.
+                batch_results = {}
+                for surface in tier2_queries:
+                    m = _fuzzy_match(surface, s_phrases, typo_thresh)
+                    if m:
+                        batch_results[surface] = m
 
             for i, surface in enumerate(tier2_queries):
                 if surface in batch_results:
                     match, score, idx = batch_results[surface]
                     if (surface[0] == match[0]
-                            and abs(len(match) - len(surface)) <= max(2, int(0.2 * len(surface)))):
+                            and surface[:3] == match[:3]
+                            and abs(len(match) - len(surface)) <= _typo_len_guard(surface)):
                         entry = s_meta[idx]
+                        if self._is_short_settlement(entry):
+                            continue
                         meta = tier2_meta[i]
                         result = {
                             'geo_id': entry.street_id,

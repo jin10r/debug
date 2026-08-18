@@ -4,7 +4,7 @@
  * Protocol (client → server):
  *   {type: "auth", token_type: "bearer", token: "..."}
  *   {type: "auth", token_type: "telegram_init_data", init_data: "..."}
- *   {type: "get_events", since_timestamp: "<ISO>" | null}
+ *   {type: "get_events", since_timestamp: "<ISO>" | null, since_id: <int> | null}
  *   {type: "ping"}
  *
  * Protocol (server → client):
@@ -21,7 +21,6 @@ export class WebSocketManager {
     public isConnected = false;
 
     private reconnectAttempts = 0;
-    private readonly maxReconnectAttempts = 10;
     private readonly baseReconnectDelay = 1000;
     private readonly reconnectMultiplier = 1.5;
     private reconnectTimer: number | null = null;
@@ -110,8 +109,15 @@ export class WebSocketManager {
 
     /** Request events from server — called after auth_ok is received */
     private requestEvents(): void {
-        const since = window.store?.getState?.().getLatestTimestamp?.() ?? null;
-        console.log('[WS] Requesting events since:', since ?? 'initial load');
+        const state = window.store?.getState?.();
+        const since = state?.getLatestTimestamp?.() ?? null;
+        // Catch-up watermark = max event id. event_time НЕ годится: backfill
+        // исторических сообщений даёт новые id при старом event_time, и
+        // catch-up по времени такие события теряет навсегда (баг «2 события
+        // на карте»). id монотонен по вставке — after_id доставляет всё.
+        const sinceId = state?.getLatestId?.() ?? null;
+        console.log('[WS] Requesting events since:', since ?? 'initial load',
+            '| since_id:', sinceId ?? 'initial');
 
         // Enter snapshot mode: features until events_snapshot_end are a batch
         // sync and must not raise per-event notifications.
@@ -127,7 +133,7 @@ export class WebSocketManager {
             this.finishSnapshot();
         }, this.SNAPSHOT_TIMEOUT_MS);
 
-        this.sendMessage({ type: 'get_events', since_timestamp: since });
+        this.sendMessage({ type: 'get_events', since_timestamp: since, since_id: sinceId });
     }
 
     /** Flush the buffered snapshot batch and leave snapshot mode. */
@@ -262,10 +268,8 @@ export class WebSocketManager {
         this.stopHeartbeat();
         this.onConnectionStatusChange?.(false);
 
-        if (event.code !== 1000 && this.reconnectAttempts < this.maxReconnectAttempts) {
+        if (event.code !== 1000) {
             this.scheduleReconnect();
-        } else if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-            console.error('[WS] Max reconnect attempts reached — offline mode');
         }
     }
 
@@ -288,7 +292,7 @@ export class WebSocketManager {
         // Jitter ±20% — чтобы множество клиентов не ломились на reconnect синхронно.
         const delay = Math.round(base * (0.8 + Math.random() * 0.4));
 
-        console.log(`[WS] Reconnect in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+        console.log(`[WS] Reconnect in ${delay}ms (attempt ${this.reconnectAttempts})`);
         this.reconnectTimer = window.setTimeout(() => {
             this.reconnectTimer = null;
             this.connect();
@@ -420,7 +424,7 @@ export class WebSocketManager {
         }
         this.receivingSnapshot = false;
         this.snapshotBuffer = [];
-        this.reconnectAttempts = this.maxReconnectAttempts; // prevent auto-reconnect
+        this.reconnectAttempts = Infinity; // prevent auto-reconnect
         this.ws?.close(1000, 'client disconnect');
         this.ws = null;
         this.isConnected = false;

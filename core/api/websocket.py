@@ -2,7 +2,6 @@
 import asyncio
 import json
 import logging
-import time
 from typing import Dict, Set, Optional
 from datetime import datetime, timezone
 from aiohttp import web, WSMsgType
@@ -10,14 +9,6 @@ from core.db.dbconnect import Request
 from core.settings import settings
 from core.middlewares.auth import verify_jwt_token
 from core.utils.telegram_validation import validate_telegram_webapp_data
-from core.utils.metrics import (
-    ws_connections_active,
-    ws_connections_rejected_total,
-    ws_ping_rate_limited_total,
-    ws_broadcasts_total,
-    ws_broadcast_latency_seconds,
-    ws_broadcast_errors_total,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +38,6 @@ class WebSocketManager:
         self.broadcast_lock = asyncio.Lock()
         self._ping_counters: Dict[web.WebSocketResponse, list] = {}  # Rate limiting
         self._cleanup_task: Optional[asyncio.Task] = None
-        # Серия должна существовать с самого старта (до первого соединения),
-        # иначе панель "Активные WS-соединения" показывает No data.
-        ws_connections_active.set(0)
 
     async def start_cleanup_task(self):
         """Start background task for cleaning up stale connections."""
@@ -80,11 +68,9 @@ class WebSocketManager:
         """
         if len(self.connections) >= MAX_CONNECTIONS:
             logger.warning(f"WebSocket connection rejected: limit {MAX_CONNECTIONS} reached")
-            ws_connections_rejected_total.inc()
             return False
         self.connections.add(ws)
         self._ping_counters[ws] = []
-        ws_connections_active.set(len(self.connections))
         logger.info(f"WebSocket connection registered. Total: {len(self.connections)}")
         return True
 
@@ -108,7 +94,6 @@ class WebSocketManager:
         if ws in self.connections:
             self.connections.discard(ws)
             self._ping_counters.pop(ws, None)
-            ws_connections_active.set(len(self.connections))
         logger.debug(f"WebSocket connection unregistered. Total: {len(self.connections)}")
 
     async def close_all(self) -> None:
@@ -129,7 +114,6 @@ class WebSocketManager:
                 pass
         self.connections.clear()
         self._ping_counters.clear()
-        ws_connections_active.set(0)
 
     async def _broadcast_payload(self, payload: str) -> int:
         """Send payload string to all connected clients in chunks; remove dead ones."""
@@ -145,7 +129,6 @@ class WebSocketManager:
                 logger.debug(f"Broadcast send error/timeout: {e}")
                 return False
 
-        start = time.perf_counter()
         success = 0
         CHUNK_SIZE = 100
 
@@ -158,10 +141,8 @@ class WebSocketManager:
                     if ok is True:
                         success += 1
                     else:
-                        ws_broadcast_errors_total.inc()
                         await self.unregister_connection(ws)
 
-        ws_broadcast_latency_seconds.observe(time.perf_counter() - start)
         return success
 
     async def send_snapshot(self, events_data: dict, channel: str = 'events_new'):
@@ -191,23 +172,33 @@ class WebSocketManager:
     async def send_events_since(
         self,
         ws: web.WebSocketResponse,
-        since_timestamp: Optional[str] = None
+        since_timestamp: Optional[str] = None,
+        since_id: Optional[int] = None
     ):
         """
         Send individual GeoJSON features to a client.
-        If since_timestamp is None — send all events from last 60 min (initial load).
-        If set — send only events newer than that timestamp (catch-up after reconnect).
+
+        Watermark priority: since_id (max event id the client already has)
+        wins over since_timestamp. `id` is monotonic by INSERT time, while
+        event_time of backfilled historical messages lies in the past — a
+        time-based catch-up would skip those events forever. With since_id,
+        the server returns every event with id > since_id within the 60-min
+        window, including backfill and healing any cache gaps.
+
+        If both are None — send all events from last 60 min (initial load).
         """
         try:
             events_data = await self.db_request.get_filtered_events_as_geojson(
                 time_interval_minutes=60,
-                since_timestamp=since_timestamp
+                since_timestamp=None if since_id is not None else since_timestamp,
+                after_id=since_id
             )
 
             features = events_data.get('features', [])
             logger.info(
                 f"Sending {len(features)} features to client "
-                f"(since={since_timestamp or 'initial'})"
+                f"(after_id={since_id or 'initial'}, "
+                f"since={'' if since_id is not None else (since_timestamp or 'initial')})"
             )
 
             for feature in features:
@@ -267,7 +258,6 @@ class WebSocketManager:
         })
 
         success = await self._broadcast_payload(payload)
-        ws_broadcasts_total.labels(message_type='feature').inc()
         logger.info(f"Feature broadcasted: {success}/{len(self.connections)} clients")
 
     async def broadcast_events_cleaned(self, data: Dict):
@@ -282,7 +272,6 @@ class WebSocketManager:
         })
 
         success = await self._broadcast_payload(payload)
-        ws_broadcasts_total.labels(message_type='events_cleaned').inc()
         logger.info(f"events_cleaned broadcasted: {success}/{len(self.connections)} clients")
 
 
@@ -395,7 +384,6 @@ async def websocket_handler(request: web.Request):
                         # Rate limiting для защиты от спама
                         if not ws_manager._check_rate_limit(ws):
                             logger.warning("WebSocket ping rate limit exceeded")
-                            ws_ping_rate_limited_total.inc()
                             await ws.send_str(json.dumps({
                                 'type': 'error',
                                 'message': 'rate limit exceeded'
@@ -429,7 +417,14 @@ async def websocket_handler(request: web.Request):
                             continue
 
                         since_timestamp = data.get('since_timestamp')  # ISO string or null
-                        await ws_manager.send_events_since(ws, since_timestamp)
+                        since_id_raw = data.get('since_id')  # int or null
+                        since_id = None
+                        if since_id_raw is not None:
+                            try:
+                                since_id = int(since_id_raw)
+                            except (TypeError, ValueError):
+                                logger.warning(f"Invalid since_id '{since_id_raw}', ignoring")
+                        await ws_manager.send_events_since(ws, since_timestamp, since_id)
 
                 except json.JSONDecodeError:
                     logger.warning("Invalid JSON received from WebSocket client")

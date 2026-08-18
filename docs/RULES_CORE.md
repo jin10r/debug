@@ -50,14 +50,20 @@ requests.get(url)  # блокирует event loop
 ```python
 app = web.Application(middlewares=[
     logging_middleware,       # 1. Логирование
-    metrics_middleware,       # 2. Prometheus метрики
-    csrf_middleware,          # 3. CSRF защита
-    jwt_auth_middleware,      # 4. JWT аутентификация
-    rate_limiter.middleware   # 5. Rate limiting
+    body_size_limit_middleware,  # 2. Лимит тела запроса
+    jwt_auth_middleware,      # 3. JWT аутентификация
+    rate_limiter.middleware   # 4. Rate limiting
 ])
 ```
 
 **Правило:** Порядок middleware фиксирован. Добавление нового middleware — только в конец chain (перед rate_limiter) или с пересчётом приоритетов.
+
+**CSRF:** не используется. Клиент авторизуется ТОЛЬКО через `Authorization: Bearer`
+(JWT в sessionStorage); cookie `session_token` нигде не устанавливается, поэтому
+stateless CSRF-проверка всегда проходила насквозь (мёртвый код). Bearer-токены
+браузер не отправляет автоматически, CORS выключен (same-origin) — CSRF-вектор
+отсутствует. Если когда-либо будет введена cookie-аутентификация — вернуть
+`csrf_middleware` (модуль сохранён в истории git).
 
 ### R-C5: PostgreSQL LISTEN/NOTIFY + Catch-Up
 
@@ -153,12 +159,14 @@ WebSocket протокол работает с отдельными GeoJSON Feat
 Server → Client: {"type": "feature", "data": <GeoJSON Feature>, "timestamp": "..."}
 Server → Client: {"type": "events_snapshot_end", "count": N, "timestamp": "..."}
 Client → Server: {"type": "auth", "token": "..."}
-Client → Server: {"type": "get_events", "since_timestamp": "..."}
+Client → Server: {"type": "get_events", "since_timestamp": "...", "since_id": <int>}
 Client → Server: {"type": "ping"}
 Server → Client: {"type": "pong", "timestamp": "..."}
 ```
 
 **Правило:** `events_snapshot_end` — терминатор батча. Клиент молча обрабатывает батч; уведомления ТОЛЬКО для live push после snapshot_end.
+
+**Catch-up watermark (R-C11a):** клиент шлёт `since_id` = max event id в своём store. `id` (SERIAL) монотонен по моменту ВСТАВКИ, а `event_time` у backfill-исторических сообщений лежит в прошлом — catch-up по времени такие события теряет навсегда. При наличии `since_id` сервер игнорирует `since_timestamp` и отдаёт события с `id > since_id` в окне 60 минут.
 
 ### R-C12: Connection limit
 
@@ -178,16 +186,17 @@ SEND_TIMEOUT = 5.0  # секунд на отправку одному клиен
 
 ### R-C14: Snapshot on connect
 
-При `get_events` (или `since_timestamp=None`) core отправляет все события за 60 минут:
+При `get_events` (или `since_id=None`) core отправляет все события за 60 минут:
 
 ```python
 events_data = await self.db_request.get_filtered_events_as_geojson(
     time_interval_minutes=60,
-    since_timestamp=since_timestamp
+    since_timestamp=None if since_id is not None else since_timestamp,
+    after_id=since_id
 )
 ```
 
-**Правило:** Snapshot отправляется по одному feature за сообщение (не массивом) для совместимости с медленными WebView.
+**Правило:** Snapshot отправляется по одному feature за сообщение (не массивом) для совместимости с медленными WebView. Catch-up по `after_id` предпочтителен: доставляет backfill-события, которые catch-up по `event_time` пропускает.
 
 ### R-C15: asyncpg pool — min/max sizing
 

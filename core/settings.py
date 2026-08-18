@@ -148,8 +148,8 @@ class SimilarityConfig:
     surface_typo_threshold: float = 0.80
 
     # Включение SemanticMatcher (ONNX rubert-tiny2). По умолчанию ОТКЛЮЧЕН:
-    # проверка живых данных показала semantic_checked_total=0 — серая зона
-    # (0.70–0.85) пуста, все реальные кандидаты ≥0.85 проходят как confident.
+    # проверка живых данных показала, что серая зона (0.70–0.85) пуста — все
+    # реальные кандидаты ≥0.85 проходят как confident.
     # Модель тратила +20 сек старта и 116 МБ без единого решения.
     # См. docs/GEOMETRY_ANALYSIS.md §12–13. Включить для будущего re-enable:
     # обучать голову на эмбеддингах модели (см. §12.4) или расширить серую зону.
@@ -346,6 +346,7 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
                 socks5_host=env.str("PROXY_HOST", None),
                 proxy_port=env.int("PROXY_PORT", 1080),
                 proxy_scheme=env.str("PROXY_SCHEME", "socks5"),
+                history_limit=env.int("PARSER_HISTORY_LIMIT", 100),
             ),
             question_overlay=QuestionOverlayConfig(),
             ollama=OllamaConfig(

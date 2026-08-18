@@ -155,6 +155,22 @@ def preprocess_light(text: str) -> str:
     return text.strip()
 
 
+def truncate_for_geo(text: str, max_len: int) -> str:
+    """Обрезка длинного сообщения для гео-анализа вместо выброса (B6).
+
+    Длинные сообщения раньше целиком заменялись заглушкой «слишком длиннное…»
+    и уходили в random ни с чем. Теперь сохраняем начало и конец текста —
+    локация в длинных сообщениях обычно в начале или в конце, середина —
+    повествование и детали.
+    """
+    if len(text) <= max_len:
+        return text
+    half = max_len // 2
+    head = text[:half].rsplit(' ', 1)[0]
+    tail = text[-half:].split(' ', 1)[-1]
+    return f"{head} … {tail}"
+
+
 def clean(text: str) -> str:
     """Агрессивная нормализация: убрать пунктуацию, lower-case.
 

@@ -1,32 +1,34 @@
 # Survival Map
 
 Telegram Mini App — интерактивная карта событий Одессы (блокпосты, ТЦК, полиция,
-транспорт). Парсер читает Telegram-канал, извлекает из сообщений упоминания улиц,
-геолоцирует их в PostGIS и в реальном времени отдаёт на карту через WebSocket.
-События живут 60 минут (TTL) и исчезают сами.
+транспорт). Парсер читает Telegram-канал и складывает сообщения в очередь;
+процессор извлекает из них упоминания улиц, геолоцирует в PostGIS и в реальном
+времени отдаёт на карту через WebSocket. Клиент показывает события за последние
+60 минут и удаляет их сам (TTL).
 
 - **Извлечение улиц** — sliding-window матчер: морфология (`mawo-pymorphy3`) +
   fuzzy-сопоставление (`rapidfuzz`) против справочника гео-объектов (postgres/data/geo.csv). Без NER/нейросетей,
-  CPU-only. Детали алгоритма — [docs/parser.md](docs/parser.md).
-- **Карта** — PWA на нативном MapLibre GL JS, offline-first. Детали —
-  [docs/web.md](docs/web.md)
+  CPU-only. Детали алгоритма — [docs/RULES_PARSER.md](docs/RULES_PARSER.md).
+- **Карта** — PWA на Leaflet с векторной подложкой MapLibre GL (OpenFreeMap),
+  offline-first. Детали — [docs/RULES_WEB.md](docs/RULES_WEB.md)
 
 ## Архитектура
 
-Четыре Docker-сервиса (`docker-compose.yml`):
+Пять Docker-сервисов (`docker-compose.yml`):
 
-| Сервис     | Назначение                                                        | Публичный порт |
-|------------|-------------------------------------------------------------------|----------------|
-| `postgres` | PostgreSQL + PostGIS: объекты (справочник) и события с геометрией      | —              |
-| `parser`   | kurigram-клиент: канал → матчер → запись событий + `pg_notify`     | —              |
-| `core`     | aiohttp: REST + WebSocket, JWT-валидация Telegram, `LISTEN events` | —              |
-| `web`      | reverse-proxy + статика фронтенда (собирается в образе)            | **80**         |
+| Сервис      | Назначение                                                        | Публичный порт |
+|-------------|-------------------------------------------------------------------|----------------|
+| `postgres`  | PostgreSQL + PostGIS: объекты (справочник), события с геометрией, очередь | —              |
+| `parser`    | kurigram-клиент: канал → предобработка → `pending_events` (очередь)  | —              |
+| `processor` | NLP-пайплайн: токенизация → лемматизация → классификация → geo → `events` | —              |
+| `core`      | aiohttp: REST + WebSocket, JWT-валидация Telegram, `LISTEN events` | —              |
+| `web`       | reverse-proxy + статика фронтенда (собирается в образе)            | **80**         |
 
 Поток данных:
 
 ```
-Telegram-канал → parser (sliding-window матчер) → PostgreSQL (PostGIS)
-   → pg_notify → core (LISTEN → WebSocket) → web → фронтенд (карта MapLibre)
+Telegram-канал → parser → pending_events (очередь) → processor (NLP/geo)
+   → PostgreSQL (PostGIS) → pg_notify → core (LISTEN → WebSocket) → web → карта
 ```
 
 Сети изолированы: БД во внутренней сети (`internal: true`), наружу торчит только
@@ -112,7 +114,7 @@ cd survival_map
 ### 3. Конфигурация `.env`
 
 ```bash
-cp env.example .env
+cp .env.example .env   # шаблон в репозитории; секреты — только в .env (gitignored)
 ```
 
 **Минимум для старта — вписать реальный `BOT_TOKEN`** (без валидного токена `core`
@@ -125,7 +127,7 @@ cp env.example .env
 | `WEBAPP_URL`                  | для prod | публичный HTTPS-URL приложения; бот вставляет его в кнопку «Открыть приложение» и он же задаётся в @BotFather. Для локальной проверки не нужен |
 | `TELEGRAM_VALIDATION_ENABLED` | нет   | `True` (дефолт) — доступ только из Telegram (Mini App); `False` — открытый доступ для локальной проверки. **Пустым не оставлять** |
 | `REDIRECT_URL`                | нет   | куда отправлять не-Telegram трафик при включённой валидации |
-| `JWT_SECRET`                  | нет   | автогенерируется в памяти при старте; задать только для стабильного/общего секрета (≥32 символов) |
+| `JWT_SECRET`                  | да    | секрет подписи токенов, ≥32 символов; при отсутствии/плейсхолдере `core` не стартует (fail-fast, R-C8) |
 
 Как именно открыть приложение (локально в браузере или как Telegram Mini App) —
 см. раздел 5 ниже.
@@ -193,20 +195,22 @@ docker compose down -v     # + удалить тома (БД, медиа)
 
 ```
 core/        backend сервиса `core` (aiohttp app, API, БД-адаптеры, settings)
-parser/      сервис `parser` (kurigram + sliding-window матчер)
+parser/      сервис `parser` (kurigram: канал → очередь pending_events)
+processor/   сервис `processor` (NLP: токенизация → лемматизация → geo → events)
 postgres/    init-скрипты схемы и данные (geo.csv, stopwords.csv)
-web/         фронтенд сервиса `web` (TypeScript + MapLibre GL, webpack)
-docs/        по одному файлу на микросервис (core, parser, web, postgres)
+web/         фронтенд сервиса `web` (TypeScript + Leaflet/MapLibre, webpack)
+docs/        правила микросервисов (RULES_*.md) + ревью/планы
 ```
 
 ## Документация
 
 По документу на каждый микросервис:
 
-- [docs/core.md](docs/core.md) — backend: REST + WebSocket API, JWT/Telegram, middleware, БД-адаптеры
-- [docs/parser.md](docs/parser.md) — алгоритм парсера (sliding-window, тиры матча)
-- [docs/web.md](docs/web.md) — фронтенд + nginx (PWA, MapLibre, reverse-proxy)
-- [docs/postgres.md](docs/postgres.md) — схема PostGIS, справочник, TTL событий
+- [docs/RULES_CORE.md](docs/RULES_CORE.md) — backend: REST + WebSocket API, JWT/Telegram, middleware, БД-адаптеры
+- [docs/RULES_PARSER.md](docs/RULES_PARSER.md) — алгоритм парсера (канал → очередь)
+- [docs/RULES_PROCESSOR.md](docs/RULES_PROCESSOR.md) — NLP-пайплайн (sliding-window, тиры матча, стратегии геометрии)
+- [docs/RULES_WEB.md](docs/RULES_WEB.md) — фронтенд + nginx (PWA, Leaflet/MapLibre, reverse-proxy)
+- [docs/RULES_POSTGRES.md](docs/RULES_POSTGRES.md) — схема PostGIS, справочник, TTL событий
 
 Поддержать разработчиков монетой здесь:
  https://bastyon.com/keep_alive_odessa?ref=PHQHKADhBPxxSwjiggV6G2BxSvy6TY1Lgb

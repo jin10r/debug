@@ -23,9 +23,9 @@ if "processor" not in sys.modules:
     _pkg.__path__ = [str(ROOT / "processor")]
     sys.modules["processor"] = _pkg
 
-# semantic_matcher.py импортирует onnxruntime/tokenizers/prometheus_client на
-# уровне модуля. В лёгком dev-окружении их может не быть — стабим (тесты не
-# загружают ONNX-модель и не трогают метрики).
+# semantic_matcher.py импортирует onnxruntime/tokenizers на уровне модуля.
+# В лёгком dev-окружении их может не быть — стабим (тесты не загружают
+# ONNX-модель).
 import importlib.util  # noqa: E402
 
 
@@ -45,25 +45,6 @@ if _missing("tokenizers"):
     _m = types.ModuleType("tokenizers")
     _m.Tokenizer = object
     sys.modules["tokenizers"] = _m
-
-if _missing("prometheus_client"):
-    _m = types.ModuleType("prometheus_client")
-
-    class _Counter:
-        def __init__(self, *a, **k):
-            pass
-
-        def inc(self, *a, **k):
-            pass
-
-        def labels(self, *a, **k):
-            return self
-
-    _m.Counter = _Counter
-    _m.generate_latest = lambda *a, **k: b""
-    _m.CONTENT_TYPE_LATEST = "text/plain"
-    _m.REGISTRY = object()
-    sys.modules["prometheus_client"] = _m
 
 from processor.semantic_matcher import (  # noqa: E402
     SemanticMatcher,

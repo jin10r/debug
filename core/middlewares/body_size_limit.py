@@ -3,8 +3,8 @@ Request body size limit middleware.
 
 Limits total request body size to MAX_BODY_BYTES (1 MB) for all endpoints
 except media upload/serving paths. Returns HTTP 413 (Payload Too Large)
-when the Content-Length header exceeds the limit, or when the body is
-being streamed and reaches the limit.
+when the Content-Length header exceeds the limit; for chunked bodies
+(no Content-Length) the body is read once via request.read() and checked.
 
 Media endpoints (/api/media/*) are exempt since media is served via
 FileResponse (responses, not requests) — but the exemption guard ensures
@@ -68,26 +68,24 @@ async def body_size_limit_middleware(request: web.Request, handler):
             status=413,
         )
 
-    # Stream-guard: if no Content-Length (chunked transfer encoding), read
-    # the body with a hard limit and reject if exceeded.
+    # Stream-guard: if no Content-Length (chunked transfer encoding), read the
+    # body and reject if it exceeds the limit. `request.read()` кэширует тело в
+    # aiohttp (`_read_bytes`), поэтому последующий request.json()/text() в
+    # хендлере переиспользует его — поток НЕ «съедается» (раньше guard читал
+    # request.content напрямую, и chunked-тело приходило к хендлеру пустым).
+    # Верхняя граница памяти — client_max_body_size в nginx (1m).
     if content_length is None:
-        remaining = max_bytes
         try:
-            reader = request.content
-            while True:
-                chunk = await reader.read(min(65536, remaining + 1))
-                if not chunk:
-                    break
-                remaining -= len(chunk)
-                if remaining < 0:
-                    logger.warning(
-                        "Chunked request body too large: %s %s max=%d",
-                        request.method, path, max_bytes,
-                    )
-                    return web.json_response(
-                        {'error': 'Request body too large', 'code': 'BODY_TOO_LARGE'},
-                        status=413,
-                    )
+            body = await request.read()
+            if len(body) > max_bytes:
+                logger.warning(
+                    "Chunked request body too large: %s %s len=%d max=%d",
+                    request.method, path, len(body), max_bytes,
+                )
+                return web.json_response(
+                    {'error': 'Request body too large', 'code': 'BODY_TOO_LARGE'},
+                    status=413,
+                )
         except Exception:
             pass
 

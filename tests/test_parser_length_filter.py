@@ -1,48 +1,36 @@
-"""Tests for parser-side MAX_TEXT_LENGTH filter (R-P1 length guard).
+"""Tests for parser-side truncation for geo (B6).
 
 Verifies:
   * core/settings exposes parser.max_text_length == 380
-  * text > max_text_length after preprocess_light is replaced with the exact placeholder
   * text <= max_text_length survives preprocessing unchanged
+  * long text is truncated to head + tail (location usually sits at either
+    end), NOT replaced by the old "слишком длиннное…" placeholder
 """
 from conftest import load_module_by_path
 
 settings = load_module_by_path("_settings_under_test", "core/settings.py").settings
-tp = load_module_by_path("_tp_under_test", "core/utils/text_preprocessor.py")
-
-PLACEHOLDER = "слишком длиннное сообщение, не является релевантной локацией"
-
-
-def _apply_length_guard(text: str) -> str:
-    """Simulate the parser guard: preprocess_light → length check → placeholder."""
-    preserved = tp.preprocess_light(text)
-    if len(preserved) > settings.parser.max_text_length:
-        return PLACEHOLDER
-    return preserved
+mp = load_module_by_path("_mp_under_test", "parser/message_processor.py")
+truncate_for_geo = mp.truncate_for_geo
 
 
 def test_parser_max_text_length_is_380():
     assert settings.parser.max_text_length == 380
 
 
-def test_long_text_replaced_after_preprocess_light():
-    long_text = "A" * 500
-    result = _apply_length_guard(long_text)
-    assert result == PLACEHOLDER
+def test_long_text_keeps_head_and_tail():
+    long_text = "блокпост на Туристской " + "детали " * 100 + "возле 7 км"
+    result = truncate_for_geo(long_text, settings.parser.max_text_length)
+    assert len(result) <= settings.parser.max_text_length + 3
+    assert "Туристской" in result
+    assert "7 км" in result
+    assert "слишком длиннное" not in result
 
 
-def test_short_text_survives_preprocess_light():
+def test_short_text_survives():
     short_text = "ДТП на Дерибасовской"
-    result = _apply_length_guard(short_text)
-    assert result == short_text
+    assert truncate_for_geo(short_text, settings.parser.max_text_length) == short_text
 
 
 def test_exactly_max_length_survives():
     text = "A" * settings.parser.max_text_length
-    result = _apply_length_guard(text)
-    assert result == text
-
-
-def test_placeholder_has_double_n():
-    assert PLACEHOLDER == "слишком длиннное сообщение, не является релевантной локацией"
-    assert "длиннное" in PLACEHOLDER
+    assert truncate_for_geo(text, settings.parser.max_text_length) == text

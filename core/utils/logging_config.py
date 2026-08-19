@@ -10,7 +10,7 @@ import json
 import sys
 import uuid
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from contextvars import ContextVar
 
 try:
@@ -36,7 +36,7 @@ class JSONFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         log_obj = {
-            'timestamp': datetime.utcnow().isoformat() + 'Z',
+            'timestamp': datetime.now(timezone.utc).isoformat(),
             'level': record.levelname,
             'logger': record.name,
             'message': record.getMessage(),
@@ -150,31 +150,39 @@ if not _HAS_AIOHTTP:
         )
 
 else:
+    # Устанавливаем LogRecordFactory ОДИН РАЗ при загрузке модуля.
+    # ContextVar _request_id_var обеспечивает корректный request_id при
+    # конкурентных async-запросах без глобальных перезаписей фабрики.
+    # Предыдущий подход (set/restore factory на каждый запрос) создавал
+    # race condition: конкурентные запросы перезаписывали чужие фабрики,
+    # теряя request_id или восстанавливая устаревшую версию фабрики.
+    _default_log_factory = logging.getLogRecordFactory()
+
+    def _request_id_record_factory(*args, **kwargs):
+        record = _default_log_factory(*args, **kwargs)
+        record.request_id = _request_id_var.get('-')
+        return record
+
+    logging.setLogRecordFactory(_request_id_record_factory)
+
     @web.middleware
     async def logging_middleware(request: web.Request, handler):
         """
-        Middleware to add request ID to all logs
+        Middleware to add request ID to all logs.
 
-        Also adds response time and status code logging
+        Использует ContextVar для thread-safe хранения request_id —
+        каждый конкурентный запрос видит свой request_id без глобальных
+        блокировок и перезаписи LogRecordFactory.
         """
         # Generate unique request ID
         request_id = str(uuid.uuid4())
         request['request_id'] = request_id
 
-        # Use ContextVar so request_id is correct in async concurrent requests
+        # ContextVar: устанавливаем request_id для текущего async-контекста.
+        # При конкурентных запросах каждый имеет свой токен — сброс в finally
+        # корректно восстанавливает значение родительского контекста.
         token = _request_id_var.set(request_id)
 
-        # Store original log record factory
-        old_factory = logging.getLogRecordFactory()
-
-        def record_factory(*args, **kwargs):
-            record = old_factory(*args, **kwargs)
-            record.request_id = _request_id_var.get()
-            return record
-
-        # Set new factory with request ID
-        logging.setLogRecordFactory(record_factory)
-        
         # Log request
         logger = logging.getLogger('aiohttp.access')
         logger.info(
@@ -186,24 +194,24 @@ else:
                 'user_agent': request.headers.get('User-Agent')
             }
         )
-        
+
         # Time the request
         import time
         start_time = time.time()
-        
+
         try:
             response = await handler(request)
             status = response.status
-            
+
             # Add request ID to response headers
             response.headers['X-Request-ID'] = request_id
-            
+
             return response
-        
+
         except web.HTTPException as e:
             status = e.status
             raise
-        
+
         except Exception as e:
             status = 500
             logger.error(
@@ -212,10 +220,10 @@ else:
                 extra={}
             )
             raise
-        
+
         finally:
             duration = time.time() - start_time
-            
+
             # Log response
             logger.info(
                 f"{request.method} {request.path} -> {status}",
@@ -226,11 +234,8 @@ else:
                     'duration_ms': round(duration * 1000, 2)
                 }
             )
-            
-            # Restore original factory
-            logging.setLogRecordFactory(old_factory)
 
-            # Restore context var
+            # Restore ContextVar to parent context value
             _request_id_var.reset(token)
 
 

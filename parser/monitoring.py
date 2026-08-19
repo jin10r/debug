@@ -37,8 +37,7 @@ logging.root.handlers = [_handler]
 logging.root.setLevel(_LOG_LEVEL)
 
 from core.db.db_adapter import DBAdapter
-from core.utils.text_preprocessor import strip_tail, preprocess_light
-from parser.message_processor import truncate_for_geo
+from core.utils.text_preprocessor import strip_tail, preprocess_light, truncate_for_geo
 
 logger = logging.getLogger(__name__)
 

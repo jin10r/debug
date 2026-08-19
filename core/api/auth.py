@@ -1,8 +1,11 @@
 """Authentication API endpoints with JWT support"""
 import time
 import logging
+from datetime import datetime, timezone
+
 import jwt
 from aiohttp import web
+
 from core.settings import settings
 from core.middlewares.auth import generate_jwt_tokens, verify_jwt_token
 from core.utils.telegram_validation import validate_telegram_webapp_data
@@ -92,6 +95,18 @@ async def validate_init_handler(request: web.Request) -> web.Response:
                 status=401
             )
     else:
+        # Dev bypass — защита от случайного включения в production
+        import os
+        app_env = os.getenv('APP_ENV', 'production').lower()
+        if app_env not in ('development', 'dev', 'local', 'test'):
+            logger.error(
+                "SECURITY: TELEGRAM_VALIDATION_ENABLED=False в production-окружении "
+                f"(APP_ENV={app_env!r})! Запрос отклонён."
+            )
+            return web.json_response(
+                {'valid': False, 'error': 'Forbidden'},
+                status=403
+            )
         logger.warning(
             f"validate-init in dev bypass mode from {request.remote} — "
             "issuing JWT for dev user"
@@ -102,9 +117,26 @@ async def validate_init_handler(request: web.Request) -> web.Response:
             'username': 'dev_user'
         }
 
-    # Generate tokens
-    access_token, refresh_token = generate_jwt_tokens(user_data)
-    
+    # Generate tokens (access + refresh + jti для хранения в БД)
+    access_token, refresh_token, jti = generate_jwt_tokens(user_data)
+
+    # Сохранить refresh-токен в БД для single-use контроля
+    db = request.app.get('db')
+    if db:
+        try:
+            await db.store_refresh_token(
+                jti=jti,
+                user_id=str(user_data.get('id')),
+                expires_at=datetime.fromtimestamp(
+                    int(time.time()) + settings.jwt.refresh_token_ttl,
+                    tz=timezone.utc,
+                ),
+            )
+        except Exception as e:
+            logger.error(f"Failed to store refresh token in DB: {e}", exc_info=True)
+            # Не блокируем выдачу токенов при недоступности БД —
+            # пользователь сможет войти, но rotation не будет работать до восстановления.
+
     return web.json_response({
         'valid': True,
         'user': user_data,
@@ -116,15 +148,21 @@ async def validate_init_handler(request: web.Request) -> web.Response:
 
 async def refresh_token_handler(request: web.Request) -> web.Response:
     """
-    Refresh access token using refresh token.
+    Refresh access token using refresh token (Refresh Token Rotation).
 
     POST /api/auth/refresh
     Body: {"refresh_token": "..."}
 
     Response: {
         "access_token": "...",
+        "refresh_token": "...",   ← новый refresh-токен (старый инвалидирован)
         "expires_in": 900
     }
+
+    Security (RFC 6749 best practice):
+    - Каждый refresh-токен single-use: при использовании помечается used_at.
+    - Попытка повторного использования = признак кражи:
+      инвалидируются ВСЕ токены пользователя, клиент вынужден авторизоваться заново.
     """
     try:
         data = await request.json()
@@ -142,7 +180,7 @@ async def refresh_token_handler(request: web.Request) -> web.Response:
             status=400
         )
 
-    # Verify refresh token
+    # Криптографическая проверка подписи и срока действия
     payload = verify_jwt_token(refresh_token, 'refresh')
     if not payload:
         return web.json_response(
@@ -150,25 +188,56 @@ async def refresh_token_handler(request: web.Request) -> web.Response:
             status=401
         )
 
-    # Generate new access token with the same user identity
-    now = int(time.time())
-    access_payload = {
-        'sub': str(payload['sub']),
+    jti = payload.get('jti')
+    user_id = str(payload.get('sub', ''))
+    db = request.app.get('db')
+
+    if db and jti:
+        # Атомарно пометить как использованный и проверить что не был использован ранее
+        was_valid = await db.consume_refresh_token(jti)
+        if not was_valid:
+            # Токен уже использован или отозван — возможная кража.
+            # Инвалидируем все токены пользователя как меру безопасности.
+            logger.warning(
+                f"Refresh token reuse detected for user {user_id} "
+                f"(jti={jti}) — revoking all tokens"
+            )
+            await db.revoke_all_user_tokens(user_id)
+            return web.json_response(
+                {'error': 'Refresh token already used or revoked'},
+                status=401
+            )
+    elif not db:
+        logger.warning(
+            "DB not available during refresh — skipping single-use check. "
+            "Rotation will not be enforced until DB is restored."
+        )
+
+    # Выдать новую пару токенов
+    user_data = {
+        'id': user_id,
         'first_name': payload.get('first_name', ''),
         'username': payload.get('username', ''),
-        'iat': now,
-        'exp': now + settings.jwt.access_token_ttl,
-        'type': 'access'
     }
-    
-    new_access_token = jwt.encode(
-        access_payload,
-        settings.jwt.secret,
-        algorithm=settings.jwt.algorithm
-    )
+    new_access_token, new_refresh_token, new_jti = generate_jwt_tokens(user_data)
+
+    # Сохранить новый refresh-токен в БД
+    if db and new_jti:
+        try:
+            await db.store_refresh_token(
+                jti=new_jti,
+                user_id=user_id,
+                expires_at=datetime.fromtimestamp(
+                    int(time.time()) + settings.jwt.refresh_token_ttl,
+                    tz=timezone.utc,
+                ),
+            )
+        except Exception as e:
+            logger.error(f"Failed to store new refresh token in DB: {e}", exc_info=True)
 
     return web.json_response({
         'access_token': new_access_token,
+        'refresh_token': new_refresh_token,
         'expires_in': settings.jwt.access_token_ttl
     })
 

@@ -2,7 +2,7 @@
 import logging
 import time
 from aiohttp import web
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ async def health_live_handler(request: web.Request):
     
     Use for: Kubernetes liveness probe, load balancer health checks
     """
-    utc_time = datetime.utcnow()
+    utc_time = datetime.now(timezone.utc)
     return web.json_response({
         'status': 'alive',
         'timestamp': utc_time.isoformat()
@@ -108,7 +108,7 @@ async def health_ready_handler(request: web.Request):
         logger.error(f"Bot health check failed: {e}")
     
     # Return response
-    utc_time = datetime.utcnow()
+    utc_time = datetime.now(timezone.utc)
     status_code = 200 if checks['overall'] == 'healthy' else 503
 
     return web.json_response({
@@ -128,7 +128,7 @@ async def health_detailed_handler(request: web.Request):
     db_request = request.app.get('db')
     cache = request.app.get('cache')
 
-    utc_time = datetime.utcnow()
+    utc_time = datetime.now(timezone.utc)
     health_data = {
         'status': 'healthy',
         'timestamp': utc_time.isoformat(),

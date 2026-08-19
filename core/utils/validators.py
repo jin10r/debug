@@ -193,8 +193,12 @@ def validate_bot_token(token: str) -> str:
 
 
 def validate_max_age_hours(max_age_hours: int) -> int:
-    """Validate max_age_hours parameter (must be 0 < value <= 720)."""
-    return validate_int(max_age_hours, "max_age_hours", 0, 720)
+    """Validate max_age_hours parameter (must be 1 <= value <= 720).
+
+    Нижняя граница 1 (не 0): при max_age_hours=0 любой init_data считался
+    бы немедленно истёкшим — это логически некорректно.
+    """
+    return validate_int(max_age_hours, "max_age_hours", 1, 720)
 
 
 # ---------------------------------------------------------------------------

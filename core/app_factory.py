@@ -14,7 +14,6 @@ from core.settings import settings
 from core.db.dbconnect import Database, Request
 from core.utils.cache import CacheManager
 from core.handlers import basic_router
-from core.middlewares.dbmiddleware import DbMiddleware
 from core.middlewares.ratelimit import RateLimiter
 from core.utils.logging_config import setup_logging, logging_middleware
 from core.api.routes import setup_routes
@@ -317,7 +316,6 @@ async def create_app():
 
     bot = Bot(token=settings.bot.token, default=DefaultBotProperties(), session=_bot_session)
     dp = Dispatcher()
-    dp.update.middleware(DbMiddleware(db_request))
     dp.include_router(basic_router)
 
     rate_limiter = RateLimiter(

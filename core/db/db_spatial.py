@@ -5,7 +5,6 @@ Handles geometric calculations and intersections.
 
 import logging
 import json
-import asyncio
 from typing import Dict, Any, Optional, List
 
 from core.settings import settings
@@ -46,8 +45,8 @@ class SpatialOperations:
             WHERE geom IS NOT NULL AND NOT ST_IsEmpty(geom);
         """
         try:
-            result = await asyncio.wait_for(
-                self.db.fetchval(query, geo_id1, geo_id2),
+            result = await self.db.fetchval(
+                query, geo_id1, geo_id2,
                 timeout=settings.db.command_timeout,
             )
             return result if result else None
@@ -87,8 +86,8 @@ class SpatialOperations:
             FROM dist;
         """
         try:
-            result = await asyncio.wait_for(
-                self.db.fetchval(query, geo_id1, geo_id2, max_distance_m),
+            result = await self.db.fetchval(
+                query, geo_id1, geo_id2, max_distance_m,
                 timeout=settings.db.command_timeout,
             )
             return result if result else None
@@ -111,6 +110,17 @@ class SpatialOperations:
         """
         if len(geo_ids) < 2:
             return []
+
+        # Защитный лимит: CROSS JOIN масштабируется как O(n²).
+        # Процессор уже ограничивает top-5 (R-PR10), но страхуемся явно —
+        # при n=20 генерируется 190 пар и ~570 PostGIS-вызовов.
+        _MAX_GEO_IDS = 20
+        if len(geo_ids) > _MAX_GEO_IDS:
+            logger.warning(
+                f"get_batch_intersections: {len(geo_ids)} geo_ids exceeds "
+                f"limit {_MAX_GEO_IDS}, truncating"
+            )
+            geo_ids = geo_ids[:_MAX_GEO_IDS]
         
         query = """
             WITH geo_pairs AS (
@@ -161,8 +171,8 @@ class SpatialOperations:
             ORDER BY is_real DESC, id1, id2;
         """
         try:
-            results = await asyncio.wait_for(
-                self.db.fetch(query, geo_ids, max_distance_m),
+            results = await self.db.fetch(
+                query, geo_ids, max_distance_m,
                 timeout=settings.db.command_timeout,
             )
             return [dict(row) for row in results]
@@ -184,8 +194,8 @@ class SpatialOperations:
             );
         """
         try:
-            distance_in_meters = await asyncio.wait_for(
-                self.db.fetchval(query, polygon_wkt),
+            distance_in_meters = await self.db.fetchval(
+                query, polygon_wkt,
                 timeout=settings.db.command_timeout,
             )
             return distance_in_meters

@@ -227,7 +227,12 @@ class ProcessorBot:
             1, min(_MAX_WORKER_CONCURRENCY, settings.processor.worker_concurrency)
         )
         self._poll_interval = settings.processor.poll_interval
-        
+
+        # asyncio.Event для корректного shutdown через signal handler.
+        # Используется в _request_stop() — set() через call_soon_threadsafe
+        # безопасен из любого потока/signal handler.
+        self._shutdown_event = asyncio.Event()
+
         # Circuit breaker для защиты БД
         self._circuit_breaker = CircuitBreaker(failure_threshold=5, timeout=60.0)
 
@@ -371,7 +376,7 @@ class ProcessorBot:
             self._spawn_worker()
         logger.info(f"Started {self._worker_concurrency} worker(s)")
 
-        while self._running:
+        while not self._shutdown_event.is_set():
             self.health_server.touch()
             # R-PR4: memory fallback every iteration
             if not self.health_server.check_memory():
@@ -629,9 +634,21 @@ class ProcessorBot:
         return f"POINT({center_lng + r * math.cos(theta)} {center_lat + r * math.sin(theta)})"
 
     def _request_stop(self):
-        """Установка флага остановки процессора."""
+        """Установка флага остановки процессора через asyncio.Event (thread-safe)."""
         logger.info("Stop signal received — requesting graceful shutdown")
         self._running = False
+        # asyncio.Event.set() через call_soon_threadsafe безопасен из
+        # signal handler: сигнал может прийти в любом потоке, а event loop
+        # работает в основном. Прямой self._running = False оставлен для
+        # обратной совместимости с while self._running в _worker.
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.call_soon_threadsafe(self._shutdown_event.set)
+            else:
+                self._shutdown_event.set()
+        except RuntimeError:
+            pass  # loop уже закрыт — ничего не делаем
 
     def _apply_memory_fallback(self):
         """Graceful degradation: gc, disable ONNX, shrink LRU."""

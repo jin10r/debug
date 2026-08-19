@@ -15,6 +15,7 @@ from core.db.db_base import Database
 from core.db.db_geo import GeoOperations
 from core.db.db_events import EventOperations
 from core.db.db_spatial import SpatialOperations
+from core.db.db_auth import AuthOperations
 
 
 class Request:
@@ -31,6 +32,7 @@ class Request:
         self.geo = GeoOperations(db)
         self.events = EventOperations(db)
         self.spatial = SpatialOperations(db)
+        self.auth = AuthOperations(db)
 
     async def get_geo_intersection(self, geo_id1: int, geo_id2: int) -> Optional[Dict[str, Any]]:
         """Calculate intersection of two geo records using PostGIS."""
@@ -104,3 +106,19 @@ class Request:
     async def get_latest_event_time(self) -> Optional[datetime]:
         """Get the timestamp of the latest event."""
         return await self.events.get_latest_update_time()
+
+    # ------------------------------------------------------------------
+    # Auth / Refresh Token Rotation
+    # ------------------------------------------------------------------
+
+    async def store_refresh_token(self, jti: str, user_id: str, expires_at: datetime) -> None:
+        """Сохранить новый refresh-токен в БД."""
+        await self.auth.store_refresh_token(jti, user_id, expires_at)
+
+    async def consume_refresh_token(self, jti: str) -> bool:
+        """Атомарно пометить refresh-токен использованным. False = уже использован/отозван."""
+        return await self.auth.consume_refresh_token(jti)
+
+    async def revoke_all_user_tokens(self, user_id: str) -> int:
+        """Инвалидировать все активные refresh-токены пользователя."""
+        return await self.auth.revoke_all_user_tokens(user_id)

@@ -3,7 +3,7 @@ import asyncio
 import json
 import logging
 import hashlib
-from datetime import datetime
+from datetime import datetime, timezone
 
 from aiohttp import web
 from pydantic import ValidationError
@@ -177,7 +177,11 @@ async def get_events_handler(request: web.Request):
     try:
         # Incremental updates bypass cache and ETag
         if filters.since:
-            since_dt = datetime.fromisoformat(filters.since.replace('Z', '+00:00'))
+            # Pydantic уже распарсил filters.since в datetime-объект.
+            # Нормализуем tzinfo к UTC если naive.
+            since_dt = filters.since
+            if since_dt.tzinfo is None:
+                since_dt = since_dt.replace(tzinfo=timezone.utc)
             geojson_data = await db_request.get_incremental_events(
                 since=since_dt,
                 time_interval_minutes=filters.time_filter,
@@ -200,9 +204,8 @@ async def get_events_handler(request: web.Request):
             
             # Cache result with optimized TTL
             if cache:
-                # Увеличено TTL до 30 секунд для снижения нагрузки на БД
                 # Старые события (>5 минут) кешируются дольше
-                ttl = 60 if filters.time_filter > 5 else 30
+                ttl = 60 if (filters.time_filter or 0) > 5 else 30
                 await cache.set_events_geojson(
                     filters.time_filter,
                     filters.layers,

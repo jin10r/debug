@@ -122,7 +122,8 @@
 
             if (result.access_token) {
                 console.log('[TokenManager] Token refreshed successfully');
-                storeTokens(result.access_token, refreshToken);
+                // Сохраняем новый refresh_token от сервера (Rotation: старый уже инвалидирован)
+                storeTokens(result.access_token, result.refresh_token || refreshToken);
                 return result.access_token;
             }
 

@@ -76,7 +76,10 @@ class DatabaseConfig:
     port: int = 5432
     database: str = "postgres"
     user: str = "postgres"
-    password: str = "postgres"
+    # Пустая строка — явно невалидный дефолт: при отсутствии POSTGRES_PASSWORD
+    # в env подключение упадёт с ошибкой аутентификации, а не молча использует
+    # слабый пароль "postgres".
+    password: str = ""
     # Прямое подключение: каждый коннект = backend process в postgres.
     # pool_max_size=30 — оптимизировано для 1GB postgres контейнера.
     pool_min_size: int = 5
@@ -101,10 +104,12 @@ class AppConfig:
 
 @dataclass
 class BotConfig:
-    # channel_id захардкожен (как DB-параметры): per-deployment
-    # идентификатор канала мониторинга меняется правкой settings.py, не env.
     token: str
-    channel_id: str = "-1002050105527"
+    # channel_id читается из env CHANNEL_ID (см. load_settings).
+    # Дефолт "-1002050105527" оставлен только как fallback в load_settings,
+    # не в dataclass — чтобы избежать появления production-ID в git-истории
+    # при смене деплоймента.
+    channel_id: str
     webapp_url: Optional[str] = None
     redirect_url: Optional[str] = None
 
@@ -336,6 +341,7 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
             ),
             bot=BotConfig(
                 token=bot_token,
+                channel_id=env.str("CHANNEL_ID", "-1002050105527"),
                 webapp_url=env.str("WEBAPP_URL", None),
                 redirect_url=env.str("REDIRECT_URL", None),
             ),

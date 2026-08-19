@@ -11,6 +11,18 @@ from core.utils.validators import MAX_MEDIA_FILE_BYTES
 
 logger = logging.getLogger(__name__)
 
+# Кэш resolved-пути медиа-директории: Path.resolve() — блокирующий syscall
+# (stat + readlink). Директория не меняется в runtime, поэтому кэшируем
+# результат один раз при первом обращении вместо вычисления на каждый запрос.
+_media_base_cache: dict[str, Path] = {}
+
+
+def _get_media_base(events_dir: str) -> Path:
+    """Возвращает кэшированный resolved Path медиа-директории."""
+    if events_dir not in _media_base_cache:
+        _media_base_cache[events_dir] = Path(events_dir).resolve()
+    return _media_base_cache[events_dir]
+
 
 def _resolve_safe_media_path(events_dir: str, filename: str) -> Optional[Path]:
     """Resolve `filename` inside `events_dir`, or None if unsafe.
@@ -25,7 +37,7 @@ def _resolve_safe_media_path(events_dir: str, filename: str) -> Optional[Path]:
         return None
     if not filename.endswith('.jpg'):
         return None
-    base = Path(events_dir).resolve()
+    base = _get_media_base(events_dir)
     candidate = (base / filename).resolve()
     try:
         candidate.relative_to(base)

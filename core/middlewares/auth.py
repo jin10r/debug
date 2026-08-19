@@ -10,6 +10,7 @@ from collections import OrderedDict
 import hashlib
 import logging
 import time
+import uuid as uuid_lib
 import jwt
 
 from core.settings import settings
@@ -18,15 +19,17 @@ from core.utils.validators import validate_jwt_string, validate_telegram_user_id
 logger = logging.getLogger(__name__)
 
 
-def generate_jwt_tokens(user_data: Dict[str, Any]) -> Tuple[str, str]:
+def generate_jwt_tokens(user_data: Dict[str, Any]) -> Tuple[str, str, str]:
     """
-    Generate access and refresh JWT tokens
+    Generate access and refresh JWT tokens.
 
     Returns:
-        (access_token, refresh_token)
+        (access_token, refresh_token, jti)
+        jti — уникальный ID refresh-токена для хранения в БД и single-use проверки.
     """
     user_id = validate_telegram_user_id(user_data.get('id', user_data.get('sub')))
     now = int(time.time())
+    jti = str(uuid_lib.uuid4())  # уникальный ID refresh-токена
 
     access_payload = {
         'sub': str(user_id),
@@ -39,6 +42,7 @@ def generate_jwt_tokens(user_data: Dict[str, Any]) -> Tuple[str, str]:
 
     refresh_payload = {
         'sub': str(user_id),
+        'jti': jti,            # JWT ID — хранится в БД для single-use контроля
         'iat': now,
         'exp': now + settings.jwt.refresh_token_ttl,
         'type': 'refresh'
@@ -56,7 +60,7 @@ def generate_jwt_tokens(user_data: Dict[str, Any]) -> Tuple[str, str]:
         algorithm=settings.jwt.algorithm
     )
 
-    return access_token, refresh_token
+    return access_token, refresh_token, jti
 
 
 _jwt_token_cache: "OrderedDict[str, dict]" = OrderedDict()

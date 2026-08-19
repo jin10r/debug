@@ -381,14 +381,21 @@ async def websocket_handler(request: web.Request):
         return ws
     authenticated = False
 
-    # Auth timeout: close connection if not authenticated within WS_AUTH_TIMEOUT
+    # Auth timeout: используем asyncio.Event чтобы избежать race condition
+    # между проверкой auth_deadline_task.done() и cancel().
+    # _auth_event.set() атомарно отменяет таймаут — не нужен cancel() на таске.
+    _auth_event = asyncio.Event()
     auth_deadline_task: Optional[asyncio.Task] = None
 
     async def _auth_timeout():
-        await asyncio.sleep(WS_AUTH_TIMEOUT)
-        if not authenticated and not ws.closed:
-            logger.warning(f"WebSocket auth timeout from {request.remote}")
-            await ws.close(code=1008, message=b'auth timeout')
+        try:
+            await asyncio.wait_for(_auth_event.wait(), timeout=WS_AUTH_TIMEOUT)
+        except asyncio.TimeoutError:
+            # Событие не было выставлено в течение WS_AUTH_TIMEOUT —
+            # клиент не прошёл аутентификацию вовремя.
+            if not ws.closed:
+                logger.warning(f"WebSocket auth timeout from {request.remote}")
+                await ws.close(code=1008, message=b'auth timeout')
 
     auth_deadline_task = asyncio.create_task(_auth_timeout())
 
@@ -428,8 +435,10 @@ async def websocket_handler(request: web.Request):
                         if _ws_authenticate(data):
                             authenticated = True
                             logger.info("WebSocket client authenticated")
-                            if auth_deadline_task and not auth_deadline_task.done():
-                                auth_deadline_task.cancel()
+                            # Атомарно сигнализируем таймауту — он завершится
+                            # сам без cancel(). Нет race condition между
+                            # проверкой done() и cancel().
+                            _auth_event.set()
                             await ws.send_str(json.dumps({'type': 'auth_ok'}))
                         else:
                             logger.warning("WebSocket auth failed — closing connection")
@@ -480,7 +489,9 @@ async def websocket_handler(request: web.Request):
 
     finally:
         if auth_deadline_task and not auth_deadline_task.done():
-            auth_deadline_task.cancel()
+            # Страховочная отмена: если вышли до аутентификации (например,
+            # клиент закрыл соединение сам) — гасим таймер, чтобы не висел.
+            _auth_event.set()  # безопасно вызывать повторно
         await ws_manager.unregister_connection(ws)
 
     return ws

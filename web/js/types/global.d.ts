@@ -150,7 +150,7 @@ declare global {
         // (например HAPTIC_BY_TYPE[type] в common.ts), строгий union здесь
         // приводил к TS2345.
         hapticFeedback: (type?: string) => void;
-        showNotification: (message: string, duration?: number, type?: 'info' | 'warning' | 'error' | 'success') => void;
+        showNotification: (message: string, duration?: number, type?: 'info' | 'warning' | 'error' | 'success', iconSrc?: string) => void;
         playNotificationSound: () => boolean;
         handleNewEvents: (events: any[]) => void;
         renderFromCache: () => void;

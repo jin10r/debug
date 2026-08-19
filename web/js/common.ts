@@ -179,7 +179,7 @@ window.playNotificationSound = (function() {
 /**
  * Функция показа уведомлений
  */
-window.showNotification = function(message: string, duration: number = 3000, type: string = 'info'): void {
+window.showNotification = function(message: string, duration: number = 3000, type: string = 'info', iconSrc?: string): void {
     // Rule 5: every notification — including errors — fires haptic feedback.
     // Map the notification type to the matching haptic.
     const HAPTIC_BY_TYPE: Record<string, string> = { error: 'error', warning: 'warning', success: 'success', info: 'light' };
@@ -236,7 +236,17 @@ window.showNotification = function(message: string, duration: number = 3000, typ
         backdrop-filter: blur(10px);
         border: 1px solid ${borderColor};
     `;
-    notification.innerHTML = message;
+    // Текст события вставляется ТОЛЬКО через textNode: никакая разметка из
+    // данных не парсится (R-W). Иконка (iconSrc) — константа приложения,
+    // создаётся через DOM API, не через HTML-строку.
+    if (iconSrc) {
+        const icon = document.createElement('img');
+        icon.src = iconSrc;
+        icon.className = 'notif-icon';
+        icon.alt = '';
+        notification.appendChild(icon);
+    }
+    notification.appendChild(document.createTextNode(message));
 
     if (!document.getElementById('notificationStyles')) {
         const style = document.createElement('style');
@@ -265,6 +275,12 @@ window.showNotification = function(message: string, duration: number = 3000, typ
             }
             @media (prefers-reduced-motion: reduce) {
                 @keyframes hapticPulse { 0%,100% { transform: none; } }
+            }
+            .notif-icon {
+                width: 16px;
+                height: 16px;
+                vertical-align: middle;
+                margin-right: 4px;
             }
         `;
         document.head.appendChild(style);

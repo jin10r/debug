@@ -14,25 +14,21 @@ function handleNewEvents(events: NewEvent[]): void {
     events.forEach((event: NewEvent, index: number) => {
         setTimeout(() => {
             let message = '';
-
-            if (event.layer === 'cops') {
-                message = '<img src="/assets/images/cops.png" width="16" height="16" style="vertical-align: middle; margin-right: 4px;">';
-            } else if (event.layer === 'bus') {
-                message = '<img src="/assets/images/bus.png" width="16" height="16" style="vertical-align: middle; margin-right: 4px;">';
-            } else {
-                message = '<img src="/assets/images/pig.png" width="16" height="16" style="vertical-align: middle; margin-right: 4px;">';
-            }
-
             if (event.description) {
-                const description = event.description.replace(/<[^>]*>/g, '');
-                message += ': ' + (description.length > 100
-                    ? description.substring(0, 100) + '...'
-                    : description);
+                message = event.description.length > 100
+                    ? event.description.substring(0, 100) + '...'
+                    : event.description;
             }
+
+            const iconSrc = event.layer === 'cops'
+                ? '/assets/images/cops.png'
+                : event.layer === 'bus'
+                    ? '/assets/images/bus.png'
+                    : '/assets/images/pig.png';
 
             // showNotification() fires haptic feedback itself (rule 5) — no
             // separate hapticFeedback() call needed here.
-            if (typeof window.showNotification === 'function') window.showNotification(message, 4000);
+            if (typeof window.showNotification === 'function') window.showNotification(message, 4000, 'info', iconSrc);
             if (typeof window.playNotificationSound === 'function') {
                 window.playNotificationSound();
             }

@@ -15,6 +15,7 @@ from conftest import load_module_by_path
 
 settings_mod = load_module_by_path("_settings_under_test", "core/settings.py")
 _parse_strict_bool = settings_mod._parse_strict_bool
+load_settings = settings_mod.load_settings
 
 VAR_NAME = "TELEGRAM_WEBVIEW_VALIDATION"
 

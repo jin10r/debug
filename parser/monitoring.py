@@ -43,6 +43,16 @@ logger = logging.getLogger(__name__)
 
 KIEV_TZ = ZoneInfo('Europe/Kiev')
 
+_TRANSIENT_ERRORS = (
+    asyncpg.PostgresConnectionError,
+    asyncpg.exceptions.TooManyConnectionsError,
+    asyncpg.exceptions.CannotConnectNowError,
+    asyncpg.exceptions.InterfaceError,
+    ConnectionError,
+    OSError,
+    asyncio.TimeoutError,
+)
+
 _MIN_WORKERS = 2
 _MAX_WORKERS = 8
 _SCALE_UP_QSIZE = 20
@@ -349,12 +359,35 @@ class ParserBot:
         while True:
             message = await self._pending_queue.get()
             try:
-                await self._process_message(message)
+                await self._process_message_with_retries(message)
             except Exception as e:
                 self._errors += 1
-                logger.error(f"Worker {worker_id}: unhandled error: {e}")
+                logger.error(
+                    f"Worker {worker_id}: message {message.id} failed permanently: {e}"
+                )
             finally:
                 self._pending_queue.task_done()
+
+    async def _process_message_with_retries(self, message):
+        msg_id = message.id
+        attempt = 0
+        max_attempts = 5
+        while True:
+            attempt += 1
+            try:
+                await self._process_message(message)
+                return
+            except Exception as e:
+                transient = isinstance(e, _TRANSIENT_ERRORS)
+                if transient and attempt < max_attempts:
+                    delay = min(2 ** attempt, 30)
+                    logger.warning(
+                        f"Message {msg_id}: transient error attempt {attempt} "
+                        f"({type(e).__name__}: {e}); retry in {delay}s"
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    raise
 
     @staticmethod
     def _extract_text(message) -> str:

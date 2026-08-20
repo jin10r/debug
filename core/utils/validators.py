@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 MAX_INIT_DATA_LEN = 4096
 MAX_BOT_TOKEN_LEN = 256
 MAX_BODY_BYTES = 1_048_576  # 1 MB — generous for GeoJSON event payloads
-MAX_MEDIA_FILE_BYTES = 10 * 1024 * 1048  # 10 MB
+MAX_MEDIA_FILE_BYTES = 10 * 1024 * 1024  # 10 MB
 MAX_JWT_LEN = 8192
 MAX_LAYER_NAME_LEN = 32
 

@@ -6,6 +6,10 @@ pytest==9.1.1
 # pytest-asyncio 1.x required for pytest 9 (0.23.x is incompatible with
 # pytest>=9). The original <1 upper bound predates pytest-asyncio 1.0 release.
 pytest-asyncio==1.4.0
+# Time mocking for TTL/heartbeat/backoff tests (no real asyncio.sleep).
+freezegun>=1.2.0
+# Coverage reporting
+pytest-cov>=5.0.0
 # SAST: static analysis for Python security issues
 bandit==1.7.10
 # Dependency vulnerability scanner

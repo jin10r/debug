@@ -21,15 +21,15 @@ async def get_validation_config_handler(request: web.Request) -> web.Response:
     Frontend calls this BEFORE loading map to know access rules.
 
     Response: {
-        "telegram_validation_enabled": true/false,
+        "telegram_webview_validation": true/false,
         "redirect_url": "..."
     }
 
     Security:
-    - telegram_validation_enabled=true: Only Telegram WebView allowed
-    - telegram_validation_enabled=false: Any webview allowed (dev mode)
+    - telegram_webview_validation=true: Only Telegram WebView allowed
+    - telegram_webview_validation=false: Any webview allowed (dev mode)
     """
-    validation_enabled = getattr(settings.app, 'telegram_validation_enabled', True)
+    validation_enabled = getattr(settings.app, 'telegram_webview_validation', True)
     redirect_url = getattr(settings.bot, 'redirect_url', None)
     
     # Ensure redirect_url is set when validation is enabled
@@ -42,7 +42,7 @@ async def get_validation_config_handler(request: web.Request) -> web.Response:
         )
     
     response_data = {
-        'telegram_validation_enabled': validation_enabled,
+        'telegram_webview_validation': validation_enabled,
         'redirect_url': redirect_url
     }
     
@@ -77,7 +77,7 @@ async def validate_init_handler(request: web.Request) -> web.Response:
     init_data = data.get('init_data')
 
     # Strict validation path
-    if settings.app.telegram_validation_enabled:
+    if settings.app.telegram_webview_validation:
         if not isinstance(init_data, str) or not init_data.strip():
             return web.json_response(
                 {'valid': False, 'error': 'Invalid init data'},
@@ -95,21 +95,12 @@ async def validate_init_handler(request: web.Request) -> web.Response:
                 status=401
             )
     else:
-        # Dev bypass — защита от случайного включения в production
-        import os
-        app_env = os.getenv('APP_ENV', 'production').lower()
-        if app_env not in ('development', 'dev', 'local', 'test'):
-            logger.error(
-                "SECURITY: TELEGRAM_VALIDATION_ENABLED=False в production-окружении "
-                f"(APP_ENV={app_env!r})! Запрос отклонён."
-            )
-            return web.json_response(
-                {'valid': False, 'error': 'Forbidden'},
-                status=403
-            )
+        # Dev-bypass: включается ТОЛЬКО явным TELEGRAM_WEBVIEW_VALIDATION=false/0
+        # (строгий парсер в core/settings.py). Защита production — в парсере:
+        # любое другое/отсутствующее значение = валидация включена.
         logger.warning(
             f"validate-init in dev bypass mode from {request.remote} — "
-            "issuing JWT for dev user"
+            "issuing JWT for dev user (TELEGRAM_WEBVIEW_VALIDATION=False)"
         )
         user_data = {
             'id': '123456789',

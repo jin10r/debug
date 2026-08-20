@@ -30,12 +30,12 @@ async def jwt_auth_middleware(app: web.Application, handler):
     """
     Middleware that checks JWT authentication for ALL endpoints.
     
-    If TELEGRAM_VALIDATION_ENABLED=false, all requests are allowed (dev mode).
-    If TELEGRAM_VALIDATION_ENABLED=true, ALL endpoints require valid JWT.
+    If TELEGRAM_WEBVIEW_VALIDATION=false, all requests are allowed (dev mode).
+    If TELEGRAM_WEBVIEW_VALIDATION=true, ALL endpoints require valid JWT.
     """
     async def middleware_handler(request: web.Request) -> web.Response:
         # Skip authentication if validation is disabled (development mode)
-        validation_enabled = getattr(settings.app, 'telegram_validation_enabled', True)
+        validation_enabled = getattr(settings.app, 'telegram_webview_validation', True)
         logger.debug(f"[JWT] {request.method} {request.path} validation={validation_enabled}")
         
         if not validation_enabled:

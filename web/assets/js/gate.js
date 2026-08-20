@@ -23,7 +23,7 @@
         } catch (e) {
             console.error('[Gate] Config load error:', e);
             // Dev mode defaults: validation disabled, redirect to GitHub 404
-            return { telegram_validation_enabled: false, redirect_url: null };
+            return { telegram_webview_validation: false, redirect_url: null };
         }
     }
 
@@ -59,12 +59,14 @@
         redirectUrl = config.redirect_url || 'https://github.com/404';
 
         console.log('[Gate] Config loaded:', {
-            validationEnabled: config.telegram_validation_enabled,
+            validationEnabled: config.telegram_webview_validation,
             redirectUrl: redirectUrl
         });
 
-        // Check if validation is disabled (dev mode)
-        if (!config.telegram_validation_enabled) {
+        // Check if validation is disabled (dev mode).
+        // === false: отсутствующий ключ (старый core) трактуется как strict —
+        // Secure by Default, согласуется с _parse_strict_bool на бэкенде.
+        if (config.telegram_webview_validation === false) {
             console.log('[Gate] Validation disabled (development mode)');
             statusEl.textContent = 'Режим разработки...';
 

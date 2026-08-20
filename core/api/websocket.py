@@ -315,7 +315,7 @@ def _ws_authenticate(data: dict) -> bool:
     - If validation enabled: STRICT checks on both token and init_data
     - If validation disabled: accept any (dev mode)
     """
-    validation_enabled = getattr(settings.app, 'telegram_validation_enabled', True)
+    validation_enabled = getattr(settings.app, 'telegram_webview_validation', True)
     
     if not validation_enabled:
         # Dev mode: валидация отключена

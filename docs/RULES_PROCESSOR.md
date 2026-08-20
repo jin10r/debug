@@ -171,18 +171,41 @@ inserted AS (
 
 **Правило:** Если v2 вернул `random_null` (geom=NULL), processor генерирует случайную точку через `_random_point()` и вставляет со strategy=`random` (R-PR22). Random точка НЕ генерируется внутри SQL.
 
-### R-PR11: Pending events — SKIP LOCKED
+### R-PR11: Pending events — двухфазный claim + очиститель
+
+Воркер атомарно меняет статус на `processing` и фиксирует `locked_at`/`worker_id` внутри транзакции с `FOR UPDATE SKIP LOCKED`.
 
 ```python
-"SELECT id, message_id, text, event_time, photo_file_id "
-"FROM pending_events "
-"WHERE status = 'pending' "
-"ORDER BY created_at "
-"LIMIT 1 "
-"FOR UPDATE SKIP LOCKED"
+"UPDATE pending_events "
+"SET status = 'processing', locked_at = now(), worker_id = $1 "
+"WHERE id = ("
+"    SELECT id FROM pending_events "
+"    WHERE status = 'pending' "
+"    ORDER BY created_at "
+"    LIMIT 1 "
+"    FOR UPDATE SKIP LOCKED"
+") "
+"RETURNING id, message_id, text, event_time, photo_file_id"
 ```
 
-**Правило:** Multiple workers безопасно потребляют очередь без блокировок.
+**Почему не SELECT:**
+- Классический `SELECT ... FOR UPDATE SKIP LOCKED` снимает блокировку при commit транзакции, а `status` остаётся `'pending'` — следующий воркер снова берёт ту же задачу (гонка).
+- Двухфазный claim меняет `status → 'processing'` в той же транзакции: после commit задача недоступна другим воркерам, даже если обработка идёт долго.
+
+**Очиститель зависших задач:**
+Если воркер падает (SIGKILL/OOM/краш процесса), фоновый очиститель каждые 60с возвращает зависшие задачи (`locked_at < now() - 5 minutes`) в статус `pending`:
+
+```sql
+UPDATE pending_events
+SET status = 'pending', locked_at = NULL, worker_id = NULL
+WHERE status = 'processing'
+  AND locked_at < now() - interval '5 minutes'
+```
+
+**Правило:**
+- Multiple workers безопасно потребляют очередь без блокировок.
+- Неучтённая ошибка воркера → `_requeue` с guard `AND status = 'processing'` (нельзя вернуть в `pending` задачу, уже помеченную `done`/`error`).
+- Задача в статусе `processing` дольше 5 минут считается зависшей и реквоится очистителем (at-least-once семантика; дубликаты исключены idempotent INSERT, R-PR12).
 
 ### R-PR12: Idempotent INSERT
 

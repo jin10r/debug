@@ -12,12 +12,19 @@ CREATE TABLE IF NOT EXISTS pending_events (
     error_message TEXT,
     created_at TIMESTAMPTZ DEFAULT now(),
     processed_at TIMESTAMPTZ,
+    locked_at TIMESTAMPTZ,
+    worker_id TEXT,
     UNIQUE(message_id, event_time)
 );
 
 CREATE INDEX IF NOT EXISTS idx_pending_events_status
     ON pending_events(status, created_at)
     WHERE status = 'pending';
+
+-- Поиск зависших задач для фонового очистителя (R-PR11).
+CREATE INDEX IF NOT EXISTS idx_pending_events_stale
+    ON pending_events(locked_at)
+    WHERE status = 'processing';
 
 -- NOTIFY parser о необходимости скачать фото после обработки events.
 -- ВАЖНО: event_id берётся из events (резолв по message_id+event_time),

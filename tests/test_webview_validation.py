@@ -71,34 +71,34 @@ class TestWebViewValidation(AioHTTPTestCase):
     async def test_validation_config_strict_mode(self):
         """Test config endpoint returns strict mode settings"""
         with patch('core.api.auth.settings') as mock_settings:
-            mock_settings.app.telegram_validation_enabled = True
+            mock_settings.app.telegram_webview_validation = True
             mock_settings.bot.redirect_url = 'https://t.me/test_bot'
             
             resp = await self.client.request('GET', '/api/validation-config')
             assert resp.status == 200
             
             data = await resp.json()
-            assert data['telegram_validation_enabled'] is True
+            assert data['telegram_webview_validation'] is True
             assert data['redirect_url'] == 'https://t.me/test_bot'
 
     @unittest_run_loop
     async def test_validation_config_dev_mode(self):
         """Test config endpoint returns dev mode settings"""
         with patch('core.api.auth.settings') as mock_settings:
-            mock_settings.app.telegram_validation_enabled = False
+            mock_settings.app.telegram_webview_validation = False
             mock_settings.bot.redirect_url = None
             
             resp = await self.client.request('GET', '/api/validation-config')
             assert resp.status == 200
             
             data = await resp.json()
-            assert data['telegram_validation_enabled'] is False
+            assert data['telegram_webview_validation'] is False
 
     @unittest_run_loop
     async def test_validate_init_dev_mode_accepts_any(self):
         """Test that dev mode accepts any request without validation"""
         with patch('core.api.auth.settings') as mock_settings:
-            mock_settings.app.telegram_validation_enabled = False
+            mock_settings.app.telegram_webview_validation = False
             mock_settings.jwt.access_token_ttl = 900
             
             with patch('core.api.auth.generate_jwt_tokens') as mock_jwt:
@@ -120,7 +120,7 @@ class TestWebViewValidation(AioHTTPTestCase):
     async def test_validate_init_strict_mode_missing_init_data(self):
         """Test that strict mode rejects missing init_data"""
         with patch('core.api.auth.settings') as mock_settings:
-            mock_settings.app.telegram_validation_enabled = True
+            mock_settings.app.telegram_webview_validation = True
             
             resp = await self.client.request(
                 'POST',
@@ -137,7 +137,7 @@ class TestWebViewValidation(AioHTTPTestCase):
     async def test_validate_init_strict_mode_invalid_signature(self):
         """Test that strict mode rejects invalid HMAC signature"""
         with patch('core.api.auth.settings') as mock_settings:
-            mock_settings.app.telegram_validation_enabled = True
+            mock_settings.app.telegram_webview_validation = True
             mock_settings.bot.token = 'test_bot_token'
             
             # Invalid init_data (wrong hash)
@@ -159,7 +159,7 @@ class TestWebViewValidation(AioHTTPTestCase):
         bot_token = 'test_bot_token_123'
         
         with patch('core.api.auth.settings') as mock_settings:
-            mock_settings.app.telegram_validation_enabled = True
+            mock_settings.app.telegram_webview_validation = True
             mock_settings.bot.token = bot_token
             mock_settings.jwt.access_token_ttl = 900
             
@@ -186,7 +186,7 @@ class TestWebViewValidation(AioHTTPTestCase):
         bot_token = 'test_bot_token_123'
         
         with patch('core.api.auth.settings') as mock_settings:
-            mock_settings.app.telegram_validation_enabled = True
+            mock_settings.app.telegram_webview_validation = True
             mock_settings.bot.token = bot_token
             
             # Create init_data with old timestamp (25 hours ago) — sign decoded values
@@ -225,7 +225,7 @@ class TestWebViewValidationIntegration:
         # Here we just verify the logic flow
         
         config = {
-            'telegram_validation_enabled': True,
+            'telegram_webview_validation': True,
             'redirect_url': 'https://t.me/bot'
         }
         
@@ -233,7 +233,7 @@ class TestWebViewValidationIntegration:
         is_telegram = False
         
         # Expected: should redirect
-        if config['telegram_validation_enabled'] and not is_telegram:
+        if config['telegram_webview_validation'] and not is_telegram:
             should_redirect = True
             redirect_target = config['redirect_url']
         else:
@@ -246,7 +246,7 @@ class TestWebViewValidationIntegration:
     def test_frontend_gate_logic_dev_mode(self):
         """Test frontend gate.js logic in dev mode"""
         config = {
-            'telegram_validation_enabled': False,
+            'telegram_webview_validation': False,
             'redirect_url': None
         }
         
@@ -254,7 +254,7 @@ class TestWebViewValidationIntegration:
         is_telegram = False
         
         # Expected: should NOT redirect
-        if config['telegram_validation_enabled'] and not is_telegram:
+        if config['telegram_webview_validation'] and not is_telegram:
             should_redirect = True
         else:
             should_redirect = False

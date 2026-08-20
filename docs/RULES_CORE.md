@@ -145,11 +145,18 @@ def _resolve_jwt_secret(env: Env) -> str:
 ### R-C10: Dev-bypass — ТОЛЬКО для разработки
 
 ```python
-if not settings.app.telegram_validation_enabled:
+if not settings.app.telegram_webview_validation:
     return True  # dev mode
 ```
 
-**Правило:** При выключенной валидации core логирует WARNING. Никогда не деплоить с `TELEGRAM_VALIDATION_ENABLED=False` в production.
+**Строгий парсинг (Secure by Default):** `TELEGRAM_WEBVIEW_VALIDATION` парсится в
+`core/settings.py` функцией `_parse_strict_bool` (внутри `load_settings`, после
+`env.read_env()`): default `True`; `False` — ТОЛЬКО при явном `'false'`/`'0'`
+(регистронезависимо); отсутствие/пустое/любое другое значение — `True`.
+
+**Правило:** При выключенной валидации core логирует WARNING (в `load_settings` —
+`SECURITY RISK`, при старте — предупреждение dev-режима). Никогда не деплоить с
+`TELEGRAM_WEBVIEW_VALIDATION=false` в production.
 
 ### R-C11: Per-feature protocol
 

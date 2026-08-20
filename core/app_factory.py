@@ -170,9 +170,9 @@ async def on_startup(app: web.Application):
     # клиента (jwt_auth_middleware и _ws_authenticate уходят в dev-bypass).
     # Это режим только для локальной разработки — громко предупреждаем, чтобы
     # случайно не уехало в прод.
-    if not getattr(settings.app, 'telegram_validation_enabled', True):
+    if not getattr(settings.app, 'telegram_webview_validation', True):
         logger.warning(
-            "⚠️  TELEGRAM_VALIDATION_ENABLED=False — валидация Telegram initData/JWT "
+            "⚠️  TELEGRAM_WEBVIEW_VALIDATION=False — валидация Telegram initData/JWT "
             "ОТКЛЮЧЕНА: /api/* и /ws принимают ЛЮБОГО клиента. Только для локальной "
             "разработки — НЕ включать в production."
         )

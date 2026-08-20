@@ -3,9 +3,11 @@
 import asyncio
 import json as json_lib
 import logging
+import os
 import signal
 import sys
-from datetime import datetime, timezone
+import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from enum import Enum
 
@@ -51,6 +53,13 @@ _TRANSIENT_ERRORS = (
 )
 
 _MAX_WORKER_CONCURRENCY = 8
+
+# Интервал зависания задачи в статусе 'processing' — после этого фоновый
+# очиститель возвращает её в 'pending' (R-PR11). Передаётся параметром
+# (R-PR20) как timedelta — asyncpg кодирует его в native interval.
+_STALE_PROCESSING_INTERVAL = timedelta(minutes=5)
+# Периодичность прогона очистителя зависших задач.
+_CLEANER_INTERVAL = 60.0
 
 
 class CircuitState(Enum):
@@ -213,6 +222,10 @@ class ProcessorBot:
         self._worker_seq = 0
         self._shutdown_started = False
         self._listen_conn: Optional[asyncpg.Connection] = None
+        self._cleaner_task: Optional[asyncio.Task] = None
+        # Идентификатор этого процесса для записи в pending_events.worker_id
+        # при двухфазном claim задачи (R-PR11).
+        self._worker_id = f"proc-{os.getpid()}-{uuid.uuid4().hex[:6]}"
 
         self.morph = Morphology()
         self.index = PhoneticIndex(self.morph)
@@ -256,8 +269,40 @@ class ProcessorBot:
         if not await self.db.connect():
             logger.error("Failed to connect to PostgreSQL, exiting")
             return False
+        if not await self._ensure_pending_schema():
+            logger.error("Failed to ensure pending_events schema, exiting")
+            return False
         logger.info("✅ PostgreSQL connected")
         return True
+
+    async def _ensure_pending_schema(self) -> bool:
+        """Идемпотентно дополнить схему pending_events колонками для R-PR11.
+
+        Init-скрипты PostgreSQL (`/docker-entrypoint-initdb.d`) выполняются
+        только при создании тома данных; на уже существующем томе колонки
+        locked_at/worker_id нужно добавить здесь — безопасно для повторов
+        (R-DB22, R-DB23: всё через IF NOT EXISTS).
+        """
+        try:
+            async with self.db.pool.acquire() as conn:
+                await conn.execute(
+                    "ALTER TABLE pending_events "
+                    "ADD COLUMN IF NOT EXISTS locked_at TIMESTAMPTZ"
+                )
+                await conn.execute(
+                    "ALTER TABLE pending_events "
+                    "ADD COLUMN IF NOT EXISTS worker_id TEXT"
+                )
+                await conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_pending_events_stale "
+                    "ON pending_events(locked_at) "
+                    "WHERE status = 'processing'"
+                )
+            logger.info("✅ pending_events schema ensured: locked_at/worker_id")
+            return True
+        except Exception as e:
+            logger.error(f"❌ _ensure_pending_schema failed: {e}")
+            return False
 
     async def _init_nlp(self) -> bool:
         """Загрузка и инициализация всех NLP-компонентов (матчеры, резолверы)."""
@@ -372,6 +417,11 @@ class ProcessorBot:
         except Exception as e:
             logger.error(f"❌ Failed to start health server: {e}")
 
+        # Фоновый очиститель зависших 'processing' задач (R-PR11):
+        # покрывает падения воркеров (SIGKILL/OOM), когда requeue невозможен.
+        self._cleaner_task = asyncio.create_task(self._cleanup_stale_processing())
+        self._cleaner_task.add_done_callback(self._on_cleaner_done)
+
         for _ in range(self._worker_concurrency):
             self._spawn_worker()
         logger.info(f"Started {self._worker_concurrency} worker(s)")
@@ -386,10 +436,15 @@ class ProcessorBot:
                 self._apply_memory_fallback()
             else:
                 self.health_server._memory_warning_sent = False
+            # R-PR2: не даём _worker_tasks расти при рестартах воркеров.
+            self._worker_tasks = [t for t in self._worker_tasks if not t.done()]
             await asyncio.sleep(1)
 
     def _spawn_worker(self) -> asyncio.Task:
         """Запуск нового воркера с автонадзором."""
+        # R-PR2: завершённые задачи удаляются — иначе список монотонно растёт
+        # при каждом respawn упавшего воркера.
+        self._worker_tasks = [t for t in self._worker_tasks if not t.done()]
         worker_id = self._worker_seq
         self._worker_seq += 1
         task = asyncio.create_task(self._worker(worker_id))
@@ -429,59 +484,95 @@ class ProcessorBot:
                 await asyncio.sleep(self._poll_interval)
                 continue
 
-            msg_id = row['message_id']
-            attempt = 0
-            while True:
-                attempt += 1
+            try:
+                await self._process_row_with_retries(row)
+            except asyncio.CancelledError:
+                # Shutdown: задача остаётся 'processing' — её вернёт
+                # в 'pending' фоновый очиститель (R-PR11).
+                raise
+            except Exception as e:
+                # Защитная сетка: неучтённая ошибка → задача снова доступна
+                # для других воркеров сразу, не дожидаясь очистителя.
+                self._errors += 1
+                logger.error(
+                    f"Worker {worker_id}: message {row['message_id']} "
+                    f"crashed with unhandled error: {e} — requeueing"
+                )
                 try:
-                    result = await self._process_row(row)
-                    if result:
-                        await self._mark_done(row['id'])
-                        self._messages_processed += 1
-                        logger.info(
-                            f"✅ Message {msg_id} processed: "
-                            f"event_id={result['event_id']}, layer={result['layer']}, "
-                            f"strategy={result.get('strategy', '?')}"
-                        )
-                    else:
-                        await self._mark_done(row['id'])
-                        logger.debug(f"Message {msg_id}: duplicate or no geometry")
+                    await self._requeue(row['id'])
+                except Exception as requeue_err:
+                    logger.error(
+                        f"Worker {worker_id}: requeue of {row['message_id']} "
+                        f"failed: {requeue_err}"
+                    )
+
+    async def _process_row_with_retries(self, row):
+        """Обработка одной задачи с ретраями; финально помечает done/error."""
+        msg_id = row['message_id']
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                result = await self._process_row(row)
+                if result:
+                    await self._mark_done(row['id'])
+                    self._messages_processed += 1
+                    logger.info(
+                        f"✅ Message {msg_id} processed: "
+                        f"event_id={result['event_id']}, layer={result['layer']}, "
+                        f"strategy={result.get('strategy', '?')}"
+                    )
+                else:
+                    await self._mark_done(row['id'])
+                    logger.debug(f"Message {msg_id}: duplicate or no geometry")
+                break
+            except Exception as e:
+                transient = isinstance(e, _TRANSIENT_ERRORS)
+                if attempt < (8 if transient else 3):
+                    delay = min(2 ** attempt, 30)
+                    logger.warning(
+                        f"Message {msg_id}: attempt {attempt} failed "
+                        f"({type(e).__name__}: {e}); retry in {delay}s"
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    self._errors += 1
+                    await self._mark_error(row['id'], str(e))
+                    logger.error(
+                        f"Message {msg_id}: failed after {attempt} attempts: {e}"
+                    )
                     break
-                except Exception as e:
-                    transient = isinstance(e, _TRANSIENT_ERRORS)
-                    if attempt < (8 if transient else 3):
-                        delay = min(2 ** attempt, 30)
-                        logger.warning(
-                            f"Message {msg_id}: attempt {attempt} failed "
-                            f"({type(e).__name__}: {e}); retry in {delay}s"
-                        )
-                        await asyncio.sleep(delay)
-                    else:
-                        self._errors += 1
-                        await self._mark_error(row['id'], str(e))
-                        logger.error(
-                            f"Message {msg_id}: failed after {attempt} attempts: {e}"
-                        )
-                        break
 
     async def _fetch_pending(self):
-        """Выборка одного pending-события из очереди с блокировкой."""
+        """Атомарный захват одной pending-задачи: двухфазный claim (R-PR11).
+
+        Статус меняется на 'processing' в той же транзакции, что и
+        FOR UPDATE SKIP LOCKED — после commit задача недоступна другим
+        воркерам (нет «закрыл транзакцию, а статус остался pending»).
+        """
         async with self.db.pool.acquire() as conn:
             async with conn.transaction():
                 return await conn.fetchrow(
-                    "SELECT id, message_id, text, event_time, photo_file_id "
-                    "FROM pending_events "
-                    "WHERE status = 'pending' "
-                    "ORDER BY created_at "
-                    "LIMIT 1 "
-                    "FOR UPDATE SKIP LOCKED"
+                    "UPDATE pending_events "
+                    "SET status = 'processing', locked_at = now(), worker_id = $1 "
+                    "WHERE id = ("
+                    "    SELECT id FROM pending_events "
+                    "    WHERE status = 'pending' "
+                    "    ORDER BY created_at "
+                    "    LIMIT 1 "
+                    "    FOR UPDATE SKIP LOCKED"
+                    ") "
+                    "RETURNING id, message_id, text, event_time, photo_file_id",
+                    self._worker_id,
                 )
 
     async def _mark_done(self, row_id: int):
         """Пометить pending-событие как выполненное."""
         async with self.db.pool.acquire() as conn:
             await conn.execute(
-                "UPDATE pending_events SET status = 'done', processed_at = now() "
+                "UPDATE pending_events "
+                "SET status = 'done', processed_at = now(), "
+                "    locked_at = NULL, worker_id = NULL "
                 "WHERE id = $1",
                 row_id,
             )
@@ -490,10 +581,65 @@ class ProcessorBot:
         """Пометить pending-событие как ошибочное."""
         async with self.db.pool.acquire() as conn:
             await conn.execute(
-                "UPDATE pending_events SET status = 'error', error_message = $1 "
+                "UPDATE pending_events "
+                "SET status = 'error', error_message = $1, "
+                "    locked_at = NULL, worker_id = NULL "
                 "WHERE id = $2",
                 error_msg, row_id,
             )
+
+    async def _requeue(self, row_id: int):
+        """Вернуть задачу в 'pending' после неучтённой ошибки воркера.
+
+        Guard `status = 'processing'` защищает от повторного перевода задачи,
+        которая в другом потоке уже была помечена 'done'/'error'.
+        """
+        async with self.db.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE pending_events "
+                "SET status = 'pending', locked_at = NULL, worker_id = NULL "
+                "WHERE id = $1 AND status = 'processing'",
+                row_id,
+            )
+
+    async def _cleanup_stale_processing(self):
+        """Фоновый очиститель зависших 'processing' задач (R-PR11).
+
+        Работает каждые _CLEANER_INTERVAL секунд и возвращает в 'pending'
+        задачи, чей воркер упал без возможности requeue (SIGKILL/OOM/краш
+        процесса). Падение самой таски (DB-ошибка и т.п.) не убивает цикл.
+        """
+        logger.info(
+            f"Stale cleaner started: resetting 'processing' "
+            f"older than {_STALE_PROCESSING_INTERVAL} every {_CLEANER_INTERVAL:.0f}s"
+        )
+        while self._running:
+            try:
+                status = await self.db.pool.execute(
+                    "UPDATE pending_events "
+                    "SET status = 'pending', locked_at = NULL, worker_id = NULL "
+                    "WHERE status = 'processing' "
+                    "  AND locked_at < now() - $1::interval",
+                    _STALE_PROCESSING_INTERVAL,
+                )
+                cleaned = int(status.split()[-1]) if status else 0
+                if cleaned:
+                    logger.warning(f"Stale cleaner: requeued {cleaned} stuck task(s)")
+            except Exception as e:
+                logger.error(f"Stale cleaner iteration failed: {e}")
+            await asyncio.sleep(_CLEANER_INTERVAL)
+
+    def _on_cleaner_done(self, task):
+        """Перезапуск очистителя, если он умер неожиданно."""
+        if not self._running:
+            return
+        try:
+            exc = task.exception()
+        except asyncio.CancelledError:
+            return
+        logger.critical(f"Stale cleaner died unexpectedly ({exc!r}) — respawning")
+        self._cleaner_task = asyncio.create_task(self._cleanup_stale_processing())
+        self._cleaner_task.add_done_callback(self._on_cleaner_done)
 
     @staticmethod
     def _sanitize_text(text: Optional[str]) -> Optional[str]:
@@ -681,6 +827,11 @@ class ProcessorBot:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+
+        if self._cleaner_task and not self._cleaner_task.done():
+            self._cleaner_task.cancel()
+            await asyncio.gather(self._cleaner_task, return_exceptions=True)
+            self._cleaner_task = None
 
         if self._listen_conn:
             try:

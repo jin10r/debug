@@ -106,6 +106,48 @@ parser-length-filter:
   script:
     - pytest -q tests/test_parser_length_filter.py -v
   rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH
+
+# ── Secure by Default: unit-тесты строгого парсера ──────────────────────────
+test:settings-strict-bool:
+  stage: test
+  image: $PYTHON_IMAGE
+  before_script:
+    - pip install -r requirements-dev.txt environs==11.2.1 pytest pytest-asyncio
+  script:
+    - pytest -q tests/test_settings_strict_bool.py --tb=short
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - changes:
+        - core/settings.py
+        - tests/test_settings_strict_bool.py
+        - tests/conftest.py
+        - .gitlab-ci.yml
+
+# ── Secure by Default: матричный интеграционный тест старта (4 комбо) ───────
+test:core-startup-matrix:
+  stage: test
+  image: $PYTHON_IMAGE
+  parallel:
+    matrix:
+      - TEST_ENV_VALUE: "UNSET"   EXPECTED_BOOL: "True"   EXPECTED_LOG_WARNING: "false"
+      - TEST_ENV_VALUE: "false"   EXPECTED_BOOL: "False"  EXPECTED_LOG_WARNING: "true"
+      - TEST_ENV_VALUE: "fals"    EXPECTED_BOOL: "True"   EXPECTED_LOG_WARNING: "false"
+      - TEST_ENV_VALUE: "true"    EXPECTED_BOOL: "True"   EXPECTED_LOG_WARNING: "false"
+  before_script:
+    - pip install environs==11.2.1
+  script:
+    - python scripts/ci_check_webview_validation.py "$TEST_ENV_VALUE" "$EXPECTED_BOOL" "$EXPECTED_LOG_WARNING"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - changes:
+        - core/settings.py
+        - core/app_factory.py
+        - scripts/ci_check_webview_validation.py
+        - .gitlab-ci.yml
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH'
 

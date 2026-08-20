@@ -9,8 +9,8 @@ Verifies:
 from conftest import load_module_by_path
 
 settings = load_module_by_path("_settings_under_test", "core/settings.py").settings
-mp = load_module_by_path("_mp_under_test", "parser/message_processor.py")
-truncate_for_geo = mp.truncate_for_geo
+tp = load_module_by_path("_tp_under_test", "core/utils/text_preprocessor.py")
+truncate_for_geo = tp.truncate_for_geo
 
 
 def test_parser_max_text_length_is_380():

@@ -125,7 +125,7 @@ cp .env.example .env   # шаблон в репозитории; секреты 
 |-------------------------------|-------|-----------------------------------------------------|
 | `BOT_TOKEN`                   | да    | токен бота от @BotFather; без него `core` (aiogram-бот) не стартует |
 | `WEBAPP_URL`                  | для prod | публичный HTTPS-URL приложения; бот вставляет его в кнопку «Открыть приложение» и он же задаётся в @BotFather. Для локальной проверки не нужен |
-| `TELEGRAM_VALIDATION_ENABLED` | нет   | `True` (дефолт) — доступ только из Telegram (Mini App); `False` — открытый доступ для локальной проверки. **Пустым не оставлять** |
+| `TELEGRAM_WEBVIEW_VALIDATION` | нет   | Валидация Telegram initData/JWT. **Строгий парсинг (Secure by Default):** default `TRUE`; `'false'`/`'0'` — единственный триггер dev-bypass; любое другое/отсутствующее значение — `TRUE` |
 | `REDIRECT_URL`                | нет   | куда отправлять не-Telegram трафик при включённой валидации |
 | `JWT_SECRET`                  | да    | секрет подписи токенов, ≥32 символов; при отсутствии/плейсхолдере `core` не стартует (fail-fast, R-C8) |
 
@@ -159,7 +159,7 @@ API и WebSocket пускают **только трафик из Telegram** — 
 
 #### Вариант A — локальная проверка в браузере (dev)
 
-1. В `.env`: `TELEGRAM_VALIDATION_ENABLED=False`.
+1. В `.env`: `TELEGRAM_WEBVIEW_VALIDATION=false`.
 2. `docker compose up -d --build` (или `docker compose restart core`, если стек уже запущен).
 3. Откройте <http://localhost/> на той же машине — карта с событиями.
 
@@ -176,7 +176,7 @@ Telegram открывает WebApp только по HTTPS, а контейне�
    (`cloudflared`, бесплатно, выдаёт адрес `https://…`). Классика со своим доменом —
    reverse-proxy с авто-TLS ([Caddy](https://caddyserver.com/) или nginx + certbot),
    проксирующий на `web:80`.
-2. В `.env`: `TELEGRAM_VALIDATION_ENABLED=True` (дефолт) и `WEBAPP_URL=https://<ваш-домен>`.
+2. В `.env`: `TELEGRAM_WEBVIEW_VALIDATION=true` (дефолт) и `WEBAPP_URL=https://<ваш-домен>`.
 3. Перезапустите: `docker compose up -d --build`.
 4. В [@BotFather](https://t.me/BotFather): `/mybots` → ваш бот → **Bot Settings →
    Configure Mini App** → укажите URL `https://<ваш-домен>` (по желанию — тот же URL

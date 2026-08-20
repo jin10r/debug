@@ -20,7 +20,7 @@ async def get_config_handler(request: web.Request):
 
     config = {
         'redirect_url': (settings.bot.redirect_url if settings and settings.bot else '') or '',
-        'telegram_validation_enabled': settings.app.telegram_validation_enabled if settings and settings.app else False,
+        'telegram_webview_validation': getattr(settings.app, 'telegram_webview_validation', True),
         'layer_keywords': layer_keywords,
     }
 

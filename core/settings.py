@@ -5,6 +5,28 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
+def _parse_strict_bool(env: Env, var_name: str, default: bool = True) -> bool:
+    """Secure by Default парсер булевых env-переменных.
+
+    Возвращает default (True), если переменная не задана.
+    Возвращает False ТОЛЬКО если значение явно равно 'false' или '0'
+    (регистронезависимо). Во всех остальных случаях — True.
+    """
+    val = env.str(var_name, default=None)
+    if val is None:
+        return default
+
+    is_disabled = val.strip().lower() in ('false', '0')
+    if is_disabled:
+        logger.warning(
+            f"SECURITY RISK: {var_name} is explicitly set to '{val}' — "
+            "dev-bypass ENABLED."
+        )
+
+    return not is_disabled
+
+
 # Ключевые слова слоёв — канонические словоформы (не стемы).
 # LayerClassifier лемматизирует и ключи, и токены сообщения через mawo_pymorphy3,
 # поэтому все падежи/числа словоформ совпадают автоматически.
@@ -93,7 +115,7 @@ class DatabaseConfig:
 class AppConfig:
     host: str = "0.0.0.0"  # nosec B104 — bind all interfaces (nginx reverse proxy)
     port: int = 8080
-    telegram_validation_enabled: bool = True
+    telegram_webview_validation: bool = True
     # Логирование (main.py, parser/monitoring.py читают эти поля)
     log_level: str = "INFO"
     log_format: str = "json"  # json | text
@@ -316,8 +338,8 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
     env.read_env(env_path)
 
     try:
-        telegram_validation_enabled = env.bool(
-            "TELEGRAM_VALIDATION_ENABLED", default=True
+        telegram_webview_validation = _parse_strict_bool(
+            env, "TELEGRAM_WEBVIEW_VALIDATION", True
         )
         bot_token = env.str("BOT_TOKEN", "")
         try:
@@ -332,7 +354,7 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
 
         return Settings(
             app=AppConfig(
-                telegram_validation_enabled=telegram_validation_enabled,
+                telegram_webview_validation=telegram_webview_validation,
             ),
             db=DatabaseConfig(
                 user=env.str("POSTGRES_USER", "postgres"),

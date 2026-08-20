@@ -22,7 +22,7 @@ pytestmark = pytest.mark.skipif(
 
 
 def _validation_on():
-    return bool(getattr(settings.app, "telegram_validation_enabled", True))
+    return bool(getattr(settings.app, "telegram_webview_validation", True))
 
 
 def test_rejects_without_credentials():

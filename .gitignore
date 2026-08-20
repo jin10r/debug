@@ -104,6 +104,7 @@ launch_browser.py
 model/models/
 model/.cache/
 data/
+!postgres/data/
 Archive.zip
 
 # Events export files (not committed)

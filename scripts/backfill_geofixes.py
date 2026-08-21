@@ -6,10 +6,6 @@ process_candidates из сохранённых matches + свежее решен
 именно их затрагивали баги ST_ConvexHull и мёртвого pre-filter'а.
 Одно-матчевые single_match и random не трогаются.
 
-SemanticMatcher (rubert-tiny2) НЕ подключается — соответствует текущему
-проду (settings.similarity.semantic_enabled=False, см. docs §13): слабые
-кандидаты (< 0.85) отклоняет детерминированный порог в process_candidates.
-
 Запуск (в контейнере processor, где есть deps + доступ к БД):
   docker cp scripts/backfill_geofixes.py processor:/tmp/
   docker exec processor python /tmp/backfill_geofixes.py           # dry-run

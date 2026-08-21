@@ -15,15 +15,14 @@ def _load_geo_matcher():
     sys.modules восстанавливается, чтобы не задеть другие тесты.
     """
     names = ("processor", "processor.morphology", "processor.phonetic_index",
-             "processor.word_tokenizer", "processor.semantic_matcher",
-             "processor.geo_matcher")
+             "processor.word_tokenizer", "processor.geo_matcher")
     saved = {n: sys.modules.get(n) for n in names}
 
     pkg = types.ModuleType("processor")
     pkg.__path__ = [str(ROOT / "processor")]
     sys.modules.setdefault("processor", pkg)
     for name in ("processor.morphology", "processor.phonetic_index",
-                 "processor.word_tokenizer", "processor.semantic_matcher"):
+                 "processor.word_tokenizer"):
         sys.modules.setdefault(name, types.ModuleType(name))
     morph = sys.modules["processor.morphology"]
     morph.Lemma = object

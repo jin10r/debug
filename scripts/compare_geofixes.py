@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
 """Сравнение стратегий геометрии «до/после» фиксов (P0-1/P0-2/P1-1/P2-2).
 
-Прогоняет те же сообщения из events_export1.csv через НОВЫЙ пайплайн
-(geo_matcher + semantic_resolver + process_candidates) и сравнивает
-результирующую стратегию с сохранённой в экспорте (старый код).
-
-SemanticMatcher (rubert-tiny2) НЕ подключается — соответствует текущему
-проду, где он отключён (settings.similarity.semantic_enabled=False, см.
-docs/GEOMETRY_ANALYSIS.md §13).
+ Прогоняет те же сообщения из events_export1.csv через НОВЫЙ пайплайн
+ (geo_matcher + process_candidates) и сравнивает
+ результирующую стратегию с сохранённой в экспорте (старый код).
 
 Запуск (в контейнере processor, где есть rapidfuzz/pymorphy3 и доступ к БД):
   docker cp scripts/compare_geofixes.py processor:/tmp/

@@ -38,6 +38,8 @@ const SHELL_ASSETS = [
     '/dist/js/core/map.js',
     '/dist/js/core/data.js',
     '/dist/js/core/ui.js',
+    // Vector basemap data (pre-compressed GeoJSON)
+    '/assets/data/odessa.geojson.gz',
     '/dist/js/modules/popups.js',
     '/dist/js/modules/notifications.js',
     '/js/telegram/integration.js'

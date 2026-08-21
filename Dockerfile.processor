@@ -1,4 +1,4 @@
-# Dockerfile.processor — NLP processor service (pymorphy3 + rapidfuzz + PostGIS + ONNX)
+# Dockerfile.processor — NLP processor service (pymorphy3 + rapidfuzz + PostGIS)
 # Multi-stage build для минимизации размера образа
 
 # =============================================================================

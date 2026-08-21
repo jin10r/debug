@@ -1,6 +1,10 @@
 // ui.js — UI инициализация, управление картой, попапы, оверлеи
 // Архитектурно оптимизированная версия для Telegram Mini Apps
 
+// Leaflet is loaded via <script> tag — available as UMD global.
+// The import below gives us type info without a runtime bundle.
+declare const L: typeof import('leaflet');
+
 // Инициализация глобальных переменных
 window.adSquares = {};
 
@@ -108,9 +112,15 @@ interface TileProviderOSM {
     url: string;
     options: Record<string, unknown>;
 }
-type TileProvider = TileProviderMaplibre | TileProviderOSM;
+interface TileProviderLocal {
+    type: 'local';
+}
+type TileProvider = TileProviderMaplibre | TileProviderOSM | TileProviderLocal;
 
 const TILE_PROVIDERS: Record<string, TileProvider> = {
+    'local': {
+        type: 'local'
+    },
     'vector-light': {
         type: 'maplibre',
         style: 'https://tiles.openfreemap.org/styles/liberty'
@@ -132,7 +142,17 @@ const TILE_PROVIDERS: Record<string, TileProvider> = {
 
 // Текущий активный тайл
 let currentTileLayer: L.Layer | null = null;
-let currentTileKey = 'vector-light';
+let currentTileKey = 'local';
+
+// Vector basemap layers (local GeoJSON)
+let vectorBaseLayer: L.Layer | null = null;
+
+let vectorTileIndex: any = null;
+
+// Vector modules — static imports (bundled with ui.js, ~28KB geojson-vt + rendering)
+import { loadVectorData } from './vector-data';
+import { createVectorLayer, setVectorTheme } from './vector-layer';
+
 
 // Функция для переключения тайлов
 window.switchTileLayer = function(tileKey: string): void {
@@ -146,17 +166,44 @@ window.switchTileLayer = function(tileKey: string): void {
         return;
     }
 
-    // Удаляем текущий слой
+    // Remove current layers
     if (currentTileLayer) {
         map.removeLayer(currentTileLayer);
+        currentTileLayer = null;
+    }
+    // Remove vector layers if switching away from local
+    if (vectorBaseLayer) {
+        map.removeLayer(vectorBaseLayer);
+        vectorBaseLayer = null;
     }
 
-    // Создаем и добавляем новый слой
+    // Add new layer
     const provider = TILE_PROVIDERS[tileKey];
-    let newLayer: L.Layer;
-    if (provider.type === 'maplibre') {
-        newLayer = (L as unknown as { maplibreGL: (opts: { style: string }) => L.Layer }).maplibreGL({ style: (provider as TileProviderMaplibre).style });
+    if (provider.type === 'local') {
+        if (vectorTileIndex) {
+            vectorBaseLayer = createVectorLayer(vectorTileIndex);
+            vectorBaseLayer.addTo(map);
+            const tp = map.getPane('tilePane');
+            if (tp) tp.style.display = 'none';
+        } else {
+            (async () => {
+                try {
+                    const tileIdx = await loadVectorData();
+                    vectorTileIndex = tileIdx;
+                    vectorBaseLayer = createVectorLayer(tileIdx);
+                    vectorBaseLayer.addTo(map);
+                    const tp = map.getPane('tilePane');
+                    if (tp) tp.style.display = 'none';
+                } catch (err) {
+                    console.warn('[switchTileLayer] Vector load failed:', err);
+                    _addRasterFallback(map);
+                }
+            })();
+        }
+    } else if (provider.type === 'maplibre') {
+        const newLayer = (L as unknown as { maplibreGL: (opts: { style: string }) => L.Layer }).maplibreGL({ style: (provider as TileProviderMaplibre).style });
         newLayer.addTo(map);
+        currentTileLayer = newLayer;
         const glMap = (newLayer as unknown as { getMaplibreMap: () => GLMap }).getMaplibreMap();
         if (glMap.isStyleLoaded()) {
             _applyThemeToGLMap(glMap, (provider as TileProviderMaplibre).theme);
@@ -164,12 +211,12 @@ window.switchTileLayer = function(tileKey: string): void {
             glMap.once('load', () => _applyThemeToGLMap(glMap, (provider as TileProviderMaplibre).theme));
         }
     } else {
-        newLayer = L.tileLayer((provider as TileProviderOSM).url, { minZoom: 11, maxZoom: 19, ...(provider as TileProviderOSM).options });
+        const newLayer = L.tileLayer((provider as TileProviderOSM).url, { minZoom: 11, maxZoom: 19, ...(provider as TileProviderOSM).options });
         newLayer.addTo(map);
         (newLayer as L.TileLayer).bringToBack();
+        currentTileLayer = newLayer;
     }
 
-    currentTileLayer = newLayer;
     currentTileKey = tileKey;
 
     // Сохраняем выбор в localStorage
@@ -190,7 +237,9 @@ window.initializeMap = function(): void {
         zoomControl: true,
         preferCanvas: false,
         minZoom: 11,
-        maxZoom: 19
+        maxZoom: 14,
+        maxBounds: L.latLngBounds([45.1, 28.1], [48.35, 31.4]),
+        maxBoundsViscosity: 1.0,
     }).setView([window.APP_CONFIG.map_center_lat, window.APP_CONFIG.map_center_lng], window.APP_CONFIG.map_default_zoom);
 
     // Проверяем сохраненный выбор тайла
@@ -208,7 +257,24 @@ window.initializeMap = function(): void {
 
     // Добавляем выбранный тайл
     const provider = TILE_PROVIDERS[currentTileKey];
-    if (provider.type === 'maplibre') {
+    if (provider.type === 'local') {
+        // Local vector basemap — load async, fall back to raster on failure
+        (async () => {
+            try {
+                const tileIdx = await loadVectorData();
+                vectorTileIndex = tileIdx;
+                vectorBaseLayer = createVectorLayer(tileIdx);
+                vectorBaseLayer.addTo(map);
+                // Hide raster tilePane so it never shows through during theme switches
+                const tilePane = map.getPane('tilePane');
+                if (tilePane) tilePane.style.display = 'none';
+                console.log('[initializeMap] Local vector basemap loaded');
+            } catch (err) {
+                console.warn('[initializeMap] Vector data failed, raster fallback:', err);
+                _addRasterFallback(map);
+            }
+        })();
+    } else if (provider.type === 'maplibre') {
         currentTileLayer = (L as unknown as { maplibreGL: (opts: { style: string }) => L.Layer }).maplibreGL({ style: (provider as TileProviderMaplibre).style });
         currentTileLayer.addTo(map);
         const glMap = (currentTileLayer as unknown as { getMaplibreMap: () => GLMap }).getMaplibreMap();
@@ -231,6 +297,17 @@ window.initializeMap = function(): void {
 
     window.initializeWebSocket();
 };
+
+// Raster fallback when vector basemap fails to load
+function _addRasterFallback(map: L.Map): void {
+    if (currentTileLayer) return; // already have a tile layer
+    currentTileLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        subdomains: 'abc',
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        minZoom: 11, maxZoom: 19
+    });
+    currentTileLayer.addTo(map);
+}
 
 // Создание постоянных слоёв карты (один раз за сессию)
 function initializeMapLayers(map: L.Map): void {
@@ -426,11 +503,21 @@ function initializeInteractionControls(): void {
 }
 
 // Функция переключения режима День/Ночь
+let _isVectorDark = false;
+
 function toggleDayNightMode(): void {
-    const isDarkMode = currentTileKey === 'dark';
-    const newTileKey = isDarkMode ? 'vector-light' : 'dark';
-    window.switchTileLayer(newTileKey);
-    console.log('[DayNight] Switched to:', newTileKey);
+    if (currentTileKey === 'local' && vectorBaseLayer) {
+        // Switch theme on the local vector basemap — no provider swap
+        _isVectorDark = !_isVectorDark;
+        const theme = _isVectorDark ? 'dark' : 'light';
+        setVectorTheme(theme);
+        console.log('[DayNight] Vector theme:', theme);
+    } else {
+        const isDarkMode = currentTileKey === 'dark';
+        const newTileKey = isDarkMode ? 'vector-light' : 'dark';
+        window.switchTileLayer(newTileKey);
+        console.log('[DayNight] Switched to:', newTileKey);
+    }
 }
 
 // Функция для добавления оверлея вопроса

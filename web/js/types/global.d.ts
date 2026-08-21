@@ -4,38 +4,10 @@
  * This file extends the Window interface with our application's globals
  */
 
-import { EventFeature, EventFeatureCollection, AppConfig, StoreState } from './geojson';
+import { EventFeature, EventFeatureCollection, AppConfig } from './geojson';
 import { TelegramAPI } from './telegram';
 
-/**
- * Leaflet type declarations (simplified)
- */
-declare namespace L {
-    export class Map {
-        constructor(element: string | HTMLElement, options?: any);
-        setView(latlng: [number, number], zoom: number): this;
-        removeLayer(layer: any): this;
-        // ... other leaflet methods
-    }
-    
-    export class MarkerClusterGroup {
-        constructor(options?: any);
-        addLayer(layer: any): this;
-        addLayers(layers: any[]): this;
-        clearLayers(): this;
-    }
-    
-    export class LayerGroup {
-        constructor(layers?: any[]);
-        addTo(map: Map): this;
-        clearLayers(): this;
-        addLayer(layer: any): this;
-        removeLayer(layer: any): this;
-    }
-    
-    export function markerClusterGroup(options?: any): MarkerClusterGroup;
-    export function layerGroup(layers?: any[]): LayerGroup;
-}
+// L namespace provided by @types/leaflet — no need to redeclare.
 
 /**
  * Extended Window interface
@@ -181,6 +153,16 @@ declare global {
             refreshAccessToken(): Promise<string | null>;
             scheduleRefresh(): void;
             destroy(): void;
+        };
+
+        // ==================== VALIDATOR ====================
+
+        telegramValidator: {
+            validateAndInit(): Promise<boolean>;
+            getUserId(): number | null;
+            getUserName(): string | null;
+            isValid(): boolean;
+            getTelegram(): unknown;
         };
 
         // ==================== DEBUG ====================

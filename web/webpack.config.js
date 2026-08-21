@@ -64,13 +64,18 @@ module.exports = (env, argv) => {
       compress: true,
       port: 3000,
       hot: true,
-      proxy: {
-        '/api': 'http://localhost:8080',
-        '/ws': {
+      proxy: [
+        {
+          context: ['/api'],
+          target: 'http://localhost:8080',
+          changeOrigin: true
+        },
+        {
+          context: ['/ws'],
           target: 'ws://localhost:8080',
           ws: true
         }
-      }
+      ]
     },
     optimization: {
       minimize: true,
@@ -86,7 +91,9 @@ module.exports = (env, argv) => {
         patterns: [
           // Копируем только HTML файлы
           { from: 'index.html', to: '.' },
-          { from: 'map.html', to: '.' }
+          { from: 'map.html', to: '.' },
+          // GeoJSON vector basemap data (pre-compressed .gz only)
+          { from: 'assets/data/*.gz', to: 'assets/data/[name][ext]', noErrorOnMissing: true }
         ]
       })
     ]

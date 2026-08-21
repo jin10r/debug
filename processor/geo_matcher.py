@@ -3,7 +3,6 @@
 Два тира:
   Tier 1 [Stem exact] — точное совпадение кортежа стемов из PhoneticIndex.
   Tier 2 [Surface typo] — rapidfuzz по сырым алиасам как корректор опечаток.
-  Tier 3 [Semantic] — ONNX rubert-tiny2 для серой зоны 0.70-0.85.
 
 Порядок приоритета типов: settlement (village/town) > street > остальные.
 """
@@ -22,7 +21,6 @@ from .word_tokenizer import Token
 
 if TYPE_CHECKING:
     from .phonetic_index import PhoneticEntry
-    from .semantic_matcher import SemanticMatcher
 
 try:
     from core.settings import settings
@@ -102,11 +100,6 @@ class GeoMatcher:
         # чтобы pre-filter (midpoint/type_hint) мог работать.
         self._geo_types: Dict[int, str] = {}
         self._executor: Optional[ProcessPoolExecutor] = None
-        self._semantic_matcher: Optional["SemanticMatcher"] = None
-
-    def set_semantic_matcher(self, matcher: "SemanticMatcher") -> None:
-        """Подключение семантического валидатора кандидатов."""
-        self._semantic_matcher = matcher
 
     async def initialize(self, pg_pool) -> bool:
         """Загрузка geo-данных, построение индекса, инициализация стоп-слов."""
@@ -168,7 +161,6 @@ class GeoMatcher:
             self._executor.shutdown(wait=True)
             logger.info("[Geo] ProcessPoolExecutor shutdown")
         self._executor = None
-        self._semantic_matcher = None
 
     def _punctuation_set(self) -> Set[str]:
         """Набор символов пунктуации для фильтрации токенов."""
@@ -492,24 +484,8 @@ class GeoMatcher:
                         if existing is None or result['score'] > existing['score']:
                             best_by_geo[gid] = result
 
-        if self._semantic_matcher and best_by_geo and text:
-            semantic_threshold = (
-                settings.similarity.semantic_accept_threshold
-                if settings and settings.similarity else None
-            )
-            candidates_list = list(best_by_geo.values())
-            filtered_candidates = self._semantic_matcher.filter_candidates(
-                candidates_list, text, semantic_threshold=semantic_threshold,
-            )
-            best_by_geo = {c["geo_id"]: c for c in filtered_candidates}
-            logger.debug(
-                f"[Geo] Semantic filter (full text): {len(candidates_list)} -> "
-                f"{len(filtered_candidates)} candidates"
-            )
-
-        # Prepositional boost — ПОСЛЕ семантической валидации: не выталкивает
-        # кандидатов серой зоны (0.70–0.85) за порог confident (0.85) до того,
-        # как их проверит модель. Сортировка и скоринг используют boosted score.
+        # Prepositional boost: не выталкивает кандидатов серой зоны (0.70–0.85)
+        # за порог confident (0.85). Сортировка и скоринг используют boosted score.
         for r in best_by_geo.values():
             if r.pop('_anchored', False):
                 r['score'] = min(1.0, r['score'] + boost)

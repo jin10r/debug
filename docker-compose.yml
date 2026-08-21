@@ -116,7 +116,7 @@ services:
     logging: *default-logging
 
   # =============================================================================
-  # NLP Processor - NLP pipeline (pymorphy3 + rapidfuzz + PostGIS + ONNX)
+  # NLP Processor - NLP pipeline (pymorphy3 + rapidfuzz + PostGIS)
   # =============================================================================
   nlp_processor:
     image: survival_processor:latest

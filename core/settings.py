@@ -169,25 +169,9 @@ class SimilarityConfig:
     lemma_fallback_enabled: bool = True
 
     # Порог fuzz.ratio для surface-орфо-корректора (Tier 2 в _link_span, 0-1).
-    # 0.80: пропускает в «серую зону» (0.80–0.85) слабее совпадения, которые
-    # ранее валидировала семантическая модель (см. semantic_accept_threshold).
-    # Точные стем-матчи (Tier 1, score varies) модель не затрагивает.
+    # 0.80: пропускает слабые совпадения (0.80–0.85) — не проходят как confident.
+    # Точные стем-матчи (Tier 1, score varies) не затрагивают.
     surface_typo_threshold: float = 0.80
-
-    # Включение SemanticMatcher (ONNX rubert-tiny2). По умолчанию ОТКЛЮЧЕН:
-    # проверка живых данных показала, что серая зона (0.70–0.85) пуста — все
-    # реальные кандидаты ≥0.85 проходят как confident.
-    # Модель тратила +20 сек старта и 116 МБ без единого решения.
-    # См. docs/GEOMETRY_ANALYSIS.md §12–13. Включить для будущего re-enable:
-    # обучать голову на эмбеддингах модели (см. §12.4) или расширить серую зону.
-    semantic_enabled: bool = False
-
-    # Порог (0-1) косинусной близости ПОЛНОГО текста сообщения к названию
-    # geo-объекта для приёма кандидата из серой зоны (SemanticMatcher).
-    # 0.55: пропускает реальные упоминания улицы в контексте, отсекает
-    # случайные совпадения поверхностей. Только для кандидатов 0.70–0.85.
-    # Неактуален при semantic_enabled=False.
-    semantic_accept_threshold: float = 0.55
 
     # Sliding-window: максимальный размер окна (токенов) при генерации кандидатов.
     # Окно 1..max_sliding_window охватывает улицы из 1, 2 или 3 слов.
@@ -272,21 +256,6 @@ class LayerConfig:
 
 
 @dataclass
-class OllamaConfig:
-    """Ollama LLM geo-resolution (Tier-2 fallback).
-
-    Всегда активен (enabled=True), но НЕ обязателен — при недоступности хоста
-    приложение продолжает работу без ошибок. Хост переопределяется через env
-    OLLAMA_HOST (по умолчанию http://host.docker.internal:11434).
-    """
-    enabled: bool = False
-    base_url: str = 'http://host.docker.internal:11434'
-    model: str = 'qwen2.5:0.5b'
-    timeout_s: int = 15
-    max_tokens: int = 128
-
-
-@dataclass
 class Settings:
     app: AppConfig
     db: DatabaseConfig
@@ -297,7 +266,6 @@ class Settings:
     parser: ParserConfig = field(default_factory=ParserConfig)
     processor: ProcessorConfig = field(default_factory=ProcessorConfig)
     question_overlay: QuestionOverlayConfig = field(default_factory=QuestionOverlayConfig)
-    ollama: OllamaConfig = field(default_factory=OllamaConfig)
 
 
 def _resolve_jwt_secret(env: Env) -> str:
@@ -350,8 +318,6 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
                 raise
             jwt_config = None
 
-        ollama_host = env.str("OLLAMA_HOST", None)
-
         return Settings(
             app=AppConfig(
                 telegram_webview_validation=telegram_webview_validation,
@@ -377,9 +343,6 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
                 history_limit=env.int("PARSER_HISTORY_LIMIT", 100),
             ),
             question_overlay=QuestionOverlayConfig(),
-            ollama=OllamaConfig(
-                base_url=ollama_host or 'http://host.docker.internal:11434',
-            ),
         )
     except Exception as e:
         raise ValueError(f"Configuration error: {e}")

@@ -230,9 +230,6 @@ class ProcessorBot:
         self.morph = Morphology()
         self.index = PhoneticIndex(self.morph)
         self.matcher = GeoMatcher(self.morph, self.index)
-        # SemanticMatcher (rubert ONNX) — создаётся только при semantic_enabled=True
-        # (см. _init_nlp). По умолчанию отключён: модель не влияла на решения.
-        self.semantic_matcher = None
         self.health_server = HealthServer()
         self.layer_classifier = LayerClassifier(self.morph)
 
@@ -320,35 +317,6 @@ class ProcessorBot:
             if not await self.matcher.initialize(self.db.pool):
                 logger.error("GeoMatcher initialization failed")
                 return False
-
-            # SemanticMatcher (ONNX rubert-tiny2) ОТКЛЮЧЁН по умолчанию:
-            # семантическая валидация не влияла ни на одно решение (серая зона
-            # 0.70–0.85 пуста), но стоила +20 сек старта и 116 МБ. Повторное
-            # включение — settings.similarity.semantic_enabled=True
-            # (+ обученная голова из docs §12.4).
-            semantic_enabled = (
-                settings.similarity.semantic_enabled
-                if settings and settings.similarity else False
-            )
-            if semantic_enabled:
-                try:
-                    from .semantic_matcher import SemanticMatcher
-                    self.semantic_matcher = SemanticMatcher()
-                    async with self.db.pool.acquire() as conn:
-                        geo_rows = await conn.fetch(
-                            "SELECT id, names, type FROM geo WHERE geom IS NOT NULL"
-                        )
-                    geo_data = [dict(r) for r in geo_rows]
-                    await asyncio.to_thread(
-                        self.semantic_matcher.initialize, geo_data
-                    )
-                    self.matcher.set_semantic_matcher(self.semantic_matcher)
-                    logger.info("✅ SemanticMatcher initialized")
-                except Exception as e:
-                    logger.error(f"❌ SemanticMatcher initialization failed: {e}")
-                    logger.warning("⚠️ Continuing without SemanticMatcher")
-            else:
-                logger.info("ℹ️ SemanticMatcher disabled (semantic_enabled=False)")
 
             logger.info("Setting up PostgreSQL notifications...")
             await self._setup_pg_notify()
@@ -797,15 +765,9 @@ class ProcessorBot:
             pass  # loop уже закрыт — ничего не делаем
 
     def _apply_memory_fallback(self):
-        """Graceful degradation: gc, disable ONNX, shrink LRU."""
+        """Graceful degradation: gc, shrink LRU."""
         import gc
         gc.collect()
-        if self.semantic_matcher:
-            try:
-                self.semantic_matcher.disable()
-                logger.info("SemanticMatcher disabled (memory fallback)")
-            except Exception as e:
-                logger.warning(f"Failed to disable SemanticMatcher: {e}")
         if self.morph:
             try:
                 self.morph.shrink_cache(max_size=5000)
@@ -842,8 +804,6 @@ class ProcessorBot:
 
         if self.matcher:
             await self.matcher.close()
-        if self.semantic_matcher:
-            self.semantic_matcher.close()
         if self.db:
             await self.db.close()
 

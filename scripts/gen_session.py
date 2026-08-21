@@ -5,40 +5,51 @@
 `parser/monitoring.py` (`Client(name="session", workdir=".../parser")`), поэтому
 ручной `mv`/`chmod` больше не нужен.
 
-`api_id`/`api_hash` передаются аргументами команды и зашиваются внутрь
-`session.session`: в рантайме и в репозитории они не хранятся (`*.session` —
-в `.gitignore`).
+`api_id`/`api_hash` и номер телефона передаются через переменные окружения
+(`PARSER_API_ID`, `PARSER_API_HASH`, `PARSER_PHONE`) и зашиваются внутрь
+`session.session`: в репозитории они не хранятся (`*.session` — в `.gitignore`).
 
 Запуск (в venv с установленными `kurigram` и `qrcode`):
-    python gen_session.py <api_id> <api_hash>            # вход по QR (по умолчанию)
-    python gen_session.py <api_id> <api_hash> --phone    # вход по телефону + коду
+    PARSER_API_ID=<id> PARSER_API_HASH=<hash> python gen_session.py                                # вход по QR
+    PARSER_API_ID=<id> PARSER_API_HASH=<hash> PARSER_PHONE=+79991234567 python gen_session.py      # вход по телефону + коду
+    SESSION_OUTPUT=/path/to/session.session python gen_session.py  # кастомный путь (по умолчанию — parser/session.session)
 """
 
-import argparse
 import os
 import stat
 import sys
 from pathlib import Path
 
-# Каталог parser/ относительно самого скрипта — сессия попадёт туда независимо
-# от текущей рабочей директории.
-PARSER_DIR = Path(__file__).resolve().parent / "parser"
+# Каталог parser/ в корне проекта (родитель scripts/) — сессия попадёт туда
+# независимо от текущей рабочей директории и того, откуда вызван скрипт.
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent
+PARSER_DIR = PROJECT_ROOT / "parser"
 SESSION_FILE = PARSER_DIR / "session.session"
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(
-        description="Создать parser/session.session для парсера Survival Map.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="api_id/api_hash берутся на https://my.telegram.org/apps",
-    )
-    ap.add_argument("api_id", type=int, help="api_id с my.telegram.org/apps")
-    ap.add_argument("api_hash", help="api_hash с my.telegram.org/apps")
-    ap.add_argument(
-        "--phone", action="store_true",
-        help="вход по номеру телефона + коду (по умолчанию — по QR-коду)",
-    )
-    args = ap.parse_args()
+    api_id_str = os.environ.get("PARSER_API_ID")
+    api_hash = os.environ.get("PARSER_API_HASH")
+    phone = (os.environ.get("PARSER_PHONE") or "").strip()
+    session_output = os.environ.get("SESSION_OUTPUT", str(SESSION_FILE))
+
+    if not api_id_str or not api_hash:
+        print(
+            "ERROR: PARSER_API_ID и PARSER_API_HASH должны быть заданы через "
+            "переменные окружения (G-15). Пример:\n"
+            "  PARSER_API_ID=123 PARSER_API_HASH=abc... \\\n"
+            "  PARSER_PHONE=+79991234567 SESSION_OUTPUT=parser/session.session \\\n"
+            "  python scripts/gen_session.py",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        api_id = int(api_id_str)
+    except ValueError:
+        print("ERROR: PARSER_API_ID должен быть целым числом", file=sys.stderr)
+        return 1
 
     try:
         from pyrogram import Client  # модуль ставится пакетом kurigram
@@ -51,33 +62,35 @@ def main() -> int:
         )
         return 1
 
-    PARSER_DIR.mkdir(parents=True, exist_ok=True)
+    session_output_path = Path(session_output)
+    output_dir = session_output_path.parent
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     app = Client(
-        "session",
-        api_id=args.api_id,
-        api_hash=args.api_hash,
-        workdir=str(PARSER_DIR),
+        session_output_path.stem,
+        api_id=api_id,
+        api_hash=api_hash,
+        workdir=str(output_dir),
+        phone_number=phone if phone else None,
     )
 
-    if not args.phone:
+    if not phone:
         print("Вход по QR: Telegram → Настройки → Устройства → "
               "«Подключить устройство» → отсканируйте QR ниже.")
-
-    # use_qr=True показывает QR в терминале (нужен пакет qrcode); --phone
-    # переключает на интерактивный ввод телефона + кода (+ пароль 2FA).
-    app.start(use_qr=not args.phone)
+    # use_qr=True показывает QR в терминале (нужен пакет qrcode); PARSER_PHONE
+    # переключает на интерактивный ввод номера + кода (+ пароль 2FA).
+    app.start(use_qr=not bool(phone))
     me = app.get_me()
     app.stop()
 
     # Права 600 — секрет доступа к аккаунту не должен быть читаем другими.
     try:
-        os.chmod(SESSION_FILE, stat.S_IRUSR | stat.S_IWUSR)
+        os.chmod(session_output_path, stat.S_IRUSR | stat.S_IWUSR)
     except OSError:
         pass
 
     handle = f"@{me.username}" if getattr(me, "username", None) else (me.first_name or "—")
-    print(f"\n✅ Сессия создана: {SESSION_FILE} (вход как {handle})")
+    print(f"\n✅ Сессия создана: {session_output_path} (вход как {handle})")
     print("   Права 600 выставлены. Теперь можно запускать docker compose up -d.")
     return 0
 

@@ -32,9 +32,11 @@
     "ts-loader": "9.5.7",
     "typescript": "5.9.3",
     "webpack": "5.106.2",
-    "webpack-cli": "5.1.4"
+    "webpack-cli": "5.1.4",
+    "webpack-dev-server": "^6.0.0"
   },
   "dependencies": {
+    "geojson-vt": "^4.0.3",
     "zustand": "5.0.14"
   }
 }

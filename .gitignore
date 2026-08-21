@@ -8,6 +8,8 @@ __pycache__/
 dist/
 build/
 .venv/
+.venv-session/
+.venv-*
 venv/
 env/
 
@@ -92,18 +94,16 @@ events_export*.csv
 messages.txt
 result.json
 
-# ONNX model files (large binaries, downloaded separately)
+# Local model caches (not committed)
 parser/models/
 processor/models/
+model/models/
+model/.cache/
+data/
 
 # Local debug / scratch scripts (not part of the project)
 test_curl.py
 launch_browser.py
-
-# Old local GGUF model files (replaced by external ollama)
-model/models/
-model/.cache/
-data/
 !postgres/data/
 Archive.zip
 
@@ -112,3 +112,7 @@ events_exporrrt.csv
 events_exporrrtt.csv
 events_exporrrtt.csv
 evvents_exporrrtt.csv
+
+# OSM source data (large)
+*.osm.pbf
+web/assets/data/*.geojson

@@ -12,7 +12,6 @@ import {
     LineString,
     Polygon
 } from 'geojson';
-import { TelegramAPI } from './telegram';
 
 /**
  * Event layer types
@@ -177,82 +176,4 @@ export interface AsyncStorage {
     getKeys(): Promise<string[]>;
 }
 
-/**
- * Global window interface extension
- */
-declare global {
-    interface Window {
-        // App config
-        APP_CONFIG: AppConfig;
-        
-        // App state
-        APP_STATE: {
-            currentTimeFilter: number;
-            activeLayers: Set<string>;
-            events: EventFeatureCollection;
-        };
-        
-        // Core modules — see js/core/store.ts and js/core/local_cache.ts
-        localCache: {
-            loadEvents(): Promise<void>;
-            startPersisting(): void;
-            stopPersisting(): void;
-            invalidate(): Promise<void>;
-        };
 
-        store: {
-            getState(): any;
-            setState(partial: any): void;
-            subscribe(listener: () => void): () => void;
-            getInitialState(): any;
-        };
-        
-        webSocketManager: {
-            connect(): void;
-            disconnect(): void;
-            sendMessage(message: Record<string, unknown>): void;
-            onFeature: ((feature: EventFeature) => void) | null;
-            onSnapshot: ((features: EventFeature[]) => void) | null;
-            onConnectionStatusChange: ((isConnected: boolean) => void) | null;
-            isConnected: boolean;
-        };
-        
-        eventManager: {
-            render(): void;
-        };
-        
-        // Telegram — общий тип вынесен в js/types/telegram.ts (см. TelegramAPI)
-        Telegram: TelegramAPI;
-
-        // Validator
-        telegramValidator: {
-            validateAndInit(): Promise<boolean>;
-            getUserId(): number | null;
-            getUserName(): string | null;
-            isValid(): boolean;
-            getTelegram(): unknown;
-        };
-        
-        // Utility functions
-        updateEventsInStore: (events: EventFeatureCollection) => void;
-        getFilteredDataForRendering: () => EventFeatureCollection;
-        updateOnlineStatus: (isOnline: boolean) => void;
-        renderDataOnMap: () => void;
-        initializeWebSocket: () => void;
-        bootstrapUI: () => void;
-        getAuthHeaders: () => Record<string, string>;
-
-        // Map instances
-        currentMapInstance: any; // L.Map from leaflet
-        markerClusterGroup: any; // L.MarkerClusterGroup
-        geometryLayerGroup: any; // L.LayerGroup
-        randomMarkersGroup: any; // L.LayerGroup
-        
-        // Default constants
-        DEFAULT_TIME_FILTER: number;
-        DEFAULT_POPUP_OPTIONS: Record<string, unknown>;
-    }
-}
-
-// Export for module usage
-export {};

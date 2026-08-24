@@ -21,6 +21,7 @@ from core.api.auth import init_cache
 from core.api.websocket import WebSocketManager
 from core.middlewares.jwt_auth import jwt_auth_middleware
 from core.middlewares.body_size_limit import body_size_limit_middleware
+from core.utils.pg_listener import PgNotifyListener
 
 logger = logging.getLogger(__name__)
 
@@ -74,82 +75,46 @@ async def _run_bot_polling(app: web.Application):
 
 
 async def _run_pg_notify_listener(app: web.Application):
-    """PostgreSQL LISTEN/NOTIFY → WebSocket bridge for parser-originated events.
-    Автоматически переподключается при разрыве соединения."""
+    """PostgreSQL LISTEN/NOTIFY → WebSocket bridge for parser-originated events."""
     shutdown_event = app.get('shutdown_event')
 
-    while not (shutdown_event and shutdown_event.is_set()):
-        conn = None
-        notify_tasks: set = set()
+    db_pool = app.get('db_pool')
+    ws_manager = app.get('websocket_manager')
+    if not db_pool or not getattr(db_pool, 'pool', None) or not ws_manager:
+        logger.warning("PG NOTIFY listener not started: missing db_pool or websocket_manager")
+        return
+
+    async def _handle_notify(channel: str, payload: str):
         try:
-            loop = asyncio.get_running_loop()
-            db_pool = app.get('db_pool')
-            ws_manager = app.get('websocket_manager')
-            if not db_pool or not getattr(db_pool, 'pool', None) or not ws_manager:
-                logger.warning("PG NOTIFY listener not started: missing db_pool or websocket_manager")
-                await asyncio.sleep(10)
-                continue
-
-            conn = await db_pool.pool.acquire()
-            app['pg_notify_conn'] = conn
-
-            def _spawn(coro):
-                """Запускает корутину как отслеживаемую asyncio-задачу."""
-                task = loop.create_task(coro)
-                notify_tasks.add(task)
-                task.add_done_callback(notify_tasks.discard)
-
-            def _on_notify(connection, pid, channel, payload):
-                """Обрабатывает PostgreSQL NOTIFY — отправляет событие через WebSocket."""
-                try:
-                    if channel == 'events_new':
-                        _spawn(ws_manager.broadcast_event(json.loads(payload)))
-                    elif channel == 'events_cleaned':
-                        _spawn(ws_manager.broadcast_events_cleaned(json.loads(payload)))
-                except Exception as e:
-                    logger.warning(f"Failed to process NOTIFY {channel}: {e}")
-
-            await conn.add_listener('events_new', _on_notify)
-            await conn.add_listener('events_cleaned', _on_notify)
-            logger.info("Listening for PostgreSQL NOTIFY on: events_new, events_cleaned")
-
-            # R-C5 Catch-Up: fetch recent events after LISTEN subscribe
-            try:
-                recent_events = await ws_manager.db_request.get_filtered_events_as_geojson(
-                    time_interval_minutes=5,
-                )
-                if recent_events and recent_events.get('features') and ws_manager:
-                    await ws_manager.send_snapshot(recent_events, channel='events_new')
-                    logger.info(f"Catch-Up: sent {len(recent_events['features'])} events_snapshot to WS clients")
-            except Exception as e:
-                logger.warning(f"Catch-Up failed: {e}")
-
-            if shutdown_event:
-                await shutdown_event.wait()
-        except asyncio.CancelledError:
-            raise
+            data = json.loads(payload)
+            if channel == 'events_new':
+                await ws_manager.broadcast_event(data)
+            elif channel == 'events_cleaned':
+                await ws_manager.broadcast_events_cleaned(data)
         except Exception as e:
-            logger.error(f"PG NOTIFY listener crashed: {e}. Reconnecting in 5s...")
-        finally:
-            for task in list(notify_tasks):
-                if not task.done():
-                    task.cancel()
-            if conn is not None:
-                try:
-                    await asyncio.wait_for(conn.remove_listener('events_new', _on_notify), timeout=1.0)
-                    await asyncio.wait_for(conn.remove_listener('events_cleaned', _on_notify), timeout=1.0)
-                except (asyncio.TimeoutError, Exception):
-                    pass
-                try:
-                    db_pool = app.get('db_pool')
-                    if db_pool and getattr(db_pool, 'pool', None):
-                        await asyncio.wait_for(db_pool.pool.release(conn), timeout=1.0)
-                except (asyncio.TimeoutError, Exception):
-                    pass
-                app['pg_notify_conn'] = None
+            logger.warning(f"Failed to process NOTIFY {channel}: {e}")
 
-        if shutdown_event and not shutdown_event.is_set():
-            await asyncio.sleep(5)
+    async def _catch_up():
+        """R-C5 Catch-Up: fetch recent events after LISTEN subscribe."""
+        try:
+            recent_events = await ws_manager.db_request.get_filtered_events_as_geojson(
+                time_interval_minutes=5,
+            )
+            if recent_events and recent_events.get('features'):
+                await ws_manager.send_snapshot(recent_events, channel='events_new')
+                logger.info(f"Catch-Up: sent {len(recent_events['features'])} events_snapshot to WS clients")
+        except Exception as e:
+            logger.warning(f"Catch-Up failed: {e}")
+
+    listener = PgNotifyListener(
+        pool=db_pool.pool,
+        channels=['events_new', 'events_cleaned'],
+        handler=_handle_notify,
+        shutdown_event=shutdown_event,
+        label="pg_notify_ws",
+        post_subscribe=_catch_up,
+    )
+    await listener.run()
 
 
 async def on_startup(app: web.Application):

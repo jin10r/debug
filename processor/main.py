@@ -8,13 +8,14 @@ import signal
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from enum import Enum
 
 import asyncpg
 
 from core.settings import settings
 from core.db.db_base import RETRYABLE_EXCEPTIONS as _TRANSIENT_ERRORS
 from core.utils.logging_config import setup_logging
+from core.utils.circuit_breaker import CircuitBreaker
+from core.utils.retry import retry_with_backoff
 
 setup_logging(
     level=getattr(logging, settings.app.log_level.upper(), logging.INFO),
@@ -40,55 +41,6 @@ _MAX_WORKER_CONCURRENCY = 8
 _STALE_PROCESSING_INTERVAL = timedelta(minutes=5)
 # Периодичность прогона очистителя зависших задач.
 _CLEANER_INTERVAL = 60.0
-
-
-class CircuitState(Enum):
-    """Circuit breaker состояния."""
-    CLOSED = "closed"  # Нормальная работа
-    OPEN = "open"      # Ошибки превысили порог, блокировка запросов
-    HALF_OPEN = "half_open"  # Тестирование восстановления
-
-
-class CircuitBreaker:
-    """Circuit breaker для защиты от перегрузки БД."""
-    
-    def __init__(self, failure_threshold: int = 5, timeout: float = 60.0):
-        self.failure_threshold = failure_threshold
-        self.timeout = timeout
-        self.failure_count = 0
-        self.last_failure_time: Optional[float] = None
-        self.state = CircuitState.CLOSED
-        self._lock = asyncio.Lock()
-    
-    async def call(self, func, *args, **kwargs):
-        """Execute function with circuit breaker protection."""
-        async with self._lock:
-            if self.state == CircuitState.OPEN:
-                if self.last_failure_time and \
-                   (asyncio.get_running_loop().time() - self.last_failure_time) > self.timeout:
-                    logger.info("Circuit breaker: transitioning to HALF_OPEN")
-                    self.state = CircuitState.HALF_OPEN
-                else:
-                    raise Exception("Circuit breaker is OPEN")
-        
-        try:
-            result = await func(*args, **kwargs)
-            async with self._lock:
-                if self.state == CircuitState.HALF_OPEN:
-                    logger.info("Circuit breaker: transitioning to CLOSED")
-                    self.state = CircuitState.CLOSED
-                    self.failure_count = 0
-            return result
-        except Exception as e:
-            async with self._lock:
-                self.failure_count += 1
-                self.last_failure_time = asyncio.get_running_loop().time()
-                
-                if self.failure_count >= self.failure_threshold:
-                    if self.state != CircuitState.OPEN:
-                        logger.error(f"Circuit breaker: transitioning to OPEN after {self.failure_count} failures")
-                        self.state = CircuitState.OPEN
-            raise
 
 
 _INSERT_EVENT_SIMPLE = """
@@ -457,39 +409,32 @@ class ProcessorBot:
     async def _process_row_with_retries(self, row):
         """Обработка одной задачи с ретраями; финально помечает done/error."""
         msg_id = row['message_id']
-        attempt = 0
-        while True:
-            attempt += 1
-            try:
-                result = await self._process_row(row)
-                if result:
-                    await self._mark_done(row['id'])
-                    self._messages_processed += 1
-                    logger.info(
-                        f"✅ Message {msg_id} processed: "
-                        f"event_id={result['event_id']}, layer={result['layer']}, "
-                        f"strategy={result.get('strategy', '?')}"
-                    )
-                else:
-                    await self._mark_done(row['id'])
-                    logger.debug(f"Message {msg_id}: duplicate or no geometry")
-                break
-            except Exception as e:
-                transient = isinstance(e, _TRANSIENT_ERRORS)
-                if attempt < (8 if transient else 3):
-                    delay = min(2 ** attempt, 30)
-                    logger.warning(
-                        f"Message {msg_id}: attempt {attempt} failed "
-                        f"({type(e).__name__}: {e}); retry in {delay}s"
-                    )
-                    await asyncio.sleep(delay)
-                else:
-                    self._errors += 1
-                    await self._mark_error(row['id'], str(e))
-                    logger.error(
-                        f"Message {msg_id}: failed after {attempt} attempts: {e}"
-                    )
-                    break
+
+        async def _try_process():
+            result = await self._process_row(row)
+            if result:
+                await self._mark_done(row['id'])
+                self._messages_processed += 1
+                logger.info(
+                    f"✅ Message {msg_id} processed: "
+                    f"event_id={result['event_id']}, layer={result['layer']}, "
+                    f"strategy={result.get('strategy', '?')}"
+                )
+            else:
+                await self._mark_done(row['id'])
+                logger.debug(f"Message {msg_id}: duplicate or no geometry")
+
+        try:
+            await retry_with_backoff(
+                _try_process,
+                max_attempts=3,
+                max_transient_attempts=8,
+                label=f"Message {msg_id}",
+            )
+        except Exception as e:
+            self._errors += 1
+            await self._mark_error(row['id'], str(e))
+            logger.error(f"Message {msg_id}: failed permanently: {e}")
 
     async def _fetch_pending(self):
         """Атомарный захват одной pending-задачи: двухфазный claim (R-PR11).

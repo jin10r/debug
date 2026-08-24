@@ -20,6 +20,8 @@ from pyrogram.types import Message
 from core.settings import settings
 from core.db.db_base import RETRYABLE_EXCEPTIONS as _TRANSIENT_ERRORS
 from core.utils.logging_config import setup_logging
+from core.utils.retry import retry_with_backoff
+from core.utils.pg_listener import PgNotifyListener
 
 setup_logging(
     level=getattr(logging, settings.app.log_level.upper(), logging.INFO),
@@ -349,25 +351,13 @@ class ParserBot:
                 self._pending_queue.task_done()
 
     async def _process_message_with_retries(self, message):
-        msg_id = message.id
-        attempt = 0
-        max_attempts = 5
-        while True:
-            attempt += 1
-            try:
-                await self._process_message(message)
-                return
-            except Exception as e:
-                transient = isinstance(e, _TRANSIENT_ERRORS)
-                if transient and attempt < max_attempts:
-                    delay = min(2 ** attempt, 30)
-                    logger.warning(
-                        f"Message {msg_id}: transient error attempt {attempt} "
-                        f"({type(e).__name__}: {e}); retry in {delay}s"
-                    )
-                    await asyncio.sleep(delay)
-                else:
-                    raise
+        await retry_with_backoff(
+            self._process_message,
+            args=(message,),
+            max_attempts=1,
+            max_transient_attempts=5,
+            label=f"Message {message.id}",
+        )
 
     @staticmethod
     def _extract_text(message) -> str:
@@ -417,59 +407,21 @@ class ParserBot:
 
     async def _run_photo_download_listener(self):
         """Слушать NOTIFY photo_download и скачивать фото через pyrogram."""
-        def _on_notify(connection, pid, channel, payload):
-                """Обработать NOTIFY photo_download — запустить скачивание фото."""
-                try:
-                    data = json.loads(payload)
-                    asyncio.create_task(
-                        self._download_photo_by_notify(data)
-                    )
-                except Exception as e:
-                    logger.warning(f"Photo download listener error: {e}")
-
-        backoff_schedule = [1, 5, 30]
-        backoff_idx = 0
-
-        while self._running:
-            conn = None
+        async def _handle_notify(channel: str, payload: str):
             try:
-                conn = await self.db.pool.acquire()
-                await conn.add_listener('photo_download', _on_notify)
-                logger.info("Слушаем photo_download для скачивания фото")
-                backoff_idx = 0
-
-                while self._running:
-                    await asyncio.sleep(5)
-                    if conn.is_closed():
-                        raise ConnectionError("Photo download listener connection closed")
-            except asyncio.CancelledError:
-                raise
+                data = json.loads(payload)
+                await self._download_photo_by_notify(data)
             except Exception as e:
-                delay = backoff_schedule[min(backoff_idx, len(backoff_schedule) - 1)]
-                logger.warning(
-                    f"Photo download listener lost connection ({e}), "
-                    f"retry in {delay}s"
-                )
-                backoff_idx += 1
-            finally:
-                if conn is not None:
-                    try:
-                        await conn.remove_listener('photo_download', _on_notify)
-                    except Exception:
-                        pass
-                    try:
-                        await self.db.pool.release(conn, timeout=5)
-                    except Exception:
-                        pass
+                logger.warning(f"Photo download handler error: {e}")
 
-            if not self._running:
-                break
-            try:
-                await asyncio.sleep(
-                    backoff_schedule[min(backoff_idx - 1, len(backoff_schedule) - 1)]
-                )
-            except asyncio.CancelledError:
-                raise
+        self._photo_listener = PgNotifyListener(
+            pool=self.db.pool,
+            channels=['photo_download'],
+            handler=_handle_notify,
+            shutdown_event=asyncio.Event() if not hasattr(self, '_shutdown_event') else self._shutdown_event,
+            label="photo_download",
+        )
+        await self._photo_listener.run()
 
     async def _recover_missing_photos(self):
         """Найти события без photo_url, чьё скачивание не было запрошено.
@@ -568,15 +520,13 @@ class ParserBot:
         media_dir = self.events_media_dir.rstrip('/')
 
         def _resolve_photo_path(url: str) -> Optional[str]:
-            """Преобразовать публичный URL фото в путь на ФС."""
             if not url:
                 return None
             if url.startswith('/media/events/'):
                 return f"{media_dir}/{url[len('/media/events/'):]}"
             return url
 
-        def _on_notify(connection, pid, channel, payload):
-            """Обработать NOTIFY events_cleaned — удалить файлы устаревших фото."""
+        async def _handle_notify(channel: str, payload: str):
             try:
                 data = json.loads(payload)
                 deleted = 0
@@ -586,57 +536,21 @@ class ParserBot:
                         try:
                             os.unlink(path)
                             deleted += 1
-                            logger.debug(f"Удалено устаревшее фото: {path}")
                         except OSError as e:
-                            logger.warning(f"Не удалось удалить фото {path}: {e}")
+                            logger.warning(f"Failed to delete photo {path}: {e}")
                 if deleted:
-                    logger.info(f"Удалено устаревших фото: {deleted}")
+                    logger.info(f"Cleaned up {deleted} stale photo(s)")
             except Exception as e:
-                logger.warning(f"Ошибка обработчика events_cleaned: {e}")
+                logger.warning(f"Photo cleanup handler error: {e}")
 
-        backoff_schedule = [1, 5, 30]
-        backoff_idx = 0
-
-        while self._running:
-            conn = None
-            try:
-                conn = await self.db.pool.acquire()
-                await conn.add_listener('events_cleaned', _on_notify)
-                logger.info("Слушаем events_cleaned для удаления устаревших фото")
-                backoff_idx = 0
-
-                while self._running:
-                    await asyncio.sleep(5)
-                    if conn.is_closed():
-                        raise ConnectionError("Listener connection closed")
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                delay = backoff_schedule[min(backoff_idx, len(backoff_schedule) - 1)]
-                logger.warning(
-                    f"Photo cleanup listener lost connection ({e}), "
-                    f"retry in {delay}s"
-                )
-                backoff_idx += 1
-            finally:
-                if conn is not None:
-                    try:
-                        await conn.remove_listener('events_cleaned', _on_notify)
-                    except Exception as e:
-                        logger.warning(f"remove_listener failed: {e}")
-                    try:
-                        await self.db.pool.release(conn, timeout=5)
-                    except Exception as e:
-                        logger.warning(f"pool.release failed: {e}")
-
-            if not self._running:
-                break
-            try:
-                await asyncio.sleep(
-                    backoff_schedule[min(backoff_idx - 1, len(backoff_schedule) - 1)]
-                )
-            except asyncio.CancelledError:
-                raise
+        self._cleanup_listener = PgNotifyListener(
+            pool=self.db.pool,
+            channels=['events_cleaned'],
+            handler=_handle_notify,
+            shutdown_event=asyncio.Event() if not hasattr(self, '_shutdown_event') else self._shutdown_event,
+            label="events_cleaned",
+        )
+        await self._cleanup_listener.run()
 
     def _request_stop(self):
         """Установить флаг остановки для graceful shutdown."""

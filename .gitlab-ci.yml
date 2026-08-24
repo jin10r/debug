@@ -1,10 +1,14 @@
 # ═══════════════════════════════════════════════════════════════════════════════
-# CI/CD Pipeline — Survival Map v3
+# CI/CD Pipeline — Survival Map v4
 # Stages: .pre → security-scan → test → build → image-security → deploy
 #
-# Правила: G-4 (BuildKit cache), G-5 (no secrets in CI), G-6 (no --network host),
-#          G-8 (Docker security), G-14 (NLP dictionaries only in image),
-#          G-15 (no api_id/api_hash in CI)
+# Два режима работы:
+#   1. Standard GitLab CI  — полный прогон: security → test → build → trivy → deploy
+#   2. Local (CI_LOCAL=true) — security → test → deploy:local (docker compose up --build)
+#
+# Правила: G-3 (one-command deploy), G-4 (BuildKit cache), G-5 (no secrets in CI),
+#          G-6 (no --network host), G-8 (Docker security), G-14 (NLP dictionaries only),
+#          G-15 (no api_id/api_hash in CI), R-P26 (session file required)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 stages:
@@ -48,7 +52,7 @@ variables:
   policy: pull-push
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Stage: .pre — Pipeline smoke test
+# Stage: .pre — Pipeline prerequisites
 # ═══════════════════════════════════════════════════════════════════════════════
 
 yaml-lint:
@@ -59,7 +63,44 @@ yaml-lint:
   script:
     - yamllint -d relaxed .gitlab-ci.yml
   rules:
+    - if: '$CI_LOCAL != "true"'
     - if: '$CI_COMMIT_BRANCH'
+
+# R-P26 + G-15: Проверка наличия сессии и отсутствия API-ключей в .env
+check-local-prerequisites:
+  stage: .pre
+  image: alpine:latest
+  script:
+    - |
+      echo "=== Проверка требований для локального деплоя ==="
+
+      # 1. Проверка наличия сессии (Правило R-P26)
+      if [ ! -f "parser/session.session" ]; then
+        echo "ОШИБКА: Файл parser/session.session не найден!"
+        echo "Запустите 'python gen_session.py' вручную перед запуском CI."
+        exit 1
+      fi
+      echo "OK: parser/session.session найден"
+
+      # 2. Проверка наличия .env
+      if [ ! -f ".env" ]; then
+        echo "ОШИБКА: Файл .env не найден!"
+        echo "Запустите './prepare-deploy.sh' вручную."
+        exit 1
+      fi
+      echo "OK: .env найден"
+
+      # 3. Строгая проверка безопасности (Правило G-15)
+      if grep -qE "PARSER_API_ID|PARSER_API_HASH" .env; then
+        echo "КРИТИЧЕСКОЕ НАРУШЕНИЕ БЕЗОПАСНОСТИ (G-15)!"
+        echo "PARSER_API_ID или PARSER_API_HASH обнаружены в .env. Удалите их немедленно."
+        exit 1
+      fi
+      echo "OK: PARSER_API_ID/PARSER_API_HASH не найдены в .env"
+
+      echo "=== Все предварительные проверки пройдены ==="
+  rules:
+    - if: '$CI_LOCAL == "true"'
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Stage: security-scan — static analysis, dependency audit, Dockerfile lint
@@ -228,7 +269,7 @@ frontend-build:
     - if: '$CI_COMMIT_BRANCH'
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Stage: build — Docker images with BuildKit cache
+# Stage: build — Docker images with BuildKit cache (remote CI only)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 .build-template: &build-template
@@ -250,6 +291,10 @@ frontend-build:
         -f Dockerfile.$SERVICE .
       docker push $CI_REGISTRY_IMAGE/$SERVICE:$CI_COMMIT_SHA
       docker push $CI_REGISTRY_IMAGE/$SERVICE:latest
+  rules:
+    - if: '$CI_LOCAL == "true"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
 
 build:core:
   <<: *build-template
@@ -257,8 +302,6 @@ build:core:
     SERVICE: core
   needs:
     - backend-tests
-  rules:
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
 
 build:parser:
   <<: *build-template
@@ -266,8 +309,6 @@ build:parser:
     SERVICE: parser
   needs:
     - backend-tests
-  rules:
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
 
 build:processor:
   <<: *build-template
@@ -275,8 +316,6 @@ build:processor:
     SERVICE: processor
   needs:
     - backend-tests
-  rules:
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
 
 build:web:
   <<: *build-template
@@ -284,8 +323,6 @@ build:web:
     SERVICE: web
   needs:
     - frontend-build
-  rules:
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
 
 build:postgres:
   <<: *build-template
@@ -293,11 +330,9 @@ build:postgres:
     SERVICE: postgres
   needs:
     - backend-tests
-  rules:
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Stage: image-security — scan built images for CVEs
+# Stage: image-security — scan built images for CVEs (remote CI only)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 trivy-scan:
@@ -322,13 +357,16 @@ trivy-scan:
     - build:web
     - build:postgres
   rules:
+    - if: '$CI_LOCAL == "true"'
+      when: never
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
   allow_failure: false
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Stage: deploy — optional docker-compose deployment
+# Stage: deploy — deployment
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# Remote deploy: pull images from registry, deploy via docker-compose (manual)
 deploy:
   stage: deploy
   image: docker:latest
@@ -338,7 +376,6 @@ deploy:
     DOCKER_TLS_CERTDIR: "/certs"
   before_script:
     - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
-    # Pull latest images from registry
     - docker pull $CI_REGISTRY_IMAGE/core:latest
     - docker pull $CI_REGISTRY_IMAGE/parser:latest
     - docker pull $CI_REGISTRY_IMAGE/processor:latest
@@ -350,6 +387,30 @@ deploy:
   needs:
     - trivy-scan
   rules:
+    - if: '$CI_LOCAL == "true"'
+      when: never
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
       when: manual
   allow_failure: true
+
+# G-3: Локальный деплой одной командой (выполняется на хосте, без image)
+# Требования: parser/session.session, .env (проверяется в check-local-prerequisites)
+deploy:local:
+  stage: deploy
+  variables:
+    DOCKER_BUILDKIT: "1"
+    COMPOSE_DOCKER_CLI_BUILD: "1"
+  script:
+    - |
+      echo '=== Локальный автодеплой (G-3) ==='
+      docker compose down --remove-orphans || true
+      docker compose up -d --build
+      echo '=== Статус контейнеров ==='
+      docker compose ps
+      echo '=== Деплой завершен ==='
+      echo 'Веб-интерфейс: http://localhost'
+  needs:
+    - check-local-prerequisites
+  rules:
+    - if: '$CI_LOCAL == "true"'
+      when: on_success

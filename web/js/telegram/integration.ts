@@ -316,7 +316,7 @@ class TelegramIntegration {
         }
 
         return new Promise((resolve) => {
-            this.tg!.CloudStorage!.getItem(key, (error: string | null, value: string | null) => {
+            this.tg!.CloudStorage!.getItem(key, (error: string | null, value: string | undefined) => {
                 if (error) {
                     console.error('CloudStorage get error:', error);
                     resolve(null);

@@ -73,7 +73,7 @@ export function createVectorLayer(tileIndex: TileIndex): L.GridLayer {
       }
 
       // Async done — don't block main thread
-      requestAnimationFrame(() => done(null, tile));
+      requestAnimationFrame(() => done(undefined, tile));
       return tile;
     },
 

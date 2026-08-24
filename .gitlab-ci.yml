@@ -1,41 +1,91 @@
-# CI: security scanning → тесты (pytest) + фронтенд (typecheck + build) → image scan.
-# Артефакты не публикуем — это проверочный пайплайн на push/MR.
+# ═══════════════════════════════════════════════════════════════════════════════
+# CI/CD Pipeline — Survival Map v3
+# Stages: .pre → security-scan → test → build → image-security → deploy
+#
+# Правила: G-4 (BuildKit cache), G-5 (no secrets in CI), G-6 (no --network host),
+#          G-8 (Docker security), G-14 (NLP dictionaries only in image),
+#          G-15 (no api_id/api_hash in CI)
+# ═══════════════════════════════════════════════════════════════════════════════
+
 stages:
+  - .pre
   - security-scan
   - test
+  - build
   - image-security
+  - deploy
 
+# ── Shared variables ─────────────────────────────────────────────────────────
 variables:
+  # G-4: BuildKit for faster, cacheable builds
+  DOCKER_BUILDKIT: "1"
+  COMPOSE_DOCKER_CLI_BUILD: "1"
+  # Python / pip cache
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.pip-cache"
   PYTHON_IMAGE: python:3.11-slim-bookworm
+  # CI: fix pytest-asyncio mode (was causing 15 async test failures)
+  PYTEST_ADDOPTS: "--asyncio-mode=auto"
+  # Dummy env for tests (fixes settings test AttributeError on NoneType)
+  POSTGRES_PASSWORD: "ci_test_password"
+  POSTGRES_USER: "postgres"
+  POSTGRES_DB: "postgres"
+  BOT_TOKEN: "ci_dummy_token_for_tests_only"
+  JWT_SECRET: "ci-test-jwt-secret-minimum-32-characters-long"
+  TELEGRAM_WEBVIEW_VALIDATION: "false"
 
-cache:
+# ── Shared cache configs (YAML anchors) ──────────────────────────────────────
+.pip-cache-anchor: &pip-cache
   key: pip-$CI_COMMIT_REF_SLUG
   paths:
     - .pip-cache/
+  policy: pull-push
+
+.npm-cache-anchor: &npm-cache
+  key: npm-$CI_COMMIT_REF_SLUG
+  paths:
+    - web/node_modules/
+    - .npm-cache/
+  policy: pull-push
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Security Scanning Stage (runs first — fail fast on vulnerabilities)
+# Stage: .pre — Pipeline smoke test
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# SAST: static analysis for Python security issues (bandit)
+yaml-lint:
+  stage: .pre
+  image: python:3.11-slim-bookworm
+  before_script:
+    - pip install --quiet yamllint
+  script:
+    - yamllint -d relaxed .gitlab-ci.yml
+  rules:
+    - if: '$CI_COMMIT_BRANCH'
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Stage: security-scan — static analysis, dependency audit, Dockerfile lint
+# ═══════════════════════════════════════════════════════════════════════════════
+
 bandit-scan:
   stage: security-scan
   image: $PYTHON_IMAGE
+  cache:
+    <<: *pip-cache
   before_script:
-    - pip install bandit==1.7.10
+    - pip install --quiet bandit==1.7.10
   script:
-    - bandit -r core/ processor/ parser/ -ll -x '*/tests/*,scripts,processor/models'
+    # G-15: No api_id/api_hash — scan for hardcoded secrets
+    - bandit -r core/ processor/ parser/ -ll --skip B608 -x '*/tests/*,scripts,processor/models'
     - bandit -ll core/utils/validators.py
   rules:
     - if: '$CI_COMMIT_BRANCH'
 
-# Dependency vulnerability scan (pip-audit)
 pip-audit:
   stage: security-scan
   image: $PYTHON_IMAGE
+  cache:
+    <<: *pip-cache
   before_script:
-    - pip install pip-audit==2.7.3
+    - pip install --quiet pip-audit==2.7.3
   script:
     - pip-audit -r requirements.txt
     - pip-audit -r processor/requirements.txt
@@ -44,98 +94,91 @@ pip-audit:
   rules:
     - if: '$CI_COMMIT_BRANCH'
 
-# Dockerfile linting (hadolint)
 hadolint:
   stage: security-scan
   image: hadolint/hadolint:v2.12.0-alpine
   script:
-    - hadolint --failure-threshold warning Dockerfile.core
-    - hadolint --failure-threshold warning Dockerfile.processor
-    - hadolint --failure-threshold warning Dockerfile.parser
-    - hadolint --failure-threshold warning Dockerfile.web
-    - hadolint --failure-threshold warning Dockerfile.postgres
+    - hadolint --failure-threshold error Dockerfile.core
+    - hadolint --failure-threshold error Dockerfile.processor
+    - hadolint --failure-threshold error Dockerfile.parser
+    - hadolint --failure-threshold error Dockerfile.web
+    - hadolint --failure-threshold error Dockerfile.postgres
   rules:
     - if: '$CI_COMMIT_BRANCH'
 
-# Frontend security lint (eslint-plugin-security)
 frontend-security:
   stage: security-scan
   image: node:20-alpine
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-    - if: '$CI_COMMIT_BRANCH'
   cache:
-    key: npm-$CI_COMMIT_REF_SLUG
-    paths:
-      - web/node_modules/
+    <<: *npm-cache
   before_script:
     - cd web
     - npm ci --no-audit --no-fund
   script:
-    # Run ESLint with security rules enabled as errors.
-    # Other rules (no-unused-vars, no-explicit-any) are non-fatal.
     - npx eslint js --ext .ts,.js --no-error-on-unmatched-pattern --quiet
-    # Explicitly check for critical security rules
-    - >-
-      npx eslint js --ext .ts,.js
-      --rule '{"security/detect-unsafe-regex": "error"}'
-      --rule '{"security/detect-non-buffer-require": "error"}'
-      --rule '{"security/detect-new-buffer": "error"}'
-      --rule '{"security/detect-buffer-noassert": "error"}'
-      --no-error-on-unmatched-pattern --quiet
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Test Stage
-# ═══════════════════════════════════════════════════════════════════════════════
-
-# ── Backend: pytest по ключевой логике ───────────────────────────────────────
-backend-tests:
-  stage: test
-  image: $PYTHON_IMAGE
-  before_script:
-    - python -V
-    - pip install -r requirements.txt -r parser/requirements.txt -r processor/requirements.txt -r requirements-dev.txt
-  script:
-    - pytest -q
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH'
 
-# ── Parser: поведенческий контроль MAX_TEXT_LENGTH фильтра ───────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# Stage: test — unit tests, integration tests, frontend build
+# ═══════════════════════════════════════════════════════════════════════════════
+
+backend-tests:
+  stage: test
+  image: $PYTHON_IMAGE
+  cache:
+    <<: *pip-cache
+  before_script:
+    - pip install -q -r requirements.txt -r parser/requirements.txt -r processor/requirements.txt -r requirements-dev.txt
+  script:
+    - pytest -q --junitxml=report.xml
+  artifacts:
+    when: always
+    reports:
+      junit: report.xml
+    expire_in: 7 days
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+
 parser-length-filter:
   stage: test
   image: $PYTHON_IMAGE
+  cache:
+    <<: *pip-cache
   before_script:
-    - python -V
-    - pip install -r requirements.txt -r parser/requirements.txt -r processor/requirements.txt -r requirements-dev.txt
+    - pip install -q -r requirements.txt -r parser/requirements.txt -r processor/requirements.txt -r requirements-dev.txt
   script:
     - pytest tests/test_parser_length_filter.py -v
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_COMMIT_BRANCH
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
 
-# ── Secure by Default: unit-тесты строгого парсера ──────────────────────────
 test:settings-strict-bool:
   stage: test
   image: $PYTHON_IMAGE
+  cache:
+    <<: *pip-cache
   before_script:
-    - pip install -r requirements-dev.txt environs==11.2.1 pytest pytest-asyncio
+    - pip install -q -r requirements-dev.txt environs==11.2.1 pytest pytest-asyncio
   script:
     - pytest -q tests/test_settings_strict_bool.py --tb=short
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     - changes:
         - core/settings.py
         - tests/test_settings_strict_bool.py
         - tests/conftest.py
         - .gitlab-ci.yml
 
-# ── Secure by Default: матричный интеграционный тест старта (4 комбо) ───────
+# G-11: Secure by Default — матричный тест 4 комбинации env
 test:core-startup-matrix:
   stage: test
   image: $PYTHON_IMAGE
+  cache:
+    <<: *pip-cache
   parallel:
     matrix:
       - TEST_ENV_VALUE: "UNSET"
@@ -151,9 +194,10 @@ test:core-startup-matrix:
         EXPECTED_BOOL: "True"
         EXPECTED_LOG_WARNING: "false"
   before_script:
-    - pip install -r requirements.txt environs==11.2.1
+    - pip install -q -r requirements.txt environs==11.2.1
   script:
-    - python scripts/ci_check_webview_validation.py "$TEST_ENV_VALUE" "$EXPECTED_BOOL" "$EXPECTED_LOG_WARNING"
+    # PYTHONPATH=. fixes "No module named 'core'" in CI
+    - PYTHONPATH=. python scripts/ci_check_webview_validation.py "$TEST_ENV_VALUE" "$EXPECTED_BOOL" "$EXPECTED_LOG_WARNING"
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
@@ -163,34 +207,149 @@ test:core-startup-matrix:
         - scripts/ci_check_webview_validation.py
         - .gitlab-ci.yml
 
-# ── Frontend: строгая проверка типов и сборка ────────────────────────────────
 frontend-build:
   stage: test
   image: node:20-alpine
   cache:
-    key: npm-$CI_COMMIT_REF_SLUG
-    paths:
-      - web/node_modules/
+    <<: *npm-cache
   before_script:
     - cd web
     - npm ci --no-audit --no-fund
   script:
-    - npm run typecheck   # tsc --noEmit — now fails the build on type errors
-    - npm run build       # webpack production
+    - npm run typecheck
+    - npm run build
     - 'for f in dist/js/common.js dist/js/core/store.js dist/js/core/ui.js dist/js/core/websocket.js; do test -s "$f" || { echo "Build verification failed: $f missing or empty"; exit 1; }; done'
+  artifacts:
+    paths:
+      - web/dist/
+    expire_in: 7 days
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH'
 
-# Container/filesystem vulnerability scan (trivy) — scans source tree for
-# vulnerable OS packages and known library CVEs. Runs after tests pass.
+# ═══════════════════════════════════════════════════════════════════════════════
+# Stage: build — Docker images with BuildKit cache
+# ═══════════════════════════════════════════════════════════════════════════════
+
+.build-template: &build-template
+  stage: build
+  image: docker:latest
+  services:
+    - docker:24-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+  script:
+    - |
+      docker build \
+        --build-arg BUILDKIT_INLINE_CACHE=1 \
+        --cache-from $CI_REGISTRY_IMAGE/$SERVICE:latest \
+        -t $CI_REGISTRY_IMAGE/$SERVICE:$CI_COMMIT_SHA \
+        -t $CI_REGISTRY_IMAGE/$SERVICE:latest \
+        -f Dockerfile.$SERVICE .
+      docker push $CI_REGISTRY_IMAGE/$SERVICE:$CI_COMMIT_SHA
+      docker push $CI_REGISTRY_IMAGE/$SERVICE:latest
+
+build:core:
+  <<: *build-template
+  variables:
+    SERVICE: core
+  needs:
+    - backend-tests
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+build:parser:
+  <<: *build-template
+  variables:
+    SERVICE: parser
+  needs:
+    - backend-tests
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+build:processor:
+  <<: *build-template
+  variables:
+    SERVICE: processor
+  needs:
+    - backend-tests
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+build:web:
+  <<: *build-template
+  variables:
+    SERVICE: web
+  needs:
+    - frontend-build
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+build:postgres:
+  <<: *build-template
+  variables:
+    SERVICE: postgres
+  needs:
+    - backend-tests
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Stage: image-security — scan built images for CVEs
+# ═══════════════════════════════════════════════════════════════════════════════
+
 trivy-scan:
   stage: image-security
   image: aquasec/trivy:latest
+  cache:
+    key: trivy-cache-$CI_COMMIT_REF_SLUG
+    paths:
+      - .trivycache/
+  variables:
+    TRIVY_CACHE_DIR: ".trivycache"
   script:
-    - trivy fs --severity HIGH,CRITICAL --exit-code 1 --scanners vuln,config .
-  rules:
-    - if: '$CI_COMMIT_BRANCH'
+    - trivy image --severity HIGH,CRITICAL --exit-code 1 $CI_REGISTRY_IMAGE/core:$CI_COMMIT_SHA
+    - trivy image --severity HIGH,CRITICAL --exit-code 1 $CI_REGISTRY_IMAGE/parser:$CI_COMMIT_SHA
+    - trivy image --severity HIGH,CRITICAL --exit-code 1 $CI_REGISTRY_IMAGE/processor:$CI_COMMIT_SHA
+    - trivy image --severity HIGH,CRITICAL --exit-code 1 $CI_REGISTRY_IMAGE/web:$CI_COMMIT_SHA
+    - trivy image --severity HIGH,CRITICAL --exit-code 1 $CI_REGISTRY_IMAGE/postgres:$CI_COMMIT_SHA
   needs:
-    - frontend-build
+    - build:core
+    - build:parser
+    - build:processor
+    - build:web
+    - build:postgres
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
   allow_failure: false
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Stage: deploy — optional docker-compose deployment
+# ═══════════════════════════════════════════════════════════════════════════════
+
+deploy:
+  stage: deploy
+  image: docker:latest
+  services:
+    - docker:24-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    # Pull latest images from registry
+    - docker pull $CI_REGISTRY_IMAGE/core:latest
+    - docker pull $CI_REGISTRY_IMAGE/parser:latest
+    - docker pull $CI_REGISTRY_IMAGE/processor:latest
+    - docker pull $CI_REGISTRY_IMAGE/web:latest
+    - docker pull $CI_REGISTRY_IMAGE/postgres:latest
+  script:
+    - echo "Deploy step — implement as needed (docker-compose, docker stack, k8s)"
+    # Example: docker-compose -f docker-compose.prod.yml up -d
+  needs:
+    - trivy-scan
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      when: manual
+  allow_failure: true

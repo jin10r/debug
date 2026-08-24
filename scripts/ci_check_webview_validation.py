@@ -42,13 +42,14 @@ def main():
             f.write("# TELEGRAM_WEBVIEW_VALIDATION is intentionally unset\n")
 
     try:
-        from core.settings import load_settings
+        # Set env var BEFORE importing so module-level load_settings()
+        # (core/settings.py:351) sees the correct value during import.
+        if test_env_value == "UNSET":
+            os.environ.pop("TELEGRAM_WEBVIEW_VALIDATION", None)
+        else:
+            os.environ["TELEGRAM_WEBVIEW_VALIDATION"] = test_env_value
 
-        # core/settings.py:351 — settings = load_settings() выполняется при импорте
-        # модуля и загружает .env из CWD в os.environ. Чистим ПОСЛЕ импорта,
-        # чтобы env.read_env(temp_file, override=False) не увидел значение
-        # из .env проекта.
-        os.environ.pop("TELEGRAM_WEBVIEW_VALIDATION", None)
+        from core.settings import load_settings
 
         settings_obj = load_settings(env_path=env_path, require_jwt=False)
 

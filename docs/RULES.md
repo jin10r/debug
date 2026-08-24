@@ -57,9 +57,15 @@ Never commit. Never log. Never echo. См. `.env.example` для шаблона.
 (по умолчанию `True`; `False` — только при явном `'false'`/`'0'`). Никаких
 inline-`os.getenv`/`env.bool` для auth-флагов за пределами `settings.py`.
 
-### G-14: Модель в образе
+### G-14: NLP-словари и зависимости — только в образе
 
-Веса LLM скачиваются только при сборке Dockerfile. В рантайме — запрещено.
+Все NLP-словари (pymorphy3, snowballstemmer) и зависимости устанавливаются ОДИН РАЗ
+при сборке Dockerfile.processor (через pip/apt на этапе builder). В рантайме ничего
+не скачивается.
+
+Запрещено:
+- Скачивание словарей или моделей при старте контейнера
+- HTTP-вызовы к внешним репозиториям моделей в рантайме
 
 ### G-15 / G-16: Сессия без авторизации
 
@@ -114,6 +120,7 @@ Telegram (MTProto) → parser (kurigram + strip_tail + preprocess_light) → pen
 | Docker контейнер от root | Security | G-8 |
 | Отсутствие cap_drop в compose | Security | G-8 |
 | Stale .js файлы в web/js/ | Мусор, путаница | G-10 |
+| Скачивание NLP-словарей в рантайме | Неопределённость, network dependency | G-14 |
 
 ---
 

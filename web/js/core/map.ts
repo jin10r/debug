@@ -66,7 +66,7 @@ window.getPolylineMidpoint = function(latLngs: L.LatLng[]): L.LatLng | null {
     if (latLngs.length === 1) return latLngs[0];
 
     let totalDistance = 0;
-    const distances = [];
+    const distances: number[] = [];
 
     for (let i = 0; i < latLngs.length - 1; i++) {
         const dist = latLngs[i].distanceTo(latLngs[i + 1]);
@@ -134,8 +134,8 @@ window.createMultiPolygon = function(map: L.Map, coords: [number, number][][][],
 
 window.createMultiLineString = function(map, coords, properties) {
     // GeoJSON MultiLineString: coords = [ line, ... ], где line = [ coord, ... ].
-    const elements = [];
-    let allLatLngs = [];
+    const elements: L.Layer[] = [];
+    let allLatLngs: L.LatLng[] = [];
     for (const line of coords) {
         const latLngs = line.map(c => L.latLng(c[1], c[0]));
         allLatLngs = allLatLngs.concat(latLngs);
@@ -156,8 +156,8 @@ window.createMultiLineString = function(map, coords, properties) {
 
 window.createMultiPoint = function(map, coords, properties) {
     // GeoJSON MultiPoint: coords = [ coord, ... ].
-    const elements = [];
-    const allLatLngs = [];
+    const elements: L.Layer[] = [];
+    const allLatLngs: L.LatLng[] = [];
     for (const c of coords) {
         const latLng = L.latLng(c[1], c[0]);
         allLatLngs.push(latLng);
@@ -170,7 +170,7 @@ window.createMultiPoint = function(map, coords, properties) {
 
 window.createGeometryCollection = function(map, coords, properties) {
     // GeoJSON GeometryCollection: coords = [ geometry, ... ].
-    const elements = [];
+    const elements: L.Layer[] = [];
     for (const geom of coords) {
         if (!geom || !geom.type) continue;
         const type = geom.type;

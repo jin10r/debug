@@ -267,9 +267,8 @@ self.index = PhoneticIndex(self.morph)  # stem-based inverted index
 
 ```python
 entities = await self.matcher.find_geo(tokens=tokens, lemmas=lemmas)
-# Три тира:
+# Два тира:
 # Tier 1: stem exact (snowballstemmer)
-# Tier 1b: semantic (e5-small ONNX + FAISS) — опционально
 # Tier 2: surface typo (rapidfuzz token_sort_ratio ≥ 0.85)
 ```
 

@@ -343,7 +343,6 @@ async def create_app():
     app['dp'] = dp
     app['cache'] = cache_manager
     app['websocket_manager'] = WebSocketManager(db_request, cache_manager)
-    app['db'].events.websocket_manager = app['websocket_manager']
 
     app.on_startup.append(on_startup)
     app.on_shutdown.append(on_shutdown)

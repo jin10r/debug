@@ -8,6 +8,7 @@ import json
 from typing import Dict, Any, Optional, List
 
 from core.settings import settings
+from core.db.db_base import Database
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +16,7 @@ logger = logging.getLogger(__name__)
 class SpatialOperations:
     """Handles PostGIS spatial operations."""
     
-    def __init__(self, db):
+    def __init__(self, db: Database):
         self.db = db
 
     async def get_geo_intersection(

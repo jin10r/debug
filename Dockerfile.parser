@@ -36,11 +36,6 @@ ENV PATH="/home/parser/.local/bin:$PATH"
 
 COPY --from=builder --chown=parser:parser /root/.local /home/parser/.local
 
-RUN --mount=type=cache,target=/var/cache/apt,id=parser-runtime \
-    apt-get update && apt-get install -y --no-install-recommends procps \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-
 RUN useradd -m -u 1000 parser && \
     chmod 1777 /tmp && \
     mkdir -p /media/events && \

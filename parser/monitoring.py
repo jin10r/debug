@@ -9,7 +9,6 @@ import json
 import logging
 import os
 import signal
-import sys
 from datetime import datetime, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -19,39 +18,20 @@ from pyrogram import Client, filters
 from pyrogram.types import Message
 
 from core.settings import settings
+from core.db.db_base import RETRYABLE_EXCEPTIONS as _TRANSIENT_ERRORS
+from core.utils.logging_config import setup_logging
 
-_LOG_LEVEL = getattr(logging, settings.app.log_level.upper(), logging.INFO)
-_LOG_FORMAT = settings.app.log_format.lower()
-
-if _LOG_FORMAT == 'json':
-    from core.utils.logging_config import JSONFormatter
-    _formatter = JSONFormatter()
-else:
-    _formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-
-_handler = logging.StreamHandler(sys.stdout)
-_handler.setFormatter(_formatter)
-logging.root.handlers = [_handler]
-logging.root.setLevel(_LOG_LEVEL)
+setup_logging(
+    level=getattr(logging, settings.app.log_level.upper(), logging.INFO),
+    json_format=settings.app.log_format.lower() == 'json',
+)
 
 from core.db.db_adapter import DBAdapter
-from core.utils.text_preprocessor import strip_tail, preprocess_light, truncate_for_geo
+from core.utils.text_preprocessor import strip_tail, preprocess_light, truncate_for_geo, sanitize_text
 
 logger = logging.getLogger(__name__)
 
 KIEV_TZ = ZoneInfo('Europe/Kiev')
-
-_TRANSIENT_ERRORS = (
-    asyncpg.PostgresConnectionError,
-    asyncpg.exceptions.TooManyConnectionsError,
-    asyncpg.exceptions.CannotConnectNowError,
-    asyncpg.exceptions.InterfaceError,
-    ConnectionError,
-    OSError,
-    asyncio.TimeoutError,
-)
 
 _MIN_WORKERS = 2
 _MAX_WORKERS = 8
@@ -394,13 +374,6 @@ class ParserBot:
         """Извлечь текст или caption из сообщения."""
         return str(message.text or message.caption or '')
 
-    @staticmethod
-    def _sanitize_text(text: Optional[str]) -> Optional[str]:
-        """Заменить некорректные UTF-8 символы."""
-        if not text:
-            return text
-        return text.encode('utf-8', errors='replace').decode('utf-8')
-
     async def _process_message(self, message: Message):
         """Предобработка сообщения и запись в pending_events."""
         if str(message.chat.id) != str(self.channel_id):
@@ -416,7 +389,7 @@ class ParserBot:
 
         raw_text = self._extract_text(message)
         stripped = strip_tail(raw_text)
-        preserved = self._sanitize_text(preprocess_light(stripped)) or ''
+        preserved = sanitize_text(preprocess_light(stripped)) or ''
         preserved = truncate_for_geo(preserved, settings.parser.max_text_length)
 
         photo_file_id = None

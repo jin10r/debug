@@ -75,7 +75,6 @@ END;
 $$;
 
 -- Индексы на партиционированной таблице (создаются на родителе и наследуются)
-CREATE INDEX IF NOT EXISTS idx_events_time ON events(event_time DESC);
 CREATE INDEX IF NOT EXISTS idx_events_geom ON events USING gist (geom);
 CREATE INDEX IF NOT EXISTS idx_events_layer ON events(layer);
 CREATE INDEX IF NOT EXISTS idx_events_message_id ON events(message_id);

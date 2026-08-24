@@ -33,7 +33,7 @@ ENV PYTHONUNBUFFERED="1" \
     PYTHONDONTWRITEBYTECODE="1"
 
 # Копируем зависимости из builder (включая скомпилированные .so)
-COPY --from=builder /root/.local /home/appuser/.local
+COPY --from=builder --chown=appuser:appuser /root/.local /home/appuser/.local
 ENV PATH="/home/appuser/.local/bin:$PATH"
 
 # Только runtime-библиотека (libpq5), НЕ dev-пакеты (libpq-dev)
@@ -50,8 +50,6 @@ RUN groupadd -r appuser && useradd -r -g appuser -u 1000 appuser && \
 # Копируем исходники с правами appuser
 COPY --chown=appuser:appuser core/ ./core/
 COPY --chown=appuser:appuser main.py .
-
-RUN chown -R appuser:appuser /app /home/appuser/.local
 
 USER appuser
 

@@ -285,7 +285,6 @@ BEGIN
         CROSS JOIN candidates b
         WHERE a.id < b.id
           AND ST_Intersects(a.geom_m, b.geom_m)
-          AND NOT ST_IsEmpty(ST_Intersection(a.geom_m, b.geom_m))
     ),
     pair_closest AS (
         SELECT
@@ -392,11 +391,8 @@ BEGIN
     ),
     wc_scatter AS (
         SELECT
-            ST_MaxDistance(
-                ST_Collect(wp.pt_m),
-                ST_Centroid(ST_Collect(wp.pt_m))
-            ) AS distance_m
-        FROM wc_pair_anchors wp
+            ST_MaxDistance(collected, ST_Centroid(collected)) AS distance_m
+        FROM (SELECT ST_Collect(wp.pt_m) AS collected FROM wc_pair_anchors wp) sub
     ),
     hypothesis_weighted_centroid AS (
         SELECT
@@ -476,7 +472,7 @@ BEGIN
                 ) THEN 2
                 ELSE 1
             END DESC,
-            ST_Length(ST_Transform(c.geom, 3857)) DESC,
+            ST_Length(c.geom_m) DESC,
             c.id ASC
         LIMIT 1
     ),

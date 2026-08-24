@@ -17,6 +17,7 @@
 
 import html
 import re
+from typing import Optional
 
 # Маркеры служебного хвоста: всё начиная с самого раннего из них отбрасывается.
 # Раньше '|' тоже был маркером, но он конфликтует с alias-separator в БД
@@ -189,3 +190,14 @@ def clean(text: str) -> str:
         text = pattern.sub(repl, text)
     text = _SPACES_RE.sub(' ', text)
     return text.strip().lower()
+
+
+def sanitize_text(text: Optional[str]) -> Optional[str]:
+    """Ensure text is valid UTF-8, replacing any invalid bytes.
+
+    Used before database insertion to prevent encoding errors from
+    Telegram messages containing mixed encodings.
+    """
+    if not text:
+        return text
+    return text.encode('utf-8', errors='replace').decode('utf-8')

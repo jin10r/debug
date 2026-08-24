@@ -15,13 +15,6 @@ WHERE photo_url IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_events_strategy_time
 ON events(strategy, event_time DESC);
 
-
--- BRIN index for time-series scans (bulk cleanup)
--- Более компактный чем btree для последовательных timestamp
-CREATE INDEX IF NOT EXISTS idx_events_time_brin
-ON events USING brin (event_time)
-WITH (pages_per_range = 32);
-
 -- Index for layer_keywords faster lookups
 CREATE INDEX IF NOT EXISTS idx_layer_keywords_gin
 ON layer_keywords USING gin (keywords);

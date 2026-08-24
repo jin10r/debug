@@ -9,21 +9,21 @@ DECLARE
     part_hour TIMESTAMPTZ;
     part_name TEXT;
     created_count INTEGER := 0;
+    dropped_count INTEGER := 0;
     cutoff_hour TIMESTAMPTZ;
 BEGIN
     -- Создаём с -72 часов (3 суток истории) до +2 часа вперёд
     FOR i IN -72..2 LOOP
         part_hour := date_trunc('hour', NOW()) + i * INTERVAL '1 hour';
         part_name := 'events_' || to_char(part_hour, 'YYYY_MM_DD_HH24');
-        IF NOT EXISTS (
-            SELECT 1 FROM pg_class WHERE relname = part_name
-        ) THEN
+        IF to_regclass(part_name) IS NULL THEN
             EXECUTE format(
                 'CREATE TABLE %I PARTITION OF events FOR VALUES FROM (%L) TO (%L)',
                 part_name,
                 part_hour,
                 part_hour + INTERVAL '1 hour'
             );
+            EXECUTE format('ANALYZE %I', part_name);
             created_count := created_count + 1;
         END IF;
     END LOOP;
@@ -37,8 +37,15 @@ BEGIN
           AND to_timestamp(substring(relname FROM 8 FOR 13), 'YYYY_MM_DD_HH24') < cutoff_hour
     LOOP
         EXECUTE format('DROP TABLE IF EXISTS %I', part_name);
-        created_count := created_count + 1;
+        dropped_count := dropped_count + 1;
     END LOOP;
+
+    IF dropped_count > 0 THEN
+        UPDATE events_meta
+        SET version = version + 1,
+            updated_at = NOW()
+        WHERE id = 1;
+    END IF;
 
     RETURN created_count;
 END;

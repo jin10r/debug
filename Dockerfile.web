@@ -58,6 +58,3 @@ COPY --from=frontend-builder /web/css    ./css
 COPY --from=frontend-builder /web/assets ./assets
 COPY --from=frontend-builder /web/js     ./js
 COPY --from=frontend-builder /web/dist   ./dist
-
-# Default config (overridable via bind-mount in docker-compose.yml)
-COPY nginx.conf /etc/nginx/nginx.conf

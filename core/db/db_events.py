@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 from core.settings import settings
+from core.db.db_base import Database
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +18,7 @@ logger = logging.getLogger(__name__)
 class EventOperations:
     """Handles event-related database operations."""
 
-    def __init__(self, db):
+    def __init__(self, db: Database):
         """Инициализирует обработчик событий БД с ссылкой на пул соединений."""
         self.db = db
 

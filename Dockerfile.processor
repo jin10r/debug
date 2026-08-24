@@ -42,7 +42,7 @@ ENV PATH="/home/processor/.local/bin:$PATH"
 COPY --from=builder --chown=processor:processor /root/.local /home/processor/.local
 
 RUN --mount=type=cache,target=/var/cache/apt,id=processor-runtime \
-    apt-get update && apt-get install -y --no-install-recommends procps curl \
+    apt-get update && apt-get install -y --no-install-recommends curl \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

@@ -12,13 +12,15 @@ import logging
 from datetime import datetime
 from typing import Optional
 
+from core.db.db_base import Database
+
 logger = logging.getLogger(__name__)
 
 
 class AuthOperations:
     """Операции с refresh-токенами в БД."""
 
-    def __init__(self, db):
+    def __init__(self, db: Database):
         self.db = db
 
     async def store_refresh_token(

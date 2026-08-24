@@ -10,6 +10,7 @@ import asyncio
 from typing import List, Dict, Any, Optional
 
 from core.settings import settings
+from core.db.db_base import Database
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +18,7 @@ logger = logging.getLogger(__name__)
 class GeoOperations:
     """Handles geo-related database operations."""
 
-    def __init__(self, db):
+    def __init__(self, db: Database):
         """Инициализирует обработчик гео-операций БД."""
         self.db = db
 

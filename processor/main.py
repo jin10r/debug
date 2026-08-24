@@ -5,7 +5,6 @@ import json as json_lib
 import logging
 import os
 import signal
-import sys
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -14,22 +13,13 @@ from enum import Enum
 import asyncpg
 
 from core.settings import settings
+from core.db.db_base import RETRYABLE_EXCEPTIONS as _TRANSIENT_ERRORS
+from core.utils.logging_config import setup_logging
 
-_LOG_LEVEL = getattr(logging, settings.app.log_level.upper(), logging.INFO)
-_LOG_FORMAT = settings.app.log_format.lower()
-
-if _LOG_FORMAT == 'json':
-    from core.utils.logging_config import JSONFormatter
-    _formatter = JSONFormatter()
-else:
-    _formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-
-_handler = logging.StreamHandler(sys.stdout)
-_handler.setFormatter(_formatter)
-logging.root.handlers = [_handler]
-logging.root.setLevel(_LOG_LEVEL)
+setup_logging(
+    level=getattr(logging, settings.app.log_level.upper(), logging.INFO),
+    json_format=settings.app.log_format.lower() == 'json',
+)
 
 from core.db.db_adapter import DBAdapter
 from .morphology import Morphology
@@ -41,16 +31,6 @@ from .word_tokenizer import tokenize
 from core.utils.text_preprocessor import strip_tail, is_promotional, truncate_for_geo
 
 logger = logging.getLogger(__name__)
-
-_TRANSIENT_ERRORS = (
-    asyncpg.PostgresConnectionError,
-    asyncpg.exceptions.TooManyConnectionsError,
-    asyncpg.exceptions.CannotConnectNowError,
-    asyncpg.InterfaceError,
-    ConnectionError,
-    OSError,
-    asyncio.TimeoutError,
-)
 
 _MAX_WORKER_CONCURRENCY = 8
 
@@ -608,13 +588,6 @@ class ProcessorBot:
         logger.critical(f"Stale cleaner died unexpectedly ({exc!r}) — respawning")
         self._cleaner_task = asyncio.create_task(self._cleanup_stale_processing())
         self._cleaner_task.add_done_callback(self._on_cleaner_done)
-
-    @staticmethod
-    def _sanitize_text(text: Optional[str]) -> Optional[str]:
-        """Очистка текста от некорректных UTF-8 последовательностей."""
-        if not text:
-            return text
-        return text.encode('utf-8', errors='replace').decode('utf-8')
 
     async def _process_row(self, row) -> Optional[dict]:
         """Полный цикл обработки одного сообщения: токенизация, поиск geo, вставка."""

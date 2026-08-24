@@ -14,7 +14,7 @@ import asyncpg
 from core.settings import settings
 from core.db.db_base import RETRYABLE_EXCEPTIONS as _TRANSIENT_ERRORS
 from core.utils.logging_config import setup_logging
-from core.utils.circuit_breaker import CircuitBreaker
+from core.utils.circuit_breaker import CircuitBreaker, CircuitState
 from core.utils.retry import retry_with_backoff
 
 setup_logging(

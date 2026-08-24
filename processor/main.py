@@ -85,7 +85,7 @@ class CircuitBreaker:
         async with self._lock:
             if self.state == CircuitState.OPEN:
                 if self.last_failure_time and \
-                   (asyncio.get_event_loop().time() - self.last_failure_time) > self.timeout:
+                   (asyncio.get_running_loop().time() - self.last_failure_time) > self.timeout:
                     logger.info("Circuit breaker: transitioning to HALF_OPEN")
                     self.state = CircuitState.HALF_OPEN
                 else:
@@ -102,7 +102,7 @@ class CircuitBreaker:
         except Exception as e:
             async with self._lock:
                 self.failure_count += 1
-                self.last_failure_time = asyncio.get_event_loop().time()
+                self.last_failure_time = asyncio.get_running_loop().time()
                 
                 if self.failure_count >= self.failure_threshold:
                     if self.state != CircuitState.OPEN:
@@ -374,7 +374,7 @@ class ProcessorBot:
         """Главный цикл: запуск health-сервера и воркеров."""
         self._running = True
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, self._request_stop)
 
@@ -756,7 +756,7 @@ class ProcessorBot:
         # работает в основном. Прямой self._running = False оставлен для
         # обратной совместимости с while self._running в _worker.
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             if loop.is_running():
                 loop.call_soon_threadsafe(self._shutdown_event.set)
             else:

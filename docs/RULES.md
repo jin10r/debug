@@ -1,4 +1,4 @@
-# Правила проекта — Survival Map v2.0
+# Правила проекта — Survival Map v2.1
 
 Единый документ правил для всех микросервисов. Каждый контейнер — независимый сервис.
 
@@ -20,7 +20,7 @@ PostgreSQL — единственное надежное хранилище со
 
 ### G-4: Observability First
 
-Структурированные логи (JSON), метрики.
+Структурированные логи (JSON). Метрики удалены (Phase 1).
 
 ### G-5: Security by Default
 
@@ -33,6 +33,21 @@ PostgreSQL — единственное надежное хранилище со
 ### G-7: Resource Limits
 
 Лимиты CPU/RAM в `docker-compose.yml` обязательны.
+
+### G-8: Docker Security
+
+Контейнеры работают от non-root UID 1000. `cap_drop: ALL` для всех сервисов.
+`tmpfs` для ephemeral данных. Multi-stage builds для минимальных образов.
+
+### G-9: Secrets Isolation
+
+`JWT_SECRET`, `POSTGRES_PASSWORD`, `BOT_TOKEN` — ТОЛЬКО в `.env`.
+Never commit. Never log. Never echo. См. `.env.example` для шаблона.
+
+### G-10: No Stale Code
+
+Неиспользуемые `.js` файлы, устаревшие скрипты, мёртвые модули — удаляются
+при обнаружении. Не держать «на всякий случай».
 
 ### G-11: Единый settings.py
 
@@ -55,11 +70,11 @@ inline-`os.getenv`/`env.bool` для auth-флагов за пределами `
 ## Поток данных
 
 ```
-Telegram (MTProto) → parser (strip_tail + preprocess_light) → pending_events
-    → processor (tokenize → lemmatize → classify → find_geo → resolve → process_candidates_v2)
-    → postgres (geometry-first CTE + pg_notify)
-    → core (LISTEN events_new → WebSocket broadcast)
-    → web (nginx reverse proxy + Leaflet PWA)
+Telegram (MTProto) → parser (kurigram + strip_tail + preprocess_light) → pending_events
+    → processor (tokenize → lemmatize → classify → find_geo → process_candidates_v2)
+    → postgres (PostGIS, pg_notify, LISTEN/NOTIFY)
+    → core (aiohttp REST + WebSocket + aiogram bot)
+    → web (nginx + Leaflet/MapLibre GL, PWA)
     → Browser / Telegram WebView
 ```
 
@@ -96,7 +111,10 @@ Telegram (MTProto) → parser (strip_tail + preprocess_light) → pending_events
 | Ручной DELETE по времени в events | Lock contention, ломает BRIN | R-DB2, R-DB3 |
 | ThreadPoolExecutor для rapidfuzz | GIL блокирует event loop | R-PR19 |
 | Семантические эвристики текста для геометрии | Нарушение Geometry-First, неточность | R-PR27, R-DB8 |
+| Docker контейнер от root | Security | G-8 |
+| Отсутствие cap_drop в compose | Security | G-8 |
+| Stale .js файлы в web/js/ | Мусор, путаница | G-10 |
 
 ---
 
-*Правила проекта — август 2026*
+*Правила проекта — август 2026 (обновлено: Docker hardening, security isolation, stale code cleanup)*

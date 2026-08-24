@@ -47,7 +47,7 @@ pip-audit:
 # Dockerfile linting (hadolint)
 hadolint:
   stage: security-scan
-  image: hadolint/hadolint:latest
+  image: hadolint/hadolint:v2.12.0-alpine
   script:
     - hadolint --failure-threshold warning Dockerfile.core
     - hadolint --failure-threshold warning Dockerfile.processor
@@ -89,7 +89,7 @@ backend-tests:
   image: $PYTHON_IMAGE
   before_script:
     - python -V
-    - pip install -r requirements.txt -r parser/requirements.txt -r requirements-dev.txt
+    - pip install -r requirements.txt -r parser/requirements.txt -r processor/requirements.txt -r requirements-dev.txt
   script:
     - pytest -q
   rules:
@@ -102,9 +102,9 @@ parser-length-filter:
   image: $PYTHON_IMAGE
   before_script:
     - python -V
-    - pip install -r requirements.txt -r parser/requirements.txt -r requirements-dev.txt
+    - pip install -r requirements.txt -r parser/requirements.txt -r processor/requirements.txt -r requirements-dev.txt
   script:
-    - pytest -q tests/test_parser_length_filter.py -v
+    - pytest tests/test_parser_length_filter.py -v
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH
@@ -137,19 +137,17 @@ test:core-startup-matrix:
       - TEST_ENV_VALUE: "fals"    EXPECTED_BOOL: "True"   EXPECTED_LOG_WARNING: "false"
       - TEST_ENV_VALUE: "true"    EXPECTED_BOOL: "True"   EXPECTED_LOG_WARNING: "false"
   before_script:
-    - pip install environs==11.2.1
+    - pip install -r requirements.txt environs==11.2.1
   script:
     - python scripts/ci_check_webview_validation.py "$TEST_ENV_VALUE" "$EXPECTED_BOOL" "$EXPECTED_LOG_WARNING"
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     - changes:
         - core/settings.py
         - core/app_factory.py
         - scripts/ci_check_webview_validation.py
         - .gitlab-ci.yml
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-    - if: '$CI_COMMIT_BRANCH'
 
 # ── Frontend: строгая проверка типов и сборка ────────────────────────────────
 frontend-build:

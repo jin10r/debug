@@ -363,9 +363,26 @@ else
     WEBAPP_URL=""
 fi
 
-# --- REDIRECT_URL (preserve if present) ---
-if [[ -n "${REDIRECT_URL:-}" ]]; then
-    log_info "REDIRECT_URL preserved"
+# --- REDIRECT_URL (preserve if present, otherwise prompt or set empty) ---
+if [[ -z "${REDIRECT_URL:-}" ]]; then
+    if [[ "$ASSUME_YES" == true ]]; then
+        REDIRECT_URL=""
+    else
+        read -rp "REDIRECT_URL (press Enter to skip): " REDIRECT_URL
+    fi
+fi
+
+# --- Validate REDIRECT_URL format (bare domains cause redirect loops) ---
+if [[ -n "$REDIRECT_URL" ]]; then
+    if [[ ! "$REDIRECT_URL" =~ ^https?:// ]]; then
+        log_warn "REDIRECT_URL='$REDIRECT_URL' does not start with http:// or https://"
+        log_warn "Bare domains (e.g. 'ddgo.com') cause redirect loops — browser"
+        log_warn "treats them as relative paths on the current server."
+        if confirm "Fix URL automatically (prepend https://)?"; then
+            REDIRECT_URL="https://$REDIRECT_URL"
+            log_ok "Fixed: REDIRECT_URL=$REDIRECT_URL"
+        fi
+    fi
 fi
 
 # --- TELEGRAM_WEBVIEW_VALIDATION (R-C10: dev-bypass warning) ---

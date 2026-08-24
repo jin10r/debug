@@ -1,8 +1,9 @@
-# Rules — Web Frontend
+# Rules — Web Frontend v2.1
 
-**Сервис:** `web/` (nginx + Leaflet PWA + Telegram Mini App)  
-**Точка входа:** `map.html` (основной), `index.html` (gate)  
+**Сервис:** `web/` (nginx + Leaflet PWA + Telegram Mini App)
+**Точка входа:** `map.html` (основной), `index.html` (gate)
 **Сборка:** `webpack --mode production`
+**Docker:** Multi-stage build (node builder → nginx runtime), non-root, tmpfs для кэша
 
 ---
 
@@ -452,6 +453,28 @@ module.exports = {
 
 **Правило:** `transpileOnly: true` — быстрая сборка без type checking (type check через `npm run typecheck`).
 
+### R-W28: Stale Code Cleanup
+
+Устаревшие `.js` файлы НЕ должны оставаться в `web/js/`. Обнаруженные stale файлы:
+- `modules/popups.js` — не используется, заменён `map.ts`
+- `modules/notifications.js` — заменён `store.ts` + `data.js`
+- `telegram/integration.js` — заменён `map-bootstrap.js`
+
+**Правило:** При обнаружении неиспользуемых `.js` файлов — немедленно удалять.
+Webpack собирает из `.ts`; скомпилированные `.js` артефакты в `web/js/` — мусор.
+
+### R-W29: Docker Security
+
+```yaml
+# docker-compose.yml
+web:
+  tmpfs:
+    - /var/cache/nginx:size=10m
+    - /var/run:size=1m
+```
+
+**Правило:** tmpfs для ephemeral данных nginx (pid, cache).
+
 ### R-W28: Babel для JS
 
 ```javascript
@@ -528,4 +551,4 @@ window.updateTimeFilter = function(minutes) {
 
 ---
 
-*Правила основаны на анализе web/ — июль 2026*
+*Правила основаны на анализе web/ — август 2026 (обновлено: stale code cleanup, Docker security, MapLibre GL + OpenFreeMap)*

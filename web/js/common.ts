@@ -61,8 +61,7 @@ function _parseTgVersion(versionStr: string | undefined): number {
                     hasNavigatorVibrate: !!navigator.vibrate,
                 });
             }
-        } catch (e) {
-        }
+        } catch (_e) { /* Telegram SDK unavailable */ }
     }
 
     // 1. Native Telegram HapticFeedback (только для v6.1+)
@@ -102,8 +101,7 @@ function _parseTgVersion(versionStr: string | undefined): number {
             if (ok) {
                 return;
             }
-        } catch (e) {
-        }
+        } catch (_e) { /* fallback failed */ }
     }
 
     // 3. HTML5 Vibration API — работает в браузерах и старых Telegram WebView
@@ -112,8 +110,7 @@ function _parseTgVersion(versionStr: string | undefined): number {
             const pattern: number | number[] = _HAPTIC_VIBRATE_PATTERN[type] ?? 50;
             navigator.vibrate(pattern);
             return;
-        } catch (e) {
-        }
+        } catch (_e) { /* vibrate not supported */ }
     }
     // silent no-op если ничего не поддерживается
 };

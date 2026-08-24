@@ -1,5 +1,9 @@
 FROM postgis/postgis:15-3.3
 
+LABEL maintainer="survival-map" \
+      description="PostgreSQL 15 + PostGIS 3.3 with cron" \
+      org.opencontainers.image.source="https://github.com/survival-map"
+
 RUN --mount=type=cache,target=/var/cache/apt,id=postgres-runtime \
     apt-get update && apt-get install -y --no-install-recommends \
         postgresql-15-cron \

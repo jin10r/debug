@@ -6,12 +6,10 @@ from core.settings import settings
 
 async def get_config_handler(request: web.Request):
     """Return client configuration from centralized settings."""
-    # Поддержка как GET, так и POST запросов
-    if request.method == 'POST':
-        try:
-            await request.json()  # Просто проверяем, что тело - JSON
-        except Exception:
-            pass  # Игнорируем ошибки при чтении тела POST-запроса
+    try:
+        await request.json()
+    except Exception:
+        pass
 
     layer_keywords = {
         layer: list(keywords)

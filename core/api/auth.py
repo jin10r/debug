@@ -34,11 +34,11 @@ async def get_validation_config_handler(request: web.Request) -> web.Response:
     
     # Ensure redirect_url is set when validation is enabled
     if validation_enabled and not redirect_url:
-        # Default fallback - should be configured in production
-        redirect_url = 'https://t.me/your_bot'
+        redirect_url = ''
         logger.warning(
             "[Config] REDIRECT_URL not set but validation is enabled. "
-            "Set REDIRECT_URL in .env for production."
+            "Non-Telegram users will be redirected to gate fallback. "
+            "Set REDIRECT_URL in .env."
         )
     
     response_data = {

@@ -1,8 +1,9 @@
-# Rules — PostgreSQL (PostGIS)
+# Rules — PostgreSQL (PostGIS) v2.1
 
-**Сервис:** `postgres/` (PostgreSQL 15 + PostGIS 3.3 + pg_cron)  
-**Порт:** 5432 (internal network only)  
+**Сервис:** `postgres/` (PostgreSQL 15 + PostGIS 3.3 + pg_cron)
+**Порт:** 5432 (internal network only)
 **Конфигурация:** `postgres/config/postgresql.conf`
+**Docker:** Base image `postgis/postgis:15-3.4`, non-root, LABEL
 
 ---
 
@@ -399,6 +400,26 @@ status = await conn.execute(
 )
 ```
 
+### R-DB28: Docker Security
+
+```yaml
+# docker-compose.yml
+postgres:
+  user: "postgres:postgres"
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  cap_add:
+    - NET_BIND_SERVICE
+    - CHOWN
+    - SETGID
+    - SETUID
+    - DAC_OVERRIDE
+```
+
+**Правило:** PostgreSQL нужен root для `chown`/`setuid` при старте, но `cap_drop: ALL` + minimal `cap_add`.
+
 ---
 
 ## 7. Правила мониторинга
@@ -457,4 +478,4 @@ GROUP BY layer WITH NO DATA;
 
 ---
 
-*Правила основаны на анализе postgres/ — июль 2026*
+*Правила основаны на анализе postgres/ — август 2026 (обновлено: Docker security, cap_drop ALL)*

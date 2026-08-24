@@ -1,14 +1,21 @@
 // Validation gate (was inline in index.html — externalized for strict CSP).
 (async function() {
     const statusEl = document.getElementById('status');
-    const spinnerEl = document.getElementById('spinner');
-    const errorContainer = document.getElementById('error-container');
 
     let redirectUrl = 'https://github.com/404';
 
     function redirectTo(url) {
         console.log('[Gate] Redirecting to:', url);
         window.location.replace(url);
+    }
+
+    function isAbsoluteUrl(url) {
+        try {
+            new URL(url);
+            return true;
+        } catch {
+            return false;
+        }
     }
 
     async function loadConfig() {
@@ -57,6 +64,10 @@
 
         // Set redirect URL (fallback to GitHub 404)
         redirectUrl = config.redirect_url || 'https://github.com/404';
+        if (!isAbsoluteUrl(redirectUrl)) {
+            console.error('[Gate] Invalid redirect_url (bare domain causes redirect loop):', redirectUrl);
+            redirectUrl = 'https://github.com/404';
+        }
 
         console.log('[Gate] Config loaded:', {
             validationEnabled: config.telegram_webview_validation,
@@ -92,6 +103,43 @@
 
             setTimeout(() => redirectTo('/map.html'), 500);
             return;
+        }
+
+        // Validate existing session — if a token exists in sessionStorage,
+        // confirm it's still valid before skipping re-auth. After a server
+        // restart (JWT_SECRET change) old tokens become invalid and must be
+        // cleared to avoid an infinite redirect loop between gate ↔ map.
+        const existingToken = sessionStorage.getItem('access_token');
+        if (existingToken) {
+            try {
+                const checkResp = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + existingToken
+                    },
+                    body: JSON.stringify({})
+                });
+                if (checkResp.ok) {
+                    // Token valid — skip re-auth, go straight to map
+                    console.log('[Gate] Existing session valid, skipping re-auth');
+                    setTimeout(() => redirectTo('/map.html'), 100);
+                    return;
+                }
+                // Token invalid — clear stale session
+                console.warn('[Gate] Existing session invalid (status=' + checkResp.status + '), clearing');
+                sessionStorage.removeItem('access_token');
+                sessionStorage.removeItem('refresh_token');
+                sessionStorage.removeItem('user');
+                sessionStorage.removeItem('dev_mode');
+            } catch (e) {
+                // Network error — clear and re-validate via Telegram
+                console.warn('[Gate] Session check failed, clearing:', e);
+                sessionStorage.removeItem('access_token');
+                sessionStorage.removeItem('refresh_token');
+                sessionStorage.removeItem('user');
+                sessionStorage.removeItem('dev_mode');
+            }
         }
 
         // Check Telegram WebApp

@@ -346,7 +346,8 @@ window.updateOnlineStatus = function(isOnline: boolean): void {
 };
 
 // Функция для инициализации контролов
-function initializeControls(map: L.Map): void {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function initializeControls(_map: L.Map): void {
     const controlsContainer = document.getElementById('controlsContainer');
     const controlsSlider = document.getElementById('controlsSlider');
     const indicators = document.querySelectorAll<HTMLElement>('#controlsIndicators .dot');
@@ -359,7 +360,7 @@ function initializeControls(map: L.Map): void {
     const panelCount = Math.max(1, panels.length);
     const stepPercent = 100 / panelCount;
 
-    function setPanel(idx: number, _skipDataLoad: boolean = false): void {
+    function setPanel(idx: number, _skipDataLoad: boolean = false): void { // eslint-disable-line @typescript-eslint/no-unused-vars
         activePanel = Math.min(Math.max(idx, 0), panelCount - 1);
         slider.style.transform = `translateX(-${activePanel * stepPercent}%)`;
         indicators.forEach((el, i) => el.classList.toggle('active', i === activePanel));

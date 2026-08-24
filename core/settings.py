@@ -70,8 +70,7 @@ DEFAULT_LAYER_KEYWORDS: dict[str, tuple] = {
         'полицай',
         'police',
         'мусорня',
-        'мусорской'
-        
+        'мусорской',
     ),
     'traffic': (
         'дтп',
@@ -268,6 +267,55 @@ class Settings:
     question_overlay: QuestionOverlayConfig = field(default_factory=QuestionOverlayConfig)
 
 
+def _resolve_postgres_password(env: Env) -> str:
+    """Validate POSTGRES_PASSWORD with fail-fast on insecure defaults.
+    
+    Security requirements:
+    - Must not be empty in production
+    - Must not use insecure default passwords
+    - Minimum length 8 characters for production
+    """
+    password = env.str("POSTGRES_PASSWORD", "postgres")
+    
+    insecure_passwords = {
+        "postgres",
+        "password",
+        "123456",
+        "admin",
+        "root",
+        "changeme",
+        "change-me",
+        "default",
+    }
+    
+    # Check for insecure defaults
+    if password.lower() in insecure_passwords:
+        import os
+        env_name = os.environ.get("ENVIRONMENT", os.environ.get("ENV", "development"))
+        if env_name.lower() in ("production", "prod", "staging", "stage"):
+            raise RuntimeError(
+                "FATAL: POSTGRES_PASSWORD uses insecure default in production environment. "
+                "Set a strong password (min 8 chars)."
+            )
+        # Log warning for non-production environments
+        import logging
+        logging.getLogger(__name__).warning(
+            "POSTGRES_PASSWORD uses insecure default. "
+            "This is acceptable for development but MUST be changed in production."
+        )
+    
+    # Minimum length check
+    if len(password) < 8:
+        import os
+        env_name = os.environ.get("ENVIRONMENT", os.environ.get("ENV", "development"))
+        if env_name.lower() in ("production", "prod", "staging", "stage"):
+            raise RuntimeError(
+                f"FATAL: POSTGRES_PASSWORD too short (got {len(password)} chars, need >= 8)."
+            )
+    
+    return password
+
+
 def _resolve_jwt_secret(env: Env) -> str:
     secret = env.str("JWT_SECRET", None)
     if not secret:
@@ -324,7 +372,7 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
             ),
             db=DatabaseConfig(
                 user=env.str("POSTGRES_USER", "postgres"),
-                password=env.str("POSTGRES_PASSWORD", "postgres"),
+                password=_resolve_postgres_password(env),
                 database=env.str("POSTGRES_DB", "postgres"),
             ),
             bot=BotConfig(

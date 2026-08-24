@@ -196,7 +196,7 @@ class ParserBot:
         """Запустить обработку сообщений: воркеры, адаптивный пул, слушатели."""
         self._running = True
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, self._request_stop)
 

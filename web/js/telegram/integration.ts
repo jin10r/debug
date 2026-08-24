@@ -443,7 +443,7 @@ class TelegramIntegration {
         if (!this.tg?.lockOrientation) {
             const so = screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> };
             if (so.lock) {
-                so.lock(orientation).catch((_e: unknown) => {
+                so.lock(orientation).catch((_e: unknown) => { // eslint-disable-line @typescript-eslint/no-unused-vars
                     console.warn('Orientation lock failed');
                 });
             }

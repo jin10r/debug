@@ -18,13 +18,13 @@
     "allowJs": true,
     "checkJs": false,
     "noImplicitAny": false,
-    "strictNullChecks": false,
+    "strictNullChecks": true,
     "strictFunctionTypes": false,
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "noImplicitReturns": false,
     "noFallthroughCasesInSwitch": true,
-    "types": ["geojson", "leaflet"]
+    "types": ["geojson", "leaflet", "jest"]
   },
   "include": [
     "js/**/*"

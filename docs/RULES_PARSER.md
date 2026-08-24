@@ -1,8 +1,9 @@
-# Rules — Parser Service v2.0
+# Rules — Parser Service v2.1
 
 **Сервис:** `parser/` (kurigram + text preprocessing + photo download)
 **Точка входа:** `python -m parser.monitoring`
 **Порт:** 8765 (healthcheck only)
+**Docker:** Multi-stage build, `COPY --chown=parser:parser`, non-root, LABEL
 
 ---
 
@@ -182,6 +183,22 @@ Parser — простой сервис, основной фокус на инт�
 
 Тесты используют mock-объекты для `pyrogram.Message`.
 
+### R-P25: Docker Security
+
+```yaml
+# docker-compose.yml
+parser:
+  user: "1000:1000"
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  tmpfs:
+    - /tmp:size=10m
+```
+
+**Правило:** Parser работает от non-root (UID 1000). `cap_drop: ALL`. tmpfs для temp-файлов.
+
 ---
 
 ## Антипаттерны (ЗАПРЕЩЕНО)
@@ -200,4 +217,4 @@ Parser — простой сервис, основной фокус на инт�
 
 ---
 
-*Правила основаны на анализе кодовой базы parser/ — август 2026*
+*Правила основаны на анализе кодовой базы parser/ — август 2026 (обновлено: Docker security, COPY --chown)*

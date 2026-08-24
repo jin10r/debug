@@ -300,7 +300,7 @@ class GeoMatcher:
         if s_phrases and len(surface) >= 5:
             if self._executor:
                 try:
-                    loop = asyncio.get_event_loop()
+                    loop = asyncio.get_running_loop()
                     s_match = await loop.run_in_executor(
                         self._executor,
                         _fuzzy_match,
@@ -442,7 +442,7 @@ class GeoMatcher:
             s_phrases, s_meta = self._index.surface_phrases()
 
             if self._executor:
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 batch_results = await loop.run_in_executor(
                     self._executor,
                     _batch_fuzzy_match,

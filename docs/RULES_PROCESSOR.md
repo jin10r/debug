@@ -1,8 +1,9 @@
-# Rules — Processor Service (NLP Pipeline) v2.0
+# Rules — Processor Service (NLP Pipeline) v2.1
 
 **Сервис:** `processor/` (pymorphy3 + rapidfuzz + PostGIS)
 **Точка входа:** `python -m processor.main`
 **Порт:** Нет (только heartbeat healthcheck)
+**Docker:** Multi-stage build, `COPY --chown=processor:processor`, non-root, tmpfs /tmp 50m
 
 ---
 
@@ -351,6 +352,22 @@ Processor переиспользует `core/settings.py`. Собственны�
 Processor НЕ ДОЛЖЕН анализировать семантику текста (предлоги «между/от/до», отрицания «не/нет», контекстные списки) для выбора стратегии геометрии или фильтрации кандидатов.
 Выбор стратегии (`single_match`, `intersection`, `street_segment`, `weighted_centroid`) определяется **ИСКЛЮЧИТЕЛЬНО** пространственными отношениями найденных кандидатов в функции `process_candidates()` (PostGIS).
 
+### R-PR28: Docker Security
+
+```yaml
+# docker-compose.yml
+processor:
+  user: "1000:1000"
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  tmpfs:
+    - /tmp:size=50m
+```
+
+**Правило:** Processor работает от non-root (UID 1000). `cap_drop: ALL`. tmpfs 50MB для NLP-операций.
+
 **Алгоритм принятия решений (PostGIS):**
 1. Наличие 2+ пересекающихся LINESTRING → `intersection` (POINT).
 2. Наличие «главной» LINESTRING, имеющей пространственную связь (пересечение или `ST_DWithin` ≤ 50м) с 2+ другими кандидатами → `street_segment` (LINESTRING).
@@ -385,4 +402,4 @@ Processor НЕ ДОЛЖЕН анализировать семантику тек
 
 ---
 
-*Правила основаны на анализе кодовой базы processor/ — август 2026*
+*Правила основаны на анализе кодовой базы processor/ — август 2026 (обновлено: Docker security, tmpfs, COPY --chown)*

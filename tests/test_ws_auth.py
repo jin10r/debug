@@ -35,7 +35,7 @@ def test_rejects_without_credentials():
 def test_accepts_valid_jwt():
     if not _validation_on():
         pytest.skip("validation disabled (dev-bypass)")
-    access, _ = generate_jwt_tokens({"id": 7})
+    access, _refresh, _jti = generate_jwt_tokens({"id": 7})
     assert _ws_authenticate({"token": access}) is True
 
 

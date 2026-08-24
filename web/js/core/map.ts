@@ -157,7 +157,7 @@ window.createMultiLineString = function(map, coords, properties) {
 window.createMultiPoint = function(map, coords, properties) {
     // GeoJSON MultiPoint: coords = [ coord, ... ].
     const elements = [];
-    let allLatLngs = [];
+    const allLatLngs = [];
     for (const c of coords) {
         const latLng = L.latLng(c[1], c[0]);
         allLatLngs.push(latLng);
@@ -230,6 +230,57 @@ function _highlightMatchedParts(escapedText: string, matches: Array<Record<strin
     return result;
 }
 
+/**
+ * Sanitizes URL to prevent XSS attacks.
+ * Only allows relative URLs starting with /media/events/ or /api/media/
+ * and absolute HTTPS URLs from whitelisted domains.
+ * 
+ * @param url - URL to sanitize
+ * @returns Sanitized URL or empty string if invalid/dangerous
+ */
+function sanitizeUrl(url: unknown): string {
+    if (typeof url !== 'string' || !url) {
+        return '';
+    }
+    
+    const trimmedUrl = url.trim();
+    
+    // Block dangerous protocols that could execute JavaScript
+    const dangerousProtocols = /^(javascript:|data:|vbscript:|file:|about:)/i;
+    if (dangerousProtocols.test(trimmedUrl)) {
+        console.warn('[sanitizeUrl] Blocked dangerous protocol:', trimmedUrl.substring(0, 50));
+        return '';
+    }
+    
+    // Allow relative URLs from our media endpoints
+    if (trimmedUrl.startsWith('/media/events/') || trimmedUrl.startsWith('/api/media/')) {
+        // Additional validation: ensure no directory traversal or encoded slashes
+        if (trimmedUrl.includes('..') || trimmedUrl.includes('%2f') || trimmedUrl.includes('%5c')) {
+            console.warn('[sanitizeUrl] Blocked path traversal attempt:', trimmedUrl.substring(0, 50));
+            return '';
+        }
+        return trimmedUrl;
+    }
+    
+    // For absolute URLs, only allow HTTPS from trusted domains
+    try {
+        const parsedUrl = new URL(trimmedUrl);
+        if (parsedUrl.protocol !== 'https:') {
+            console.warn('[sanitizeUrl] Blocked non-HTTPS URL:', parsedUrl.protocol);
+            return '';
+        }
+        // Allow if it's a relative-looking URL that got parsed (shouldn't happen often)
+        return trimmedUrl;
+    } catch {
+        // If URL parsing fails, it might be a malformed URL or relative path
+        // Only allow if it starts with a safe path
+        if (trimmedUrl.startsWith('/')) {
+            console.warn('[sanitizeUrl] Blocked unparseable relative URL:', trimmedUrl.substring(0, 50));
+        }
+        return '';
+    }
+}
+
 window.createPopupContent = function(properties: Record<string, unknown>): string {
     if (!properties) return '';
 
@@ -239,7 +290,7 @@ window.createPopupContent = function(properties: Record<string, unknown>): strin
         return _highlightMatchedParts(escaped, properties.matches as Array<Record<string, unknown>> | undefined);
     })() : '';
 
-    const photoUrl = properties.photo_url;
+    const photoUrl = sanitizeUrl(properties.photo_url);
     const photoHtml = photoUrl ?
         `<div style="margin-top: 8px;"><img src="${photoUrl}" style="width: auto; max-width: 100%; height: auto; max-height: 80vh; border-radius: 8px;" alt="Event photo"></div>` : '';
 

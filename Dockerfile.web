@@ -40,6 +40,10 @@ RUN npm run build && \
 # =============================================================================
 FROM nginx:1.27-alpine
 
+LABEL maintainer="survival-map" \
+      description="Survival Map frontend + nginx reverse proxy" \
+      org.opencontainers.image.source="https://github.com/survival-map"
+
 # Healthcheck (`wget -qO- /health/ready` в docker-compose.yml) использует
 # busybox-wget, уже входящий в nginx:alpine, — отдельная установка не нужна.
 # Это убирает зависимость сборки от зеркала Alpine (apk), которое может быть

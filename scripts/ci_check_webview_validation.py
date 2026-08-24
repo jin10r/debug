@@ -43,8 +43,13 @@ def main():
 
     try:
         from core.settings import load_settings
-        # Важно: передаем env_path и получаем объект настроек, не полагаясь
-        # на module-level singleton
+
+        # core/settings.py:351 — settings = load_settings() выполняется при импорте
+        # модуля и загружает .env из CWD в os.environ. Чистим ПОСЛЕ импорта,
+        # чтобы env.read_env(temp_file, override=False) не увидел значение
+        # из .env проекта.
+        os.environ.pop("TELEGRAM_WEBVIEW_VALIDATION", None)
+
         settings_obj = load_settings(env_path=env_path, require_jwt=False)
 
         actual_bool = settings_obj.app.telegram_webview_validation

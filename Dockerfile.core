@@ -1,33 +1,60 @@
-FROM python:3.11.10-slim-bookworm
+# Dockerfile.core — API server (aiohttp + asyncpg + JWT)
+# Multi-stage build: builder для компиляции C-зависимостей (libpq-dev),
+# runtime — только libpq5 (минимальный образ без build-инструментов).
 
-# Create non-root user for security
-RUN groupadd -r appuser && useradd -r -g appuser appuser
+# =============================================================================
+# Stage 1: Builder (pip install с libpq-dev для asyncpg)
+# =============================================================================
+FROM python:3.11.10-slim-bookworm AS builder
 
-WORKDIR /app
+WORKDIR /build
 
-# Install system dependencies as root with BuildKit caching
-RUN --mount=type=cache,target=/var/cache/apt,id=app-apt \
+RUN --mount=type=cache,target=/var/cache/apt,id=core-apt \
     apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies with pip caching
 COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --user --no-cache-dir -r requirements.txt
 
-# Copy application files
-COPY core/ ./core/
-COPY main.py .
+# =============================================================================
+# Stage 2: Runtime (минимальный образ без libpq-dev)
+# =============================================================================
+FROM python:3.11.10-slim-bookworm
 
-# Create media directory with correct ownership
-RUN mkdir -p /app/media/events && chown -R appuser:appuser /app
+LABEL maintainer="survival-map" \
+      description="Survival Map API server (aiohttp + asyncpg + JWT)" \
+      org.opencontainers.image.source="https://github.com/survival-map"
+
+WORKDIR /app
+
+ENV PYTHONUNBUFFERED="1" \
+    PYTHONDONTWRITEBYTECODE="1"
+
+# Копируем зависимости из builder (включая скомпилированные .so)
+COPY --from=builder /root/.local /home/appuser/.local
+ENV PATH="/home/appuser/.local/bin:$PATH"
+
+# Только runtime-библиотека (libpq5), НЕ dev-пакеты (libpq-dev)
+RUN --mount=type=cache,target=/var/cache/apt,id=core-runtime \
+    apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Non-root user с явным UID
+RUN groupadd -r appuser && useradd -r -g appuser -u 1000 appuser && \
+    mkdir -p /app/media/events
+
+# Копируем исходники с правами appuser
+COPY --chown=appuser:appuser core/ ./core/
+COPY --chown=appuser:appuser main.py .
+
+RUN chown -R appuser:appuser /app /home/appuser/.local
 
 USER appuser
 
 EXPOSE 8080
-
-# Healthcheck определён в docker-compose.yml — single source of truth.
-# Дубликат HEALTHCHECK здесь был source of drift между compose и Dockerfile.
 
 CMD ["python", "main.py"]

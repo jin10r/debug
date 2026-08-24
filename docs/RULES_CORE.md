@@ -1,8 +1,9 @@
-# Rules — Core Service v2.0
+# Rules — Core Service v2.1
 
 **Сервис:** `core/` (aiohttp HTTP + WebSocket + aiogram Telegram bot)
 **Точка входа:** `python main.py`
 **Порт:** 8080 (internal network only)
+**Docker:** Multi-stage build (libpq-dev builder → libpq5 runtime), non-root UID 1000
 
 ---
 
@@ -233,6 +234,20 @@ cache = CacheManager()  # OrderedDict LRU + TTL, async lock
 
 **Правило:** Кэш — in-memory, без Redis.
 
+### R-C19: Docker Security
+
+```yaml
+# docker-compose.yml
+core:
+  user: "1000:1000"
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+```
+
+**Правило:** Core работает от non-root (UID 1000). `cap_drop: ALL` без `cap_add`.
+
 ---
 
 ## Антипаттерны (ЗАПРЕЩЕНО)
@@ -251,4 +266,4 @@ cache = CacheManager()  # OrderedDict LRU + TTL, async lock
 
 ---
 
-*Правила основаны на анализе кодовой базы core/ — август 2026*
+*Правила основаны на анализе кодовой базы core/ — август 2026 (обновлено: Docker security, CSRF removed)*

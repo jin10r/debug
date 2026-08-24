@@ -8,7 +8,8 @@
     "dev": "webpack serve --mode development --port 3000",
     "typecheck": "tsc --noEmit",
     "lint": "eslint js --ext .ts,.js",
-    "test": "echo \"No tests in this project\" && exit 0"
+    "test": "jest",
+    "test:coverage": "jest --coverage"
   },
   "keywords": [
     "telegram",
@@ -22,6 +23,7 @@
   "devDependencies": {
     "@twa-dev/types": "7.10.0",
     "@types/geojson": "7946.0.16",
+    "@types/jest": "^29.5.14",
     "@types/leaflet": "1.9.21",
     "@types/leaflet.markercluster": "1.5.6",
     "@typescript-eslint/eslint-plugin": "6.21.0",
@@ -29,6 +31,9 @@
     "copy-webpack-plugin": "14.0.0",
     "eslint": "8.57.1",
     "eslint-plugin-security": "1.4.0",
+    "jest": "^29.7.0",
+    "jest-environment-jsdom": "^29.7.0",
+    "ts-jest": "^29.2.5",
     "ts-loader": "9.5.7",
     "typescript": "5.9.3",
     "webpack": "5.106.2",

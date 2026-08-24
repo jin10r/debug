@@ -102,7 +102,7 @@ class TestWebViewValidation(AioHTTPTestCase):
             mock_settings.jwt.access_token_ttl = 900
             
             with patch('core.api.auth.generate_jwt_tokens') as mock_jwt:
-                mock_jwt.return_value = ('access_token', 'refresh_token')
+                mock_jwt.return_value = ('access_token', 'refresh_token', 'test-jti')
                 
                 resp = await self.client.request(
                     'POST',
@@ -164,7 +164,7 @@ class TestWebViewValidation(AioHTTPTestCase):
             mock_settings.jwt.access_token_ttl = 900
             
             with patch('core.api.auth.generate_jwt_tokens') as mock_jwt:
-                mock_jwt.return_value = ('access_token', 'refresh_token')
+                mock_jwt.return_value = ('access_token', 'refresh_token', 'test-jti')
                 
                 valid_init_data = self._create_valid_init_data(bot_token)
                 

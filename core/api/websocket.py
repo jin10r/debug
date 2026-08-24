@@ -76,7 +76,7 @@ class WebSocketManager:
 
     def _check_rate_limit(self, ws: web.WebSocketResponse) -> bool:
         """Check if websocket is within rate limit for ping messages."""
-        now = asyncio.get_event_loop().time()
+        now = asyncio.get_running_loop().time()
         if ws not in self._ping_counters:
             self._ping_counters[ws] = []
         

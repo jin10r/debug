@@ -24,13 +24,17 @@ RUN python -c "from pyrogram import Client; print('✅ kurigram OK')"
 # =============================================================================
 FROM python:3.11.10-slim-bookworm
 
+LABEL maintainer="survival-map" \
+      description="Telegram client (kurigram) + text preprocessing + photo download" \
+      org.opencontainers.image.source="https://github.com/survival-map"
+
 WORKDIR /app
 
 ENV PYTHONUNBUFFERED="1"
 ENV PYTHONDONTWRITEBYTECODE="1"
 ENV PATH="/home/parser/.local/bin:$PATH"
 
-COPY --from=builder /root/.local /home/parser/.local
+COPY --from=builder --chown=parser:parser /root/.local /home/parser/.local
 
 RUN --mount=type=cache,target=/var/cache/apt,id=parser-runtime \
     apt-get update && apt-get install -y --no-install-recommends procps \
@@ -40,7 +44,7 @@ RUN --mount=type=cache,target=/var/cache/apt,id=parser-runtime \
 RUN useradd -m -u 1000 parser && \
     chmod 1777 /tmp && \
     mkdir -p /media/events && \
-    chown -R parser:parser /app /home/parser/.local /media/events
+    chown -R parser:parser /app /media/events
 
 COPY --chown=parser:parser parser/ ./parser/
 COPY --chown=parser:parser core/ ./core/

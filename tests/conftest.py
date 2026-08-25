@@ -82,3 +82,18 @@ def load_module_by_path(name: str, relpath: str):
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _ensure_jwt_config():
+    """Гарантирует settings.jwt != None для тестов, использующих auth."""
+    from core.settings import settings
+    if settings.jwt is None:
+        from core.settings import JWTConfig
+        settings.jwt = JWTConfig(
+            secret="ci-test-jwt-secret-minimum-32-characters-long"
+        )
+    yield

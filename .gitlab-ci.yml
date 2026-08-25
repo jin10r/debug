@@ -30,11 +30,9 @@ variables:
   # CI: fix pytest-asyncio mode (was causing 15 async test failures)
   PYTEST_ADDOPTS: "--asyncio-mode=auto"
   # Dummy env for tests (fixes settings test AttributeError on NoneType)
-  POSTGRES_PASSWORD: "ci_test_password"
+  POSTGRES_PASSWORD: "postgres"
   POSTGRES_USER: "postgres"
   POSTGRES_DB: "postgres"
-  BOT_TOKEN: "ci_dummy_token_for_tests_only"
-  JWT_SECRET: "ci-test-jwt-secret-minimum-32-characters-long"
   TELEGRAM_WEBVIEW_VALIDATION: "false"
 
 # ── Shared cache configs (YAML anchors) ──────────────────────────────────────
@@ -179,6 +177,39 @@ backend-tests:
     reports:
       junit: report.xml
     expire_in: 7 days
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+
+integration-tests:
+  stage: test
+  image: $PYTHON_IMAGE
+  services:
+    - name: postgis/postgis:15-3.3
+      alias: postgres
+  variables:
+    POSTGRES_HOST: "postgres"
+    POSTGRES_PORT: "5432"
+    POSTGRES_USER: "postgres"
+    POSTGRES_PASSWORD: "integration_test_password"
+    POSTGRES_DB: "survival_map_test"
+    JWT_SECRET: "ci-test-jwt-secret-minimum-32-characters-long"
+    BOT_TOKEN: "ci_dummy_token_for_tests_only"
+    TELEGRAM_WEBVIEW_VALIDATION: "true"
+    PYTEST_ADDOPTS: "--asyncio-mode=auto"
+  cache:
+    <<: *pip-cache
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq postgresql-client > /dev/null 2>&1
+    - pip install -q -r requirements.txt -r parser/requirements.txt -r processor/requirements.txt -r requirements-dev.txt
+  script:
+    - |
+      for i in $(seq 1 30); do
+        pg_isready -h postgres -U postgres && break
+        echo "Waiting for postgres... ($i/30)"
+        sleep 2
+      done
+    - pytest -v tests/ --tb=short
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH'

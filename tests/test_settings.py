@@ -160,7 +160,9 @@ class TestLoadSettings:
 
     def test_load_settings_jwt_optional_when_not_required(self):
         mock_env = MagicMock()
-        mock_env.str.return_value = None
+        mock_env.str.side_effect = lambda key, default=None: (
+            "dummy_password_for_test" if key == "POSTGRES_PASSWORD" else default
+        )
         mock_env.bool.return_value = True
 
         with patch.object(settings_mod, "Env", return_value=mock_env):

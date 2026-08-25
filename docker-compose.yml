@@ -246,7 +246,7 @@ services:
     ports:
       - "80:80"
     volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+
       - events_media:/media/events:ro
     depends_on:
       core:

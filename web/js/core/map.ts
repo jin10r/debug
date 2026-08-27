@@ -5,13 +5,22 @@
 // Эти функции будут доступны глобально после загрузки скрипта
 
 const ICON_CONFIG: Record<string, { url: string; size: [number, number] }> = {
-    cops: { url: '/assets/images/cops.png', size: [25, 25] },
-    bus: { url: '/assets/images/bus.png', size: [25, 25] },
-    pig: { url: '/assets/images/pig.png', size: [25, 25] }
+    bus: { url: '/assets/images/bus.webp', size: [25, 25] },
+    pig: { url: '/assets/images/pig.webp', size: [25, 25] },
+    cops: { url: '/assets/images/cops.webp', size: [25, 25] }
 };
 
 // Слой traffic не имеет PNG-иконки — рендерим эмодзи ⛔ через L.divIcon,
 // согласовано с легендой и чекбоксом в #layerControls.
+window.ICON_CONFIG = ICON_CONFIG;
+
+window.preloadIcons = function(urls: string[]): void {
+    for (const url of urls) {
+        const img = new Image();
+        img.src = url;
+    }
+};
+
 window.createIcon = function(layer: string): L.Icon | L.DivIcon {
     if (layer === 'traffic') {
         return L.divIcon({
@@ -254,8 +263,7 @@ function sanitizeUrl(url: unknown): string {
     
     // Allow relative URLs from our media endpoints
     if (trimmedUrl.startsWith('/media/events/') || trimmedUrl.startsWith('/api/media/')) {
-        // Additional validation: ensure no directory traversal or encoded slashes
-        if (trimmedUrl.includes('..') || trimmedUrl.includes('%2f') || trimmedUrl.includes('%5c')) {
+        if (trimmedUrl.includes('..') || trimmedUrl.includes('%2e') || trimmedUrl.includes('%2f') || trimmedUrl.includes('%5c')) {
             console.warn('[sanitizeUrl] Blocked path traversal attempt:', trimmedUrl.substring(0, 50));
             return '';
         }

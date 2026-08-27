@@ -1,0 +1,399 @@
+from dataclasses import dataclass, field
+from environs import Env
+from typing import Optional
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def _parse_strict_bool(env: Env, var_name: str, default: bool = True) -> bool:
+    """Secure by Default парсер булевых env-переменных.
+
+    Возвращает default (True), если переменная не задана.
+    Возвращает False ТОЛЬКО если значение явно равно 'false' или '0'
+    (регистронезависимо). Во всех остальных случаях — True.
+    """
+    val = env.str(var_name, default=None)
+    if val is None:
+        return default
+
+    is_disabled = val.strip().lower() in ('false', '0')
+    if is_disabled:
+        logger.warning(
+            f"SECURITY RISK: {var_name} is explicitly set to '{val}' — "
+            "dev-bypass ENABLED."
+        )
+
+    return not is_disabled
+
+
+# Ключевые слова слоёв — канонические словоформы (не стемы).
+# LayerClassifier лемматизирует и ключи, и токены сообщения через mawo_pymorphy3,
+# поэтому все падежи/числа словоформ совпадают автоматически.
+#
+# Порядок ключей задаёт приоритет классификации: первый совпавший слой
+# выигрывает (см. parser/layer_classifier.py). 'pig' — fallback без ключей.
+DEFAULT_LAYER_KEYWORDS: dict[str, tuple] = {
+    'bus': (
+        'автобус',
+        'бус',
+        'хайс',
+        'спринтер',
+        'рено',
+        'фольксваген',
+        'хёндай',
+        'Хундай',
+        'вито',
+        'вольксваген',
+        'Кадди',
+        'сталкер',
+        'транспортёр',
+        'h1', 'h2', 'h3', 'h4', 'h5',
+        'т5', 'т4', 'т3', 'т2', 'т1',
+        'н1', 'н2', 'н3', 'н4', 'н5',
+        # pymorphy лемматизирует «бус»→«бусы», но «буса»/«бусик»→самостоятельные
+        # леммы ⇒ косвенные/слэнговые формы не совпадали. Добавлены явно.
+        'буса', 'бусик',
+    ),
+    'cops': (
+        'коп',
+        'полиция',
+        'мусор',
+        'мусара',
+        'люстра',
+        'мигалка',
+        'патруль',
+        'экипаж',
+        'мент',
+        'менты',
+        'полицейский',
+        'полицай',
+        'police',
+        'мусорня',
+        'мусорской',
+    ),
+    'traffic': (
+        'дтп',
+        'авария',
+        'пробка',
+        'затор',
+        'светофор',
+        'блокпост',
+        'пост',
+        'бп',
+        'б/п'
+    ),
+    'pig': (),
+}
+
+# Порядок приоритета (исключая fallback 'pig').
+LAYER_PRIORITY: tuple = tuple(k for k in DEFAULT_LAYER_KEYWORDS if k != 'pig')
+
+
+@dataclass
+class DatabaseConfig:
+    """PostgreSQL — прямое подключение (без PgBouncer)."""
+    host: str = "postgres"
+    port: int = 5432
+    database: str = "postgres"
+    user: str = "postgres"
+    # Пустая строка — явно невалидный дефолт: при отсутствии POSTGRES_PASSWORD
+    # в env подключение упадёт с ошибкой аутентификации, а не молча использует
+    # слабый пароль "postgres".
+    password: str = ""
+    # Прямое подключение: каждый коннект = backend process в postgres.
+    # pool_max_size=30 — оптимизировано для 1GB postgres контейнера.
+    pool_min_size: int = 5
+    pool_max_size: int = 30
+    # Command timeout для SQL-запроса. Role parser имеет 60s timeout
+    # в postgresql.conf, core — 30s.
+    command_timeout: int = 60
+
+
+@dataclass
+class AppConfig:
+    host: str = "0.0.0.0"  # nosec B104 — bind all interfaces (nginx reverse proxy)
+    port: int = 8080
+    telegram_webview_validation: bool = True
+    # Логирование (main.py, parser/monitoring.py читают эти поля)
+    log_level: str = "INFO"
+    log_format: str = "json"  # json | text
+    # CORS: пустой кортеж = same-origin only (nginx проксирует фронтенд →
+    # CORS не нужен). При явном списке доменов app_factory включает CORS.
+    allowed_origins: tuple = ()
+
+
+@dataclass
+class BotConfig:
+    token: str
+    # channel_id читается из env CHANNEL_ID (см. load_settings).
+    # Дефолт "-1002050105527" оставлен только как fallback в load_settings,
+    # не в dataclass — чтобы избежать появления production-ID в git-истории
+    # при смене деплоймента.
+    channel_id: str
+    webapp_url: Optional[str] = None
+    redirect_url: Optional[str] = None
+
+
+@dataclass
+class JWTConfig:
+    secret: str
+    access_token_ttl: int = 900  # 15 minutes
+    refresh_token_ttl: int = 86400  # 24 hours
+    algorithm: str = "HS256"
+
+
+@dataclass
+class SimilarityConfig:
+    """Параметры sliding-window линкера гео-объектов и LayerClassifier.
+
+    Используются GeoMatcher (parser/geo_matcher.py) и LayerClassifier.
+    """
+    # Порог fuzzy-матча (0-1) для tier-3 lemma fuzzy в _link_span.
+    # 0.82: отсекает ложные позитивы (0.75–0.79) при сохранении typo-матчей (≥0.83).
+    entity_similarity_threshold: float = 0.82
+
+    # Радиус для midpoint (метры) — макс. дистанция между геометриями.
+    pseudo_intersection_radius_meters: float = 150.0
+
+    # Финальный top-K результатов find_geo().
+    max_entities: int = 5
+
+    # Длиннее этого порога (символов) сообщение не считается релевантной локацией.
+    max_text_length: int = 380
+
+    # Порог fuzz.token_sort_ratio для surface fuzzy (Tier 1, 0-1).
+    phonetic_match_threshold: float = 0.85
+    # Включение lemma fuzzy fallback (tier-3 в _link_span).
+    lemma_fallback_enabled: bool = True
+
+    # Порог fuzz.ratio для surface-орфо-корректора (Tier 2 в _link_span, 0-1).
+    # 0.80: пропускает слабые совпадения (0.80–0.85) — не проходят как confident.
+    # Точные стем-матчи (Tier 1, score varies) не затрагивают.
+    surface_typo_threshold: float = 0.80
+
+    # Sliding-window: максимальный размер окна (токенов) при генерации кандидатов.
+    # Окно 1..max_sliding_window охватывает улицы из 1, 2 или 3 слов.
+    max_sliding_window: int = 3
+
+    # Бонус к score для кандидатов, которым предшествует локационный предлог
+    # ("на", "по", "в" и т.п.). Помогает при дедупе когда оба матча за одну улицу.
+    prepositional_boost: float = 0.05
+
+    # Мин. score вторичного матча для участия в ГЕОМЕТРИИ мультиматч-пересечений
+    # (process_candidates). Ниже порога матч остаётся в matches (для прозрачности),
+    # но не искажает intersection/polygon. single_match-fallback берёт лучший по score.
+    geometry_min_score: float = 0.85
+
+    # Макс. дистанция (метры) для midpoint между geo-объектами.
+    midpoint_max_distance_m: float = 150.0
+    # Типы объектов, для которых разрешён midpoint.
+    midpoint_types: tuple = ('street', 'market', 'station', 'park', 'landmark')
+
+    # Токены-пунктуация: отфильтровываются из tokens до поиска (_strip_noise).
+    punctuation_tokens: tuple = (
+        '#', '/', ',', '.', '(', ')', '!', '?', '-', '«', '»', '"', ':', ';',
+    )
+
+    def get_layer_keywords(self, layer: str) -> tuple:
+        return DEFAULT_LAYER_KEYWORDS.get(layer, ())
+
+
+@dataclass
+class ParserConfig:
+    """Параметры parser-сервиса (kurigram, photo download)."""
+
+    # Сколько сообщений тянуть из истории канала при старте парсера.
+    history_limit: int = 100
+
+    # Каталог хранения медиафайлов (фотографии событий).
+    events_media_dir: str = "/media/events"
+
+    # Макс. длина текста (символов) после preprocess_light для вставки в pending_events.
+    max_text_length: int = 380
+
+    # SOCKS5/HTTP proxy для pyrogram.
+    socks5_host: Optional[str] = None
+    proxy_host: Optional[str] = None
+    proxy_scheme: str = "socks5"
+    proxy_port: int = 1080
+
+
+@dataclass
+class ProcessorConfig:
+    """Параметры processor-сервиса (NLP pipeline)."""
+
+    # Число конкурентных воркеров, потребляющих из pending_events (SKIP LOCKED).
+    worker_concurrency: int = 5
+
+    # Polling interval (сек) при пустой очереди.
+    poll_interval: float = 0.5
+
+
+@dataclass
+class QuestionOverlayConfig:
+    """Границы зоны для событий без точной привязки к местности (круг)"""
+    center_lon: float = 30.83135  # Центр по долготе
+    center_lat: float = 46.49804  # Центр по широте
+    radius: float = 0.04  # Радиус круга (в градусах)
+
+    @property
+    def center(self) -> tuple:
+        return (self.center_lat, self.center_lon)
+
+
+@dataclass
+class LayerConfig:
+    cops: tuple = field(default_factory=lambda: DEFAULT_LAYER_KEYWORDS['cops'])
+    bus: tuple = field(default_factory=lambda: DEFAULT_LAYER_KEYWORDS['bus'])
+    traffic: tuple = field(default_factory=lambda: DEFAULT_LAYER_KEYWORDS['traffic'])
+    pig: tuple = field(default_factory=lambda: DEFAULT_LAYER_KEYWORDS['pig'])
+
+    def as_dict(self) -> dict:
+        """Слой → tuple ключевых слов. Порядок соответствует LAYER_PRIORITY + 'pig'."""
+        return {layer: getattr(self, layer) for layer in DEFAULT_LAYER_KEYWORDS}
+
+
+@dataclass
+class Settings:
+    app: AppConfig
+    db: DatabaseConfig
+    bot: BotConfig
+    jwt: Optional[JWTConfig] = None
+    similarity: SimilarityConfig = field(default_factory=SimilarityConfig)
+    layers: LayerConfig = field(default_factory=LayerConfig)
+    parser: ParserConfig = field(default_factory=ParserConfig)
+    processor: ProcessorConfig = field(default_factory=ProcessorConfig)
+    question_overlay: QuestionOverlayConfig = field(default_factory=QuestionOverlayConfig)
+
+
+def _resolve_postgres_password(env: Env) -> str:
+    """Validate POSTGRES_PASSWORD with fail-fast on insecure defaults.
+    
+    Security requirements:
+    - Must not be empty in production
+    - Must not use insecure default passwords
+    - Minimum length 8 characters for production
+    """
+    password = env.str("POSTGRES_PASSWORD", "postgres")
+    
+    insecure_passwords = {
+        "postgres",
+        "password",
+        "123456",
+        "admin",
+        "root",
+        "changeme",
+        "change-me",
+        "default",
+    }
+    
+    # Check for insecure defaults
+    if password.lower() in insecure_passwords:
+        import os
+        env_name = os.environ.get("ENVIRONMENT", os.environ.get("ENV", "development"))
+        if env_name.lower() in ("production", "prod", "staging", "stage"):
+            raise RuntimeError(
+                "FATAL: POSTGRES_PASSWORD uses insecure default in production environment. "
+                "Set a strong password (min 8 chars)."
+            )
+        # Log warning for non-production environments
+        import logging
+        logging.getLogger(__name__).warning(
+            "POSTGRES_PASSWORD uses insecure default. "
+            "This is acceptable for development but MUST be changed in production."
+        )
+    
+    # Minimum length check
+    if len(password) < 8:
+        import os
+        env_name = os.environ.get("ENVIRONMENT", os.environ.get("ENV", "development"))
+        if env_name.lower() in ("production", "prod", "staging", "stage"):
+            raise RuntimeError(
+                f"FATAL: POSTGRES_PASSWORD too short (got {len(password)} chars, need >= 8)."
+            )
+    
+    return password
+
+
+def _resolve_jwt_secret(env: Env) -> str:
+    secret = env.str("JWT_SECRET", None)
+    if not secret:
+        raise RuntimeError("FATAL: JWT_SECRET is required in environment (R-C8).")
+    insecure_defaults = {
+        "your-secret-key",
+        "your-secret-key-change-in-production",
+        "your-secret-key-change-in-production-min-32-chars",
+        "secret",
+        "changeme",
+        "change-me",
+    }
+    if secret.lower() in insecure_defaults or secret.startswith("your-secret"):
+        raise RuntimeError(
+            "FATAL: JWT_SECRET is a placeholder — set a real secret (R-C8)."
+        )
+    if len(secret) < 32:
+        raise RuntimeError(
+            f"FATAL: JWT_SECRET must be >= 32 chars (got {len(secret)}) (R-C8)."
+        )
+    return secret
+
+
+def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> Settings:
+    """Load settings — env читается ТОЛЬКО для credentials/per-deployment URL.
+
+    Всё остальное — хардкодные дефолты в соответствующих `@dataclass`. Чтобы
+    изменить калибровку матчера / параметры БД / прокси и т.п., правится
+    `core/settings.py` напрямую (не env).
+
+    Keep-list env: BOT_TOKEN, WEBAPP_URL, REDIRECT_URL. JWT_SECRET — обязателен
+    при require_jwt=True (R-C8).
+    CHANNEL_ID захардкожен в BotConfig (не env).
+    """
+    env = Env()
+    env.read_env(env_path)
+
+    try:
+        telegram_webview_validation = _parse_strict_bool(
+            env, "TELEGRAM_WEBVIEW_VALIDATION", True
+        )
+        bot_token = env.str("BOT_TOKEN", "")
+        try:
+            jwt_secret = _resolve_jwt_secret(env)
+            jwt_config = JWTConfig(secret=jwt_secret)
+        except RuntimeError:
+            if require_jwt:
+                raise
+            jwt_config = None
+
+        return Settings(
+            app=AppConfig(
+                telegram_webview_validation=telegram_webview_validation,
+            ),
+            db=DatabaseConfig(
+                user=env.str("POSTGRES_USER", "postgres"),
+                password=_resolve_postgres_password(env),
+                database=env.str("POSTGRES_DB", "postgres"),
+            ),
+            bot=BotConfig(
+                token=bot_token,
+                channel_id=env.str("CHANNEL_ID", "-1002050105527"),
+                webapp_url=env.str("WEBAPP_URL", None),
+                redirect_url=env.str("REDIRECT_URL", None),
+            ),
+            jwt=jwt_config,
+            similarity=SimilarityConfig(),
+            layers=LayerConfig(),
+            parser=ParserConfig(
+                socks5_host=env.str("PROXY_HOST", None),
+                proxy_port=env.int("PROXY_PORT", 1080),
+                proxy_scheme=env.str("PROXY_SCHEME", "socks5"),
+                history_limit=env.int("PARSER_HISTORY_LIMIT", 100),
+            ),
+            question_overlay=QuestionOverlayConfig(),
+        )
+    except Exception as e:
+        raise ValueError(f"Configuration error: {e}")
+
+
+settings = load_settings(require_jwt=False)

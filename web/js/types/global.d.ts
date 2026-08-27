@@ -102,6 +102,8 @@ declare global {
         createTelegramPopup: (content: string, customOptions?: Record<string, unknown>) => L.Popup;
         adSquares: Record<string, unknown>;
         switchTileLayer: (tileKey: string) => void;
+        preloadIcons: (urls: string[]) => void;
+        ICON_CONFIG: Record<string, { url: string; size: [number, number] }>;
 
         autoRefreshInterval?: number;
         
@@ -125,7 +127,7 @@ declare global {
         showNotification: (message: string, duration?: number, type?: 'info' | 'warning' | 'error' | 'success', iconSrc?: string) => void;
         playNotificationSound: () => boolean;
         handleNewEvents: (events: any[]) => void;
-        renderFromCache: () => void;
+        renderFromCache: (features?: import('../types/geojson').EventFeature[]) => void;
         initializeMap: () => void;
         
         // ==================== TELEGRAM INTEGRATION (js/telegram/integration.ts) ====================

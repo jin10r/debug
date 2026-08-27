@@ -258,20 +258,43 @@ window.initializeMap = function(): void {
     // Добавляем выбранный тайл
     const provider = TILE_PROVIDERS[currentTileKey];
     if (provider.type === 'local') {
-        // Local vector basemap — load async, fall back to raster on failure
+        const vectorLightProvider = TILE_PROVIDERS['vector-light'] as TileProviderMaplibre;
+        const placeholderLayer = (L as unknown as { maplibreGL: (opts: { style: string }) => L.Layer }).maplibreGL({ style: vectorLightProvider.style });
+        placeholderLayer.addTo(map);
+        currentTileLayer = placeholderLayer;
+        const glMap = (placeholderLayer as unknown as { getMaplibreMap: () => GLMap }).getMaplibreMap();
+        if (glMap.isStyleLoaded()) {
+            _applyThemeToGLMap(glMap, vectorLightProvider.theme);
+        } else {
+            glMap.once('load', () => _applyThemeToGLMap(glMap, vectorLightProvider.theme));
+        }
+
+        // Local vector basemap — load async, swap placeholder when ready
         (async () => {
             try {
                 const tileIdx = await loadVectorData();
                 vectorTileIndex = tileIdx;
+
+                // Respect mid-load switches: only swap if user still wants local
+                if (currentTileKey !== 'local') return;
+
+                // Remove placeholder and add local vector layer
+                map.removeLayer(currentTileLayer);
+                currentTileLayer = null;
                 vectorBaseLayer = createVectorLayer(tileIdx);
                 vectorBaseLayer.addTo(map);
-                // Hide raster tilePane so it never shows through during theme switches
                 const tilePane = map.getPane('tilePane');
                 if (tilePane) tilePane.style.display = 'none';
                 console.log('[initializeMap] Local vector basemap loaded');
             } catch (err) {
-                console.warn('[initializeMap] Vector data failed, raster fallback:', err);
-                _addRasterFallback(map);
+                console.warn('[initializeMap] Vector data failed, keeping placeholder:', err);
+                // Keep the placeholder as active base layer
+                currentTileKey = 'vector-light';
+                try {
+                    localStorage.setItem('preferred_tile_layer', 'vector-light');
+                } catch (_e) {
+                    // Игнорируем ошибки localStorage
+                }
             }
         })();
     } else if (provider.type === 'maplibre') {
@@ -584,6 +607,7 @@ interface RenderedRecord {
     items: Array<{ layer: L.Layer; group: L.LayerGroup }>;
 }
 const renderedById = new Map<string | number, RenderedRecord>();
+let isInitialRendering = false;
 
 // Извлечение стабильного id из feature.
 function featureId(feature: import('../types/geojson').EventFeature): string | number | null {
@@ -662,8 +686,47 @@ function addRenderedEvent(id: string | number, feature: import('../types/geojson
     renderedById.set(id, { featureRef: feature, items: items });
 }
 
+function _featureDistanceToCenter(feature: import('../types/geojson').EventFeature, center: L.LatLng): number {
+    if (!feature.geometry || !feature.geometry.coordinates) return Infinity;
+
+    const geometry = feature.geometry as any;
+    const coords = geometry.coordinates as unknown[];
+    const type = geometry.type;
+    let representative: [number, number] | undefined;
+
+    switch (type) {
+        case 'Point':
+            representative = coords as [number, number];
+            break;
+        case 'LineString':
+            representative = (coords as [number, number][])[0];
+            break;
+        case 'Polygon':
+            representative = (coords as [number, number][][])[0]?.[0];
+            break;
+        case 'MultiLineString':
+            representative = (coords as [number, number][][])[0]?.[0];
+            break;
+        case 'MultiPoint':
+            representative = (coords as [number, number][])[0];
+            break;
+        case 'MultiPolygon':
+            representative = (coords as [number, number][][][])[0]?.[0]?.[0];
+            break;
+        default:
+            return Infinity;
+    }
+
+    if (!representative) return Infinity;
+
+    return L.latLng(representative[1], representative[0]).distanceTo(center);
+}
+
 // Инкрементная синхронизация карты с отфильтрованным набором событий из store.
-window.renderFromCache = function(): void {
+window.renderFromCache = function(features?: import('../types/geojson').EventFeature[]): void {
+    if (isInitialRendering && !features) {
+        return;
+    }
     const map = window.currentMapInstance;
     if (!map) {
         console.error('[renderFromCache] Map instance not available');
@@ -675,14 +738,15 @@ window.renderFromCache = function(): void {
     }
 
     const geoJsonData = window.getFilteredDataForRendering();
-    const features = (geoJsonData && geoJsonData.features) ? geoJsonData.features : [];
+    const allFeatures = (geoJsonData && geoJsonData.features) ? geoJsonData.features : [];
+    const featuresToRender = features || allFeatures;
 
     const nextIds = new Set<string | number>();
     let added = 0;
     let updated = 0;
 
-    for (let i = 0; i < features.length; i++) {
-        const feature = features[i] as import('../types/geojson').EventFeature;
+    for (let i = 0; i < featuresToRender.length; i++) {
+        const feature = featuresToRender[i] as import('../types/geojson').EventFeature;
         const id = featureId(feature);
         if (id == null) continue;
 
@@ -702,10 +766,12 @@ window.renderFromCache = function(): void {
     }
 
     let removed = 0;
-    for (const id of Array.from(renderedById.keys())) {
-        if (!nextIds.has(id)) {
-            removeRenderedEvent(id);
-            removed++;
+    if (!features) {
+        for (const id of Array.from(renderedById.keys())) {
+            if (!nextIds.has(id)) {
+                removeRenderedEvent(id);
+                removed++;
+            }
         }
     }
 
@@ -714,11 +780,57 @@ window.renderFromCache = function(): void {
     }
 };
 
+function renderInitialBatch(): void {
+    const geoJsonData = window.getFilteredDataForRendering();
+    const features = (geoJsonData && geoJsonData.features) ? geoJsonData.features : [];
+    if (!features.length) return;
+
+    const map = window.currentMapInstance;
+    if (!map) return;
+
+    const center = map.getCenter();
+    const sortedFeatures = [...features].sort((a, b) => {
+        return _featureDistanceToCenter(a, center) - _featureDistanceToCenter(b, center);
+    });
+
+    const CHUNK_SIZE = 200;
+    let index = 0;
+    isInitialRendering = true;
+
+    function processChunk(): void {
+        const chunk = sortedFeatures.slice(index, index + CHUNK_SIZE);
+        if (chunk.length === 0) {
+            isInitialRendering = false;
+            window.renderFromCache();
+            console.log('[renderInitialBatch] Complete, total:', sortedFeatures.length);
+            return;
+        }
+
+        window.renderFromCache(chunk);
+        index += CHUNK_SIZE;
+
+        if (index < sortedFeatures.length) {
+            requestAnimationFrame(processChunk);
+        } else {
+            isInitialRendering = false;
+            window.renderFromCache();
+            console.log('[renderInitialBatch] Complete, total:', sortedFeatures.length);
+        }
+    }
+
+    requestAnimationFrame(processChunk);
+}
+
 // Функция инициализации UI
 window.bootstrapUI = function(): void {
     window.initializeMap();
 
+    const iconUrls = (window.ICON_CONFIG as Record<string, { url: string }> | undefined)
+        ? Object.values(window.ICON_CONFIG).map(c => c.url)
+        : ['/assets/images/bus.webp', '/assets/images/pig.webp', '/assets/images/cops.webp'];
+    window.preloadIcons(iconUrls);
+
     requestAnimationFrame(() => {
-        window.renderFromCache();
+        renderInitialBatch();
     });
 };

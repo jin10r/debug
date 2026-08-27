@@ -21,10 +21,10 @@ function handleNewEvents(events: NewEvent[]): void {
             }
 
             const iconSrc = event.layer === 'cops'
-                ? '/assets/images/cops.png'
+                ? '/assets/images/cops.webp'
                 : event.layer === 'bus'
-                    ? '/assets/images/bus.png'
-                    : '/assets/images/pig.png';
+                    ? '/assets/images/bus.webp'
+                    : '/assets/images/pig.webp';
 
             // showNotification() fires haptic feedback itself (rule 5) — no
             // separate hapticFeedback() call needed here.

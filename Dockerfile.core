@@ -48,6 +48,7 @@ RUN groupadd -r appuser && useradd -r -g appuser -u 1000 appuser && \
     mkdir -p /app/media/events
 
 # Копируем исходники с правами appuser
+COPY --chown=appuser:appuser common/ ./common/
 COPY --chown=appuser:appuser core/ ./core/
 COPY --chown=appuser:appuser main.py .
 

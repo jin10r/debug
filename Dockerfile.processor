@@ -51,7 +51,7 @@ RUN useradd -m -u 1000 processor && \
     chown -R processor:processor /app
 
 COPY --chown=processor:processor processor/ ./processor/
-COPY --chown=processor:processor core/ ./core/
+COPY --chown=processor:processor common/ ./common/
 
 USER processor
 

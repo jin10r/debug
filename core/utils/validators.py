@@ -147,7 +147,7 @@ def validate_layers(layers) -> Optional[list[str]]:
     if len(layers) > 16:
         raise ValueError("layers list exceeds maximum of 16 entries")
 
-    from core.settings import DEFAULT_LAYER_KEYWORDS
+    from common.settings import DEFAULT_LAYER_KEYWORDS
     valid_set = set(DEFAULT_LAYER_KEYWORDS.keys())
     result = []
     for i, layer in enumerate(layers):

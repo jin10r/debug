@@ -8,7 +8,7 @@ import logging
 from aiohttp import web
 from typing import Set
 
-from core.settings import settings
+from common.settings import settings
 from core.middlewares.auth import verify_jwt_token
 
 logger = logging.getLogger(__name__)

@@ -49,7 +49,7 @@ def main():
         else:
             os.environ["TELEGRAM_WEBVIEW_VALIDATION"] = test_env_value
 
-        from core.settings import load_settings
+        from common.settings import load_settings
 
         settings_obj = load_settings(env_path=env_path, require_jwt=False)
 

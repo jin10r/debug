@@ -6,7 +6,7 @@ from typing import Dict, Set, Optional
 from datetime import datetime, timezone
 from aiohttp import web, WSMsgType
 from core.db.dbconnect import Request
-from core.settings import settings
+from common.settings import settings
 from core.middlewares.auth import verify_jwt_token
 from core.utils.telegram_validation import validate_telegram_webapp_data
 

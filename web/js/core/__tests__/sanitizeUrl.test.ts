@@ -28,7 +28,7 @@ describe('sanitizeUrl XSS Prevention', () => {
     
     // Allow relative URLs from our media endpoints
     if (trimmedUrl.startsWith('/media/events/') || trimmedUrl.startsWith('/api/media/')) {
-      if (trimmedUrl.includes('..') || trimmedUrl.includes('%2f') || trimmedUrl.includes('%5c')) {
+      if (trimmedUrl.includes('..') || trimmedUrl.includes('%2e') || trimmedUrl.includes('%2f') || trimmedUrl.includes('%5c')) {
         return '';
       }
       return trimmedUrl;

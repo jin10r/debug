@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import jwt
 from aiohttp import web
 
-from core.settings import settings
+from common.settings import settings
 from core.middlewares.auth import generate_jwt_tokens, verify_jwt_token
 from core.utils.telegram_validation import validate_telegram_webapp_data
 

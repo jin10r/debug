@@ -6,7 +6,7 @@ from typing import Optional
 
 from aiohttp import web
 
-from core.settings import settings
+from common.settings import settings
 from core.utils.validators import MAX_MEDIA_FILE_BYTES
 
 logger = logging.getLogger(__name__)

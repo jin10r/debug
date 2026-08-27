@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from .phonetic_index import PhoneticEntry
 
 try:
-    from core.settings import settings
+    from common.settings import settings
 except Exception:
     settings = None
 
@@ -301,19 +301,22 @@ class GeoMatcher:
             if self._executor:
                 try:
                     loop = asyncio.get_running_loop()
-                    s_match = await loop.run_in_executor(
-                        self._executor,
-                        _fuzzy_match,
-                        surface,
-                        s_phrases,
-                        typo_thresh
+                    s_match = await asyncio.wait_for(
+                        loop.run_in_executor(
+                            self._executor,
+                            _fuzzy_match,
+                            surface,
+                            s_phrases,
+                            typo_thresh
+                        ),
+                        timeout=5.0,
                     )
-                except Exception as e:
-                    logger.warning(f"[Geo] Parallel fuzzy match failed: {e}, falling back to sync")
+                except (asyncio.TimeoutError, Exception) as e:
+                    logger.warning(f"[Geo] Parallel fuzzy match timeout/failed: {e}, falling back to sync")
                     s_match = rf_process.extractOne(
                         surface,
                         s_phrases,
-                        scorer=fuzz.ratio,
+                        scorer=fuzz.WRatio,
                         score_cutoff=typo_thresh,
                     )
             else:
@@ -411,6 +414,8 @@ class GeoMatcher:
         tier2_queries = []
         tier2_meta = []
 
+        s_phrases, s_meta = self._index.surface_phrases()
+
         for surface, stem_tuple, start_i, end_i, _size, _gap, is_anchored in candidates:
             if surface in self._stopwords:
                 continue
@@ -423,7 +428,6 @@ class GeoMatcher:
                 if existing is None or result['score'] > existing['score']:
                     best_by_geo[gid] = result
             else:
-                s_phrases, s_meta = self._index.surface_phrases()
                 if s_phrases and len(surface) >= 5:
                     tier2_queries.append(surface)
                     tier2_meta.append({
@@ -439,17 +443,25 @@ class GeoMatcher:
                 and getattr(settings.similarity, 'surface_typo_threshold', None) is not None
                 else 90.0
             )
+            tier2_queries = list(dict.fromkeys(tier2_queries))
             s_phrases, s_meta = self._index.surface_phrases()
 
             if self._executor:
                 loop = asyncio.get_running_loop()
-                batch_results = await loop.run_in_executor(
-                    self._executor,
-                    _batch_fuzzy_match,
-                    tier2_queries,
-                    s_phrases,
-                    typo_thresh
-                )
+                try:
+                    batch_results = await asyncio.wait_for(
+                        loop.run_in_executor(
+                            self._executor,
+                            _batch_fuzzy_match,
+                            tier2_queries,
+                            s_phrases,
+                            typo_thresh
+                        ),
+                        timeout=10.0,
+                    )
+                except (asyncio.TimeoutError, Exception) as e:
+                    logger.warning(f"[Geo] Batch fuzzy match timeout/failed: {e}, falling back to sync")
+                    batch_results = _batch_fuzzy_match(tier2_queries, s_phrases, typo_thresh)
             else:
                 # Без пула потоков (тесты, деградация, сбой инициализации
                 # executor) — синхронный Tier 2. Иначе typo-кандидаты молча

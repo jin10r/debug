@@ -167,9 +167,9 @@ Parser использует JSON-формат (по умолчанию) или �
 - `ERROR` — ошибки обработки, DB-ошибки
 - `CRITICAL` — crash воркера (auto-respawn)
 
-### R-P21: Settings из core/settings.py
+### R-P21: Settings из common/settings.py
 
-Parser переиспользует `core/settings.py` для всех настроек.
+Parser переиспользует `common/settings.py` для всех настроек.
 
 ### R-P22: Environment variables
 

@@ -23,7 +23,7 @@ class EventsFilterRequest(BaseModel):
         for i, layer in enumerate(v):
             if not isinstance(layer, str) or not layer.strip():
                 raise ValueError(f'layers[{i}] must be a non-empty string')
-            layer = layer.strip()
-            if len(layer) > 32:
+            v[i] = layer.strip()
+            if len(v[i]) > 32:
                 raise ValueError(f'layers[{i}] exceeds maximum length of 32')
         return v

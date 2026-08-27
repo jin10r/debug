@@ -12,7 +12,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from core.db.db_base import Database
+from common.db.base import Database
 
 logger = logging.getLogger(__name__)
 

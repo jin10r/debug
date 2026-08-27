@@ -9,27 +9,29 @@ import json
 import logging
 import os
 import signal
+import sys
 from datetime import datetime, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
 
 import asyncpg
 from pyrogram import Client, filters
+from pyrogram import errors
 from pyrogram.types import Message
 
-from core.settings import settings
-from core.db.db_base import RETRYABLE_EXCEPTIONS as _TRANSIENT_ERRORS
-from core.utils.logging_config import setup_logging
-from core.utils.retry import retry_with_backoff
-from core.utils.pg_listener import PgNotifyListener
+from common.settings import settings
+from common.db.base import RETRYABLE_EXCEPTIONS as _TRANSIENT_ERRORS
+from common.logging_config import setup_logging
+from common.retry import retry_with_backoff
+from common.pg_listener import PgNotifyListener
 
 setup_logging(
     level=getattr(logging, settings.app.log_level.upper(), logging.INFO),
     json_format=settings.app.log_format.lower() == 'json',
 )
 
-from core.db.db_adapter import DBAdapter
-from core.utils.text_preprocessor import strip_tail, preprocess_light, truncate_for_geo, sanitize_text
+from common.db_adapter import DBAdapter
+from common.text_preprocessor import strip_tail, preprocess_light, truncate_for_geo, sanitize_text
 
 logger = logging.getLogger(__name__)
 
@@ -124,17 +126,36 @@ class ParserBot:
             )
 
         try:
-            self.app = Client(
-                name="session",
-                workdir="/app/parser",
-                **({"proxy": proxy_config} if proxy_config else {})
+            async def _start_client():
+                self.app = Client(
+                    name="session",
+                    workdir="/app/parser",
+                    **({"proxy": proxy_config} if proxy_config else {})
+                )
+                logger.info("Starting Telegram client...")
+                await self.app.start()
+                logger.info("✅ Telegram client started successfully")
+                return True
+
+            return await retry_with_backoff(
+                func=_start_client,
+                max_attempts=3,
+                max_transient_attempts=3,
+            retryable_exceptions=(
+                errors.AuthKeyInvalid,
+                errors.SessionExpired,
+                errors.RPCError,
+            ),
+                base_delay=1.0,
+                max_delay=30.0,
+                label="telegram-client-start",
             )
-            logger.info("Starting Telegram client...")
-            await self.app.start()
-            logger.info("✅ Telegram client started successfully")
-            return True
-        except Exception as e:
-            logger.error(f"❌ Failed to initialize Telegram client: {e}")
+        except Exception:
+            logger.error(
+                "❌ Telegram client failed after retries. "
+                "If session is revoked, regenerate it: python gen_session.py",
+                exc_info=True,
+            )
             return False
 
     async def _load_chat_history(self):

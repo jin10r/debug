@@ -5,6 +5,9 @@ module.exports = {
     es2021: true,
     node: true,
   },
+  globals: {
+    Telegram: 'readonly',
+  },
   parser: '@typescript-eslint/parser',
   parserOptions: {
     ecmaVersion: 'latest',

@@ -2,8 +2,8 @@
  * vector-data.ts — Load compressed GeoJSON, decompress, and build geojson-vt tile index.
  *
  * The data file (odessa.geojson.gz) is pre-compressed at build time and served
- * by nginx with gzip_static. This module fetches it, decompresses via
- * DecompressionStream (or falls back to raw text), and indexes with geojson-vt.
+ * by nginx. This module fetches it, decompresses via DecompressionStream
+ * (with a gzip magic-bytes guard), and indexes with geojson-vt.
  */
 import geojsonvt, { TileIndex } from 'geojson-vt';
 
@@ -27,13 +27,18 @@ export async function loadVectorData(): Promise<TileIndex> {
 
     const blob = await res.blob();
 
-    // Decompression via DecompressionStream (Chrome 80+, Firefox 113+, Safari 16.4+)
+    // Defensive: verify the response is actually gzip before piping through
+    // DecompressionStream. Without this, a missing-file SPA fallback (HTML)
+    // would produce "incorrect header check" and an unreadable stream.
+    const gzipMagic = new Uint8Array([0x1f, 0x8b]);
+    const head = new Uint8Array(await blob.slice(0, 2).arrayBuffer());
+    const isGzip = head.length >= 2 && head[0] === gzipMagic[0] && head[1] === gzipMagic[1];
+
     let text: string;
-    if ('DecompressionStream' in window) {
+    if ('DecompressionStream' in window && isGzip) {
       const ds = new DecompressionStream('gzip');
       text = await new Response(blob.stream().pipeThrough(ds)).text();
     } else {
-      // Fallback: nginx may serve uncompressed if request has no Accept-Encoding
       text = await blob.text();
     }
 

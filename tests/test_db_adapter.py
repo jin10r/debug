@@ -5,7 +5,7 @@ import pytest
 from freezegun import freeze_time
 
 try:
-    from core.db.db_adapter import DBAdapter
+    from common.db_adapter import DBAdapter
     _IMPORT_OK = True
     _IMPORT_ERR = None
 except Exception as e:
@@ -58,7 +58,7 @@ class TestDBAdapter:
         adapter = DBAdapter()
         mock_pool, _ = _mock_pool()
         side_effects = [ConnectionRefusedError(), ConnectionRefusedError(), mock_pool]
-        with patch('core.db.db_adapter.create_pool', side_effect=side_effects) as mock_create:
+        with patch('common.db_adapter.create_pool', side_effect=side_effects) as mock_create:
             with patch('asyncio.sleep', AsyncMock()):
                 result = await adapter.connect(max_retries=3, retry_delay=0.1)
         assert result is True
@@ -70,7 +70,7 @@ class TestDBAdapter:
         adapter = DBAdapter()
         mock_pool, mock_conn = _mock_pool()
         mock_conn.fetchval = AsyncMock(return_value=1)
-        with patch('core.db.db_adapter.create_pool', return_value=mock_pool):
+        with patch('common.db_adapter.create_pool', return_value=mock_pool):
             result = await adapter.connect(max_retries=2, retry_delay=0.1)
         assert result is True
         mock_conn.fetchval.assert_called_once_with("SELECT 1")

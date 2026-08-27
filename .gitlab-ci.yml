@@ -34,6 +34,8 @@ variables:
   POSTGRES_USER: "postgres"
   POSTGRES_DB: "postgres"
   TELEGRAM_WEBVIEW_VALIDATION: "false"
+  JWT_SECRET: "ci-dummy-jwt-secret-minimum-32-characters"
+  BOT_TOKEN: "ci_dummy_bot_token_for_tests"
 
 # ── Shared cache configs (YAML anchors) ──────────────────────────────────────
 .pip-cache-anchor: &pip-cache
@@ -159,6 +161,24 @@ frontend-security:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH'
 
+frontend-tests:
+  stage: test
+  image: node:20-alpine
+  cache:
+    <<: *npm-cache
+  before_script:
+    - cd web
+    - npm config set fetch-retries 5
+    - npm config set fetch-retry-factor 2
+    - npm config set fetch-retry-mintimeout 10000
+    - npm config set fetch-retry-maxtimeout 60000
+    - npm ci --no-audit --no-fund
+  script:
+    - npx jest --coverage --testPathPatterns="(sanitizeUrl|createPopupContent|store)"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Stage: test — unit tests, integration tests, frontend build
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -279,6 +299,16 @@ test:core-startup-matrix:
         - scripts/ci_check_webview_validation.py
         - .gitlab-ci.yml
 
+common-invariant:
+  stage: test
+  image: python:3.11-slim-bookworm
+  script:
+    - |
+      grep -rn "^[[:space:]]*from core\b\|^[[:space:]]*from parser\b\|^[[:space:]]*from processor\b\|^[[:space:]]*import core\b\|^[[:space:]]*import parser\b\|^[[:space:]]*import processor\b" common/ && exit 1 || echo "OK: common/ does not import service packages"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
 frontend-build:
   stage: test
   image: node:20-alpine
@@ -286,6 +316,10 @@ frontend-build:
     <<: *npm-cache
   before_script:
     - cd web
+    - npm config set fetch-retries 5
+    - npm config set fetch-retry-factor 2
+    - npm config set fetch-retry-mintimeout 10000
+    - npm config set fetch-retry-maxtimeout 60000
     - npm ci --no-audit --no-fund
   script:
     - npm run typecheck
@@ -311,7 +345,7 @@ frontend-build:
   variables:
     DOCKER_TLS_CERTDIR: "/certs"
   before_script:
-    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY || true
   script:
     - |
       docker build \
@@ -434,6 +468,12 @@ deploy:local:
   script:
     - |
       echo '=== Локальный автодеплой (G-3) ==='
+      # Загружаем .env и сбрасываем CI-переменные, чтобы docker compose
+      # использовал реальные локальные значения (BOT_TOKEN, JWT_SECRET).
+      set -a
+      source .env
+      set +a
+      unset BOT_TOKEN JWT_SECRET
       docker compose down --remove-orphans || true
       docker compose up -d --build
       echo '=== Статус контейнеров ==='

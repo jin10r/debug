@@ -6,6 +6,6 @@ __author__ = 'Survival Map Team'
 # DBAdapter общий для parser/processor (живёт в core/). Импорт тянет цепочку
 # core.db.dbconnect → asyncpg — в контейнере parser asyncpg установлен
 # (parser/requirements.txt), так что это безопасно.
-from core.db.db_adapter import DBAdapter
+from common.db_adapter import DBAdapter
 
 __all__ = ['DBAdapter']

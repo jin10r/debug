@@ -9,8 +9,8 @@ import logging
 import asyncio
 from typing import List, Dict, Any, Optional
 
-from core.settings import settings
-from core.db.db_base import Database
+from common.settings import settings
+from common.db.base import Database
 
 logger = logging.getLogger(__name__)
 

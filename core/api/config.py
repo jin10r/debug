@@ -1,7 +1,7 @@
 """Configuration API handlers"""
 from aiohttp import web
 
-from core.settings import settings
+from common.settings import settings
 
 
 async def get_config_handler(request: web.Request):

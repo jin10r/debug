@@ -15,7 +15,7 @@ from core.api.auth import (
     get_validation_config_handler,
     validate_init_handler
 )
-from core.settings import Settings, AppConfig, BotConfig, JWTConfig
+from common.settings import Settings, AppConfig, BotConfig, JWTConfig
 
 
 class TestWebViewValidation(AioHTTPTestCase):

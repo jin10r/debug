@@ -6,7 +6,7 @@ import pytest
 from freezegun import freeze_time
 
 try:
-    from core.db.db_base import Database, create_pool, retry_db_condition
+    from common.db.base import Database, create_pool, retry_db_condition
     _IMPORT_OK = True
     _IMPORT_ERR = None
 except Exception as e:
@@ -88,8 +88,8 @@ class TestCreatePool:
     @pytest.mark.asyncio
     async def test_create_pool_with_defaults(self):
         mock_pool = AsyncMock()
-        with patch('core.db.db_base.asyncpg.create_pool', new_callable=AsyncMock, return_value=mock_pool) as mock_create:
-            with patch('core.db.db_base.settings', None):
+        with patch('common.db.base.asyncpg.create_pool', new_callable=AsyncMock, return_value=mock_pool) as mock_create:
+            with patch('common.db.base.settings', None):
                 pool = await create_pool()
         mock_create.assert_called_once()
         call_kwargs = mock_create.call_args[1]
@@ -102,8 +102,8 @@ class TestCreatePool:
     @pytest.mark.asyncio
     async def test_create_pool_with_overrides(self):
         mock_pool = AsyncMock()
-        with patch('core.db.db_base.asyncpg.create_pool', new_callable=AsyncMock, return_value=mock_pool) as mock_create:
-            with patch('core.db.db_base.settings', None):
+        with patch('common.db.base.asyncpg.create_pool', new_callable=AsyncMock, return_value=mock_pool) as mock_create:
+            with patch('common.db.base.settings', None):
                 pool = await create_pool(min_size=2, max_size=10, command_timeout=30)
         call_kwargs = mock_create.call_args[1]
         assert call_kwargs['min_size'] == 2
@@ -120,7 +120,7 @@ class TestDatabase:
     async def test_connect_creates_pool(self):
         database = Database()
         mock_pool = AsyncMock()
-        with patch('core.db.db_base.create_pool', return_value=mock_pool):
+        with patch('common.db.base.create_pool', return_value=mock_pool):
             result = await database.connect()
         assert result is True
         assert database.pool is mock_pool
@@ -130,7 +130,7 @@ class TestDatabase:
         database = Database()
         mock_pool = AsyncMock()
         side_effects = [ConnectionRefusedError(), ConnectionRefusedError(), mock_pool]
-        with patch('core.db.db_base.create_pool', side_effect=side_effects):
+        with patch('common.db.base.create_pool', side_effect=side_effects):
             with patch('asyncio.sleep', AsyncMock()):
                 result = await database.connect(max_retries=3, retry_delay=0.1)
         assert result is True
@@ -138,7 +138,7 @@ class TestDatabase:
     @pytest.mark.asyncio
     async def test_connect_raises_on_non_retryable_error(self):
         database = Database()
-        with patch('core.db.db_base.create_pool', side_effect=RuntimeError("fatal")):
+        with patch('common.db.base.create_pool', side_effect=RuntimeError("fatal")):
             with pytest.raises(RuntimeError, match="fatal"):
                 await database.connect(max_retries=2, retry_delay=0.1)
 

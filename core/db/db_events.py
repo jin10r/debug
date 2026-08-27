@@ -9,8 +9,9 @@ import asyncio
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
-from core.settings import settings
-from core.db.db_base import Database
+from common.settings import settings
+from common.db.base import Database
+from common.circuit_breaker import CircuitBreaker
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ class EventOperations:
 
     def __init__(self, db: Database):
         self.db = db
+        self._db_breaker = CircuitBreaker(failure_threshold=5, timeout=60.0)
 
     # ------------------------------------------------------------------
     # Internal helpers — GeoJSON query building
@@ -51,11 +53,15 @@ class EventOperations:
     async def _fetch_geojson(self, query: str, params: List[Any]) -> Dict:
         """Execute a GeoJSON query with timeout and standard error handling."""
         try:
-            async with self.db.pool.acquire() as connection:
-                result = await asyncio.wait_for(
-                    connection.fetchval(query, *params),
+            async def _do_query():
+                return await self.db.fetchval(query, *params)
+
+            result = await self._db_breaker.call(
+                lambda: asyncio.wait_for(
+                    _do_query(),
                     timeout=settings.db.command_timeout,
                 )
+            )
             return json.loads(result) if result else EMPTY_GEOJSON
         except Exception as e:
             logger.error(f"GeoJSON query failed: {e}", exc_info=True)
@@ -191,11 +197,10 @@ class EventOperations:
             SELECT count(*) FROM deleted;
         """
         try:
-            async with self.db.pool.acquire() as connection:
-                deleted_count = await asyncio.wait_for(
-                    connection.fetchval(query, time_interval_minutes),
-                    timeout=settings.db.command_timeout,
-                )
+            deleted_count = await asyncio.wait_for(
+                self.db.fetchval(query, time_interval_minutes),
+                timeout=settings.db.command_timeout,
+            )
             if deleted_count and deleted_count > 0:
                 logger.info(f"Successfully deleted {deleted_count} old events.")
         except Exception as e:
@@ -204,12 +209,11 @@ class EventOperations:
     async def get_latest_update_time(self) -> Optional[datetime]:
         """Get the timestamp of the newest event."""
         try:
-            async with self.db.pool.acquire() as connection:
-                result = await asyncio.wait_for(
-                    connection.fetchval("SELECT MAX(event_time) FROM events"),
-                    timeout=settings.db.command_timeout,
-                )
-                return result
+            result = await asyncio.wait_for(
+                self.db.fetchval("SELECT MAX(event_time) FROM events"),
+                timeout=settings.db.command_timeout,
+            )
+            return result
         except Exception as e:
             logger.error(f"Failed to get latest events update time: {e}")
             return None
@@ -221,11 +225,10 @@ class EventOperations:
             FROM events_meta WHERE id = 1
         """
         try:
-            async with self.db.pool.acquire() as connection:
-                row = await asyncio.wait_for(
-                    connection.fetchrow(query),
-                    timeout=settings.db.command_timeout,
-                )
+            row = await asyncio.wait_for(
+                self.db.fetchrow(query),
+                timeout=settings.db.command_timeout,
+            )
             if not row:
                 return {'version': 0, 'updated_at': None, 'max_event_id': 0}
             data = dict(row)
@@ -242,11 +245,10 @@ class EventOperations:
         """Get minimum event id currently present in DB."""
         query = "SELECT COALESCE(MIN(id), 0) FROM events"
         try:
-            async with self.db.pool.acquire() as connection:
-                val = await asyncio.wait_for(
-                    connection.fetchval(query),
-                    timeout=settings.db.command_timeout,
-                )
+            val = await asyncio.wait_for(
+                self.db.fetchval(query),
+                timeout=settings.db.command_timeout,
+            )
             return int(val or 0)
         except Exception as e:
             logger.error(f"Failed to get min events id: {e}", exc_info=True)
@@ -259,11 +261,10 @@ class EventOperations:
             FROM events
         """
         try:
-            async with self.db.pool.acquire() as connection:
-                row = await asyncio.wait_for(
-                    connection.fetchrow(query),
-                    timeout=settings.db.command_timeout,
-                )
+            row = await asyncio.wait_for(
+                self.db.fetchrow(query),
+                timeout=settings.db.command_timeout,
+            )
             if not row:
                 return (0, 0)
             return (int(row[0] or 0), int(row[1] or 0))

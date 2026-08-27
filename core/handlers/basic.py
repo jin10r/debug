@@ -1,7 +1,7 @@
 from aiogram import Router
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from aiogram.filters import Command
-from core.settings import settings
+from common.settings import settings
 import logging
 from typing import Optional
 

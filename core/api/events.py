@@ -10,7 +10,7 @@ from pydantic import ValidationError
 
 from core.models import EventsFilterRequest
 from core.utils.cache import CacheManager
-from core.settings import settings
+from common.settings import settings
 
 logger = logging.getLogger(__name__)
 

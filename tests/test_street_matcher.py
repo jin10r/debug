@@ -44,7 +44,7 @@ from processor.morphology import Morphology              # noqa: E402
 from processor.phonetic_index import PhoneticIndex       # noqa: E402
 from processor.geo_matcher import GeoMatcher              # noqa: E402
 from processor.word_tokenizer import tokenize             # noqa: E402
-from core.utils.text_preprocessor import (             # noqa: E402
+from common.text_preprocessor import (             # noqa: E402
     preprocess_light, strip_tail, is_promotional,
 )
 

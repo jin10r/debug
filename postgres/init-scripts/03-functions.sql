@@ -15,7 +15,7 @@ RETURNS INTEGER AS $$
 DECLARE
     deleted_count INTEGER := 0;
     partition_name TEXT;
-    cutoff_time TIMESTAMPTZ := NOW() - INTERVAL '48 hours';
+    cutoff_time TIMESTAMPTZ := NOW() - INTERVAL '60 minutes';
 BEGIN
     FOR partition_name IN
         SELECT c.relname AS partition_name

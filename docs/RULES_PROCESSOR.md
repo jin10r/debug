@@ -79,12 +79,6 @@ def check_memory(self) -> bool:
 def _apply_memory_fallback(self):
     import gc
     gc.collect()
-    if self.semantic_matcher:
-        try:
-            self.semantic_matcher.disable()
-            logger.info("SemanticMatcher disabled (memory fallback)")
-        except Exception as e:
-            logger.warning(f"Failed to disable SemanticMatcher: {e}")
     if self.morph:
         try:
             self.morph.shrink_cache(max_size=5000)
@@ -333,9 +327,9 @@ else:
 - `ERROR` — ошибки обработки, DB-ошибки
 - `CRITICAL` — crash воркера (auto-respawn)
 
-### R-PR25: Settings из core/settings.py
+### R-PR25: Settings из common/settings.py
 
-Processor переиспользует `core/settings.py`. Собственные настройки минимальны.
+Processor переиспользует `common/settings.py`. Собственные настройки минимальны.
 
 ### R-PR26: Environment variables — только DB credentials
 

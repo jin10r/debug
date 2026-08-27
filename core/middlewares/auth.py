@@ -13,7 +13,7 @@ import time
 import uuid as uuid_lib
 import jwt
 
-from core.settings import settings
+from common.settings import settings
 from core.utils.validators import validate_jwt_string, validate_telegram_user_id
 
 logger = logging.getLogger(__name__)

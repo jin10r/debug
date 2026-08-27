@@ -11,7 +11,7 @@ delegating to specialized modules for different concerns:
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
-from core.db.db_base import Database
+from common.db.base import Database
 from core.db.db_geo import GeoOperations
 from core.db.db_events import EventOperations
 from core.db.db_spatial import SpatialOperations

@@ -11,9 +11,9 @@
   "theme_color": "#ffffff",
   "icons": [
     {
-      "src": "/assets/images/pig.png",
+      "src": "/assets/images/pig.webp",
       "sizes": "any",
-      "type": "image/png",
+      "type": "image/webp",
       "purpose": "any"
     }
   ]

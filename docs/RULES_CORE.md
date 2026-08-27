@@ -151,7 +151,7 @@ if not settings.app.telegram_webview_validation:
 ```
 
 **Строгий парсинг (Secure by Default):** `TELEGRAM_WEBVIEW_VALIDATION` парсится в
-`core/settings.py` функцией `_parse_strict_bool` (внутри `load_settings`, после
+`common/settings.py` функцией `_parse_strict_bool` (внутри `load_settings`, после
 `env.read_env()`): default `True`; `False` — ТОЛЬКО при явном `'false'`/`'0'`
 (регистронезависимо); отсутствие/пустое/любое другое значение — `True`.
 

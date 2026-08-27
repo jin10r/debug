@@ -19,11 +19,11 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from .morphology import Morphology
-from core.utils.text_preprocessor import clean
+from common.text_preprocessor import clean
 from .word_tokenizer import tokenize
 
 try:
-    from core.settings import settings
+    from common.settings import settings
 except Exception:
     settings = None
 

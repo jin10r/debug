@@ -90,9 +90,9 @@ import pytest
 @pytest.fixture(autouse=True)
 def _ensure_jwt_config():
     """Гарантирует settings.jwt != None для тестов, использующих auth."""
-    from core.settings import settings
+    from common.settings import settings
     if settings.jwt is None:
-        from core.settings import JWTConfig
+        from common.settings import JWTConfig
         settings.jwt = JWTConfig(
             secret="ci-test-jwt-secret-minimum-32-characters-long"
         )

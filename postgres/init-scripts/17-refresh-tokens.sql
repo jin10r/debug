@@ -34,3 +34,13 @@ $$;
 
 COMMENT ON TABLE refresh_tokens IS
     'Single-use refresh tokens for JWT rotation. Повторное использование jti = кража токена.';
+
+-- Плановая очистка истёкших refresh-токенов (запуск каждые 6 часов)
+SELECT cron.unschedule('cleanup-refresh-tokens')
+WHERE EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'cleanup-refresh-tokens');
+
+SELECT cron.schedule(
+    'cleanup-refresh-tokens',
+    '0 */6 * * *',
+    'SELECT cleanup_expired_refresh_tokens()'
+);

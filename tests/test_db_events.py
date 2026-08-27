@@ -1,4 +1,5 @@
 """Tests for core/db/db_events.py — EventOperations."""
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -49,6 +50,37 @@ class FakeDb:
         self.pool.acquire.return_value.conn.fetch = AsyncMock(return_value=[])
         self.pool.acquire.return_value.conn.execute = AsyncMock()
         self.pool.acquire.return_value.conn.fetchrow = AsyncMock()
+        self.pool.acquire.return_value.conn.executemany = AsyncMock()
+
+    async def fetchval(self, query, *args, timeout=None):
+        async with self.pool.acquire() as conn:
+            if timeout:
+                return await asyncio.wait_for(conn.fetchval(query, *args), timeout=timeout)
+            return await conn.fetchval(query, *args)
+
+    async def fetchrow(self, query, *args, timeout=None):
+        async with self.pool.acquire() as conn:
+            if timeout:
+                return await asyncio.wait_for(conn.fetchrow(query, *args), timeout=timeout)
+            return await conn.fetchrow(query, *args)
+
+    async def fetch(self, query, *args, timeout=None):
+        async with self.pool.acquire() as conn:
+            if timeout:
+                records = await asyncio.wait_for(conn.fetch(query, *args), timeout=timeout)
+            else:
+                records = await conn.fetch(query, *args)
+            return [dict(record) for record in records]
+
+    async def execute(self, query, *args, timeout=None):
+        async with self.pool.acquire() as conn:
+            if timeout:
+                return await asyncio.wait_for(conn.execute(query, *args), timeout=timeout)
+            return await conn.execute(query, *args)
+
+    async def executemany(self, query, args_list):
+        async with self.pool.acquire() as conn:
+            await conn.executemany(query, args_list)
 
 
 # ============================================================

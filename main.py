@@ -5,9 +5,9 @@ import signal
 
 from aiohttp import web
 
-from core.settings import settings
+from common.settings import settings
 from core.app_factory import create_app
-from core.utils.logging_config import setup_logging
+from common.logging_config import setup_logging
 
 if not settings.jwt or not settings.jwt.secret:
     raise RuntimeError(

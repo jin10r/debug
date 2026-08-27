@@ -11,25 +11,25 @@ from typing import Optional
 
 import asyncpg
 
-from core.settings import settings
-from core.db.db_base import RETRYABLE_EXCEPTIONS as _TRANSIENT_ERRORS
-from core.utils.logging_config import setup_logging
-from core.utils.circuit_breaker import CircuitBreaker, CircuitState
-from core.utils.retry import retry_with_backoff
+from common.settings import settings
+from common.db.base import RETRYABLE_EXCEPTIONS as _TRANSIENT_ERRORS
+from common.logging_config import setup_logging
+from common.circuit_breaker import CircuitBreaker, CircuitState
+from common.retry import retry_with_backoff
 
 setup_logging(
     level=getattr(logging, settings.app.log_level.upper(), logging.INFO),
     json_format=settings.app.log_format.lower() == 'json',
 )
 
-from core.db.db_adapter import DBAdapter
+from common.db_adapter import DBAdapter
 from .morphology import Morphology
 from .phonetic_index import PhoneticIndex
 from .geo_matcher import GeoMatcher
 from .health import HealthServer
 from .layer_classifier import LayerClassifier
 from .word_tokenizer import tokenize
-from core.utils.text_preprocessor import strip_tail, is_promotional, truncate_for_geo
+from common.text_preprocessor import strip_tail, is_promotional, truncate_for_geo
 
 logger = logging.getLogger(__name__)
 

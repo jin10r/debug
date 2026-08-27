@@ -160,13 +160,13 @@ function showLegendPopup(): void {
             <tbody>
                 <tr>
                     <td style="${iconCellStyle}">
-                        <img src="/assets/images/bus.png" style="${imgStyle}" alt="Bus">
+                        <img src="/assets/images/bus.webp" style="${imgStyle}" alt="Bus">
                     </td>
                     <td style="${rowStyle}"><strong>Бус</strong> — бус, вито, спринтер, сталкер...</td>
                 </tr>
                 <tr>
                     <td style="${iconCellStyle}">
-                        <img src="/assets/images/cops.png" style="${imgStyle}" alt="Cops">
+                        <img src="/assets/images/cops.webp" style="${imgStyle}" alt="Cops">
                     </td>
                     <td style="${rowStyle}"><strong>Менты</strong> — менты, патруль, люстра, мусра...</td>
                 </tr>
@@ -176,7 +176,7 @@ function showLegendPopup(): void {
                 </tr>
                 <tr>
                     <td style="${iconCellStyle}">
-                        <img src="/assets/images/pig.png" style="${imgStyle}" alt="Pig">
+                        <img src="/assets/images/pig.webp" style="${imgStyle}" alt="Pig">
                     </td>
                     <td style="${rowStyle}"><strong>Остальное</strong> — события без явного типа</td>
                 </tr>

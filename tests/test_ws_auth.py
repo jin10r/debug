@@ -9,7 +9,7 @@ import pytest
 try:
     from core.api.websocket import _ws_authenticate
     from core.middlewares.auth import generate_jwt_tokens
-    from core.settings import settings
+    from common.settings import settings
     _IMPORT_OK = True
     _IMPORT_ERR = None
 except Exception as e:  # asyncpg / runtime dep missing

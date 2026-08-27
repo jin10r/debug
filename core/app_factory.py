@@ -10,18 +10,18 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 import aiohttp_cors
 
-from core.settings import settings
+from common.settings import settings
 from core.db.dbconnect import Database, Request
 from core.utils.cache import CacheManager
 from core.handlers import basic_router
 from core.middlewares.ratelimit import RateLimiter
-from core.utils.logging_config import setup_logging, logging_middleware
+from common.logging_config import setup_logging, logging_middleware
 from core.api.routes import setup_routes
 from core.api.auth import init_cache
 from core.api.websocket import WebSocketManager
 from core.middlewares.jwt_auth import jwt_auth_middleware
 from core.middlewares.body_size_limit import body_size_limit_middleware
-from core.utils.pg_listener import PgNotifyListener
+from common.pg_listener import PgNotifyListener
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +124,7 @@ async def on_startup(app: web.Application):
     # Log bot token prefix for debugging (first 10 chars only, no secret exposed)
     bot_token = getattr(settings.bot, 'token', '')
     if bot_token:
-        logger.info(
+        logger.debug(
             "Telegram bot token configured",
             extra={'extra_data': {'bot_token_prefix': bot_token[:10] + '...' if len(bot_token) > 10 else bot_token}}
         )

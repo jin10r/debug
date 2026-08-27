@@ -5,7 +5,7 @@ import time
 import jwt as pyjwt
 
 auth = importlib.import_module("core.middlewares.auth")
-from core.settings import settings  # noqa: E402
+from common.settings import settings  # noqa: E402
 
 
 def test_generate_and_verify_roundtrip():

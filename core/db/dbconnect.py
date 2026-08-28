@@ -99,6 +99,10 @@ class Request:
         """Get (min, max) message_id present in events table."""
         return await self.events.get_events_message_id_range()
 
+    async def get_event_by_id(self, event_id: int) -> Optional[Dict]:
+        """Fetch a single event as GeoJSON Feature by id (R-DB0)."""
+        return await self.events.get_event_by_id(event_id)
+
     async def get_events_snapshot_as_geojson(self, limit: int = 5000) -> Dict:
         """Fetch snapshot of last 60 minutes events."""
         return await self.events.get_events_snapshot_as_geojson(limit)

@@ -8,36 +8,15 @@
 -- =============================================================================
 
 -- =============================================================================
--- Events table — high churn (60-min TTL, frequent INSERTs + DELETEs)
+-- Events table — SKIPPED
 -- =============================================================================
--- Events are inserted continuously and deleted hourly (partition drop).
--- JSONB columns (matches, geo_diagnostics) add vacuum overhead.
--- GiST index on geom requires careful vacuum to avoid bloat.
-
-ALTER TABLE events SET (
-    -- Vacuum more frequently: 2% of table changed (global: 5%)
-    autovacuum_vacuum_scale_factor = 0.02,
-
-    -- Analyze even more frequently: 1% changed (global: 2%)
-    autovacuum_analyze_scale_factor = 0.01,
-
-    -- Lower threshold: start vacuum after 200 dead tuples (global: 500)
-    autovacuum_vacuum_threshold = 200,
-
-    -- Analyze after 100 changes (global: 250)
-    autovacuum_analyze_threshold = 100,
-
-    -- More aggressive cost limit: 2000 (global: 1000)
-    -- Allows autovacuum to do more work per cycle
-    autovacuum_vacuum_cost_limit = 2000,
-
-    -- Faster cleanup: 1ms delay (global: 2ms, default 20ms)
-    autovacuum_vacuum_cost_delay = 1,
-
-    -- Scale factor for truncate: 0.1 (10% dead tuples triggers truncate)
-    -- Helps reclaim disk space from dropped partitions
-    autovacuum_truncate_scale_factor = 0.1
-);
+-- events is a PARTITION BY RANGE table (R-DB2). ALTER TABLE ... SET (...)
+-- with storage parameters on a partitioned parent can fail on some PG versions.
+-- Global autovacuum settings in postgresql.conf (R-DB18) already cover all
+-- partitions: autovacuum_vacuum_scale_factor=0.05, naptime=20s, etc.
+--
+-- NOTE: autovacuum_truncate_scale_factor does NOT exist in PostgreSQL;
+-- autovacuum truncation is controlled by autovacuum_truncate (boolean).
 
 -- =============================================================================
 -- Pending events table — queue with status transitions
@@ -86,31 +65,26 @@ ALTER TABLE geo SET (
 -- =============================================================================
 -- Log autovacuum settings for verification
 -- =============================================================================
+-- In PG15, per-table autovacuum settings live in pg_class.reloptions
+-- (text array), not as direct columns. Extract them with regexp.
 DO $$
 DECLARE
     r RECORD;
+    opts TEXT[];
+    val TEXT;
 BEGIN
     FOR r IN
-        SELECT
-            schemaname,
-            relname,
-            autovacuum_vacuum_scale_factor,
-            autovacuum_analyze_scale_factor,
-            autovacuum_vacuum_threshold,
-            autovacuum_analyze_threshold,
-            autovacuum_vacuum_cost_limit,
-            autovacuum_vacuum_cost_delay
+        SELECT n.nspname AS schemaname,
+               c.relname,
+               c.reloptions
         FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE c.reltuples > 0
-          AND autovacuum_vacuum_scale_factor IS NOT NULL
-        ORDER BY relname
+        WHERE c.reloptions IS NOT NULL
+          AND array_length(c.reloptions, 1) > 0
+        ORDER BY c.relname
     LOOP
-        RAISE NOTICE 'Autovacuum for %: scale_factor=%, threshold=%, cost_limit=%',
-            r.relname,
-            r.autovacuum_vacuum_scale_factor,
-            r.autovacuum_vacuum_threshold,
-            r.autovacuum_vacuum_cost_limit;
+        RAISE NOTICE 'Table %.%: reloptions=%',
+            r.schemaname, r.relname, r.reloptions;
     END LOOP;
 END;
 $$;

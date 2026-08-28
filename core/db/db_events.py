@@ -257,7 +257,8 @@ class EventOperations:
     async def get_events_message_id_range(self) -> tuple:
         """Get (min, max) message_id currently present in events."""
         query = """
-            SELECT COALESCE(MIN(message_id), 0), COALESCE(MAX(message_id), 0)
+            SELECT COALESCE(MIN(message_id), 0) AS min_mid,
+                   COALESCE(MAX(message_id), 0) AS max_mid
             FROM events
         """
         try:
@@ -267,7 +268,30 @@ class EventOperations:
             )
             if not row:
                 return (0, 0)
-            return (int(row[0] or 0), int(row[1] or 0))
+            return (int(row['min_mid'] or 0), int(row['max_mid'] or 0))
         except Exception as e:
             logger.error(f"Failed to get message_id range: {e}", exc_info=True)
             return (0, 0)
+
+    async def get_event_by_id(self, event_id: int) -> Optional[Dict]:
+        """Fetch a single event as a GeoJSON Feature by its id.
+
+        Used by core WebSocket handler to hydrate minimal pg_notify payloads
+        (R-DB0) into full Features for broadcast.
+        """
+        query = (
+            "SELECT json_build_object("
+            "'type', 'Feature', "
+            "'geometry', ST_AsGeoJSON(geom)::json, "
+            "'properties', " + _FEATURE_PROPERTIES + 
+            ") FROM events WHERE id = $1"
+        )
+        try:
+            result = await asyncio.wait_for(
+                self.db.fetchval(query, event_id),
+                timeout=settings.db.command_timeout,
+            )
+            return json.loads(result) if result else None
+        except Exception as e:
+            logger.error(f"Failed to fetch event by id {event_id}: {e}")
+            return None

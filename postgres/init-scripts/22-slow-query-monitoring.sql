@@ -97,7 +97,7 @@ $$ LANGUAGE plpgsql STABLE;
 
 CREATE OR REPLACE VIEW v_query_stats_hourly AS
 SELECT
-    DATE_TRUNC('hour', stats_reset + (calls * interval '1 millisecond')) AS hour,
+    DATE_TRUNC('hour', now()) AS hour,
     queryid,
     LEFT(query, 100) AS query_preview,
     SUM(calls) AS total_calls,
@@ -107,7 +107,7 @@ SELECT
 FROM pg_stat_statements
 WHERE query NOT LIKE '%pg_stat_statements%'
 GROUP BY
-    DATE_TRUNC('hour', stats_reset + (calls * interval '1 millisecond')),
+    DATE_TRUNC('hour', now()),
     queryid,
     LEFT(query, 100)
 HAVING SUM(calls) > 10
@@ -153,8 +153,8 @@ ORDER BY (n_tup_ins + n_tup_upd + n_tup_del) DESC;
 CREATE OR REPLACE VIEW v_index_usage AS
 SELECT
     schemaname,
-    tablename,
-    indexname,
+    relname AS tablename,
+    indexrelname AS indexname,
     idx_scan AS scans,
     idx_tup_read AS tuples_read,
     idx_tup_fetch AS tuples_fetched,

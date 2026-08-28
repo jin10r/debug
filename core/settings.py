@@ -190,6 +190,11 @@ class SimilarityConfig:
     # Типы объектов, для которых разрешён midpoint.
     midpoint_types: tuple = ('street', 'market', 'station', 'park', 'landmark')
 
+    # Включить POS-фильтрацию (pymorphy3) для sliding-window кандидатов.
+    # По умолчанию ВЫКЛ: pymorphy3 тегает OOV-пропера как VERB/GRND/NPRO,
+    # что вызывает false negatives для топонимов.
+    enable_pos_filter: bool = False
+
     # Токены-пунктуация: отфильтровываются из tokens до поиска (_strip_noise).
     punctuation_tokens: tuple = (
         '#', '/', ',', '.', '(', ')', '!', '?', '-', '«', '»', '"', ':', ';',
@@ -197,6 +202,18 @@ class SimilarityConfig:
 
     def get_layer_keywords(self, layer: str) -> tuple:
         return DEFAULT_LAYER_KEYWORDS.get(layer, ())
+
+
+@dataclass
+class GeoConfig:
+    """Пороги гео-арбитража process_candidates_v2.
+
+    Все пространственные лимиты вынесены из SQL-функции в .env.
+    Изменение значений НЕ требует пересборки Docker-образов.
+    """
+    candidate_min_score: float = 0.80
+    intersection_buffer_m: float = 100.0
+    weighted_centroid_max_scatter_m: float = 1000.0
 
 
 @dataclass
@@ -261,6 +278,7 @@ class Settings:
     bot: BotConfig
     jwt: Optional[JWTConfig] = None
     similarity: SimilarityConfig = field(default_factory=SimilarityConfig)
+    geo: GeoConfig = field(default_factory=GeoConfig)
     layers: LayerConfig = field(default_factory=LayerConfig)
     parser: ParserConfig = field(default_factory=ParserConfig)
     processor: ProcessorConfig = field(default_factory=ProcessorConfig)

@@ -9,6 +9,24 @@
 
 ## 1. Архитектурные правила
 
+### R-DB0: БД как геопространственный калькулятор и ephemeral-буфер
+
+PostgreSQL в этом проекте **НЕ является** архивным хранилищем или сейфом для секретов.
+Его главные роли:
+
+1. **Геопространственный калькулятор:** Выполнение тяжёлых PostGIS-операций (`process_candidates_v2`, `ST_Distance`, `ST_MakeValid`) внутри CTE, чтобы избежать пересылки сырых координат в Python.
+2. **Краткосрочный буфер состояний:** Хранение актуальных событий строго за последний ~1 час (TTL). Данные старше 2 часов DROPаются атомарно на уровне метаданных.
+3. **In-memory брокер:** Использование `pg_notify` для мгновенного проброса событий между processor → core.
+
+**Следствия для разработки:**
+
+- **Производительность > Долговечность:** Жертвуем избыточной надёжностью (sync commits, сложные транзакции) в пользу скорости записи и чтения.
+- **Безопасность через изоляцию:** Отсутствие внешних портов и использование внутренней Docker-сети (`internal: true`) является достаточной защитой. Дефолтные/простые креды допустимы.
+- **Минимизация состояния:** Никаких Materialized Views для данных «последнего часа». Прямые запросы по BRIN/GiST индексам быстрее и надёжнее, чем `REFRESH CONCURRENTLY`.
+- **Упрощение очистки:** Очистка старых данных — атомарная операция уровня метаданных (`DROP TABLE partition`), а не построчный `DELETE`.
+
+---
+
 ### R-DB1: Единый источник гео-данных
 
 Таблица `geo` — ЕДИНСТВЕННЫЙ справочник гео-объектов (улицы, нас.пункты, POI). Старые таблицы `streets` и `settlements` удалены.
@@ -25,9 +43,9 @@ CREATE TABLE geo (
 
 **Правило:** Все geo-запросы идут ТОЛЬКО через таблицу `geo`.
 
-### R-DB2: Партиционирование events по дням
+### R-DB2: Партиционирование events по часам
 
-Таблица `events` партиционирована по `event_time` (RANGE). Автоматическое создание партиций:
+Таблица `events` партиционирована по `event_time` (RANGE) с шагом 1 час. Автоматическое создание партиций:
 
 ```sql
 CREATE TABLE events (
@@ -117,19 +135,19 @@ SELECT geom FROM geo WHERE id = $1;  -- может быть invalid
 |-----------|---------------|-------|
 | `random` | POINT | 0 совпадений (генерируется processor) |
 | `random_null` | NULL | Внутренний маркер: v2 не смог вычислить геометрию |
-| `single_match` | Любой | 1 совпадение (score >= 0.70) |
+| `single_match` | Любой | 1 совпадение (score >= порога, по умолчанию 0.70) |
 | `intersection` | POINT | Компактный кластер кандидатов (spread <= 40м), нет валидного street_segment |
 | `street_segment` | LINESTRING / MULTILINESTRING | Линия, имеющая связь с 2+ кандидатами (ST_Intersects или ST_DWithin <= 50м) |
-| `weighted_centroid` | POINT | 2+ объекта, scatter <= 1500м, нет линии/сегмента |
+| `weighted_centroid` | POINT | 2+ кандидатов, scatter <= 1500м, **нет ни одного пересечения** между кандидатами |
 
 **Правило:** `random`, `intersection`, `weighted_centroid` ВСЕГДА возвращают POINT (валидация через триггер). `street_segment` возвращает LINESTRING или MULTILINESTRING. `single_match` может быть любым типом. `random_null` имеет geom=NULL и НЕ проходит триггер — processor конвертирует в `random` перед INSERT.
 
 **Описание стратегий v2:**
-- `single_match`: выбирается один кандидат с highest score. При score >= 0.70 → участвует в гипотезах. При anti-list guard (сильный выброс >2000м) → принудительный single_match.
-- `intersection`: среднее координат всех кандидатов. Только если spread <= 40м. Не переопределяет валидный `street_segment`.
+- `single_match`: выбирается один кандидат с highest score. При score >= `p_score_threshold` (по умолчанию 0.70, настраивается через `GEO_CANDIDATE_MIN_SCORE`) → участвует в гипотезах. При anti-list guard (сильный выброс >3000м) → принудительный single_match.
+- `intersection`: среднее координат всех кандидатов. Только если spread <= 40м (или ≤200м + хотя бы одна линия). Не переопределяет валидный `street_segment`.
 - `street_segment`: сегмент главной линии между первым и последним якорем. Главная линия: connection_count >= 2, tiebreak по score desc, длина desc. MULTILINESTRING → longest component. Сегмент 50–2500м. Boundary protection: GREATEST(0.001, ...) / LEAST(0.999, ...).
-- `weighted_centroid`: Weighted centroid из пересечений пар (вес ×2.5) и центроидов кандидатов (вес ×1.0). Scatter <= 1500м. Не применяется если есть валидная линия.
-- `random_null`: 0 валидных кандидатов (score < 0.70 или невалидная геометрия). Processor генерирует случайную точку в зоне `question_overlay` (R-PR22).
+- `weighted_centroid`: Weighted centroid из пересечений пар (вес ×2.5) и центроидов кандидатов (вес ×1.0). Scatter <= 1500м. **Применяется ТОЛЬКО если ни одна пара кандидатов не пересекается** — любое пересечение даёт приоритет `intersection`/`street_segment`.
+- `random_null`: 0 валидных кандидатов (score < порога или невалидная геометрия). Processor генерирует случайную точку в зоне `question_overlay` (R-PR22).
 
 ### R-DB9: Валидация geometry ↔ strategy
 
@@ -156,7 +174,8 @@ CREATE OR REPLACE FUNCTION process_candidates_v2(
     p_geo_ids            INTEGER[]   DEFAULT NULL,
     p_scores             DOUBLE PRECISION[] DEFAULT NULL,
     p_texts              TEXT[]      DEFAULT NULL,
-    p_hint               VARCHAR     DEFAULT NULL
+    p_hint               VARCHAR     DEFAULT NULL,
+    p_score_threshold    DOUBLE PRECISION DEFAULT 0.70
 )
 RETURNS TABLE (
     result_strategy      TEXT,

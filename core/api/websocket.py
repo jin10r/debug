@@ -289,8 +289,12 @@ class WebSocketManager:
 
     async def broadcast_event(self, event_data: Dict):
         """
-        Broadcast a single GeoJSON feature to all connected clients.
-        event_data must be a GeoJSON Feature dict (not a FeatureCollection).
+        Broadcast a single event to all connected clients.
+        
+        Accepts either:
+          - Full GeoJSON Feature (type: 'Feature', properties, geometry)
+          - Minimal notification from processor: {"id": N, "layer": "...", "strategy": "..."}
+            (R-DB0: pg_notify sends minimal payloads; core fetches full data from DB)
         """
         if not self.connections:
             return
@@ -303,9 +307,23 @@ class WebSocketManager:
                 return
             event_data = features[0]
 
+        # R-DB0: Minimal notification from processor — fetch full Feature from DB
         if event_data.get('type') != 'Feature':
-            logger.warning(f"broadcast_event: unexpected data type: {event_data.get('type')}")
-            return
+            event_id = event_data.get('id')
+            if event_id and hasattr(self, 'db_request') and self.db_request:
+                try:
+                    full_feature = await self.db_request.get_event_by_id(event_id)
+                    if full_feature:
+                        event_data = full_feature
+                    else:
+                        logger.warning(f"broadcast_event: event {event_id} not found in DB")
+                        return
+                except Exception as e:
+                    logger.warning(f"broadcast_event: failed to fetch event {event_id}: {e}")
+                    return
+            else:
+                logger.warning(f"broadcast_event: unexpected data type and no db_request: {event_data}")
+                return
 
         layer = event_data.get('properties', {}).get('layer')
         payload = orjson.dumps({

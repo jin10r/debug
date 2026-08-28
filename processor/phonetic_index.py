@@ -80,11 +80,95 @@ class PhoneticIndex:
             return ()
         return tuple(s for s in self._morph.stem_tokens(tokens) if s)
 
+    # POS-теги, разрешённые для генерации падежных форм.
+    _PARADIGM_POS = frozenset({'NOUN', 'ADJF', 'ADJS'})
+    # pymorphy3-теги, указывающие на имя собственное / топоним.
+    _PROPER_TAGS = frozenset({'Geox', 'Name', 'Surn', 'Patr', 'Orgn'})
+
+    def _generate_paradigms(self, name: str) -> List[str]:
+        """Генерация падежных форм имени для surface-индекса (Tier 2).
+
+        Генерация ТОЛЬКО если хотя бы один токен имени — пропер (Geox/Name).
+        Иначе «Средняя» (прилагательное) генерирует «среднего/среднее» →
+        false positive на «среди среди машин».
+
+        Для каждого токена-пропера генерируются все падежные формы через
+        pymorphy3. Это позволяет ловить родительный падеж (Балковского →
+        Балковская) без ручных алиасов в geo.csv.
+
+        Возвращает список surface-фраз (lowercase, clean): базовая + падежные
+        формы каждого слова. Дубликаты отсекаются вызывающим кодом.
+        """
+        cleaned = clean(name)
+        if not cleaned:
+            return []
+        words = cleaned.split()
+        if not words:
+            return []
+
+        # Проверяем: есть ли хотя бы один пропер-токен в имени?
+        has_proper = False
+        for word in words:
+            try:
+                parses = self._morph._morph.parse(word)
+                if parses:
+                    tag_str = str(parses[0].tag)
+                    if any(tag in tag_str for tag in self._PROPER_TAGS):
+                        has_proper = True
+                        break
+            except Exception:
+                pass
+
+        # Если ни один токен не является пропером — не генерируем парадигму,
+        # чтобы не создавать false positives от прилагательных/глаголов.
+        if not has_proper:
+            return []
+
+        # Для каждого слова — собираем множество форм (нормальная + все падежи)
+        word_forms: List[List[str]] = []
+        for word in words:
+            forms = {word.lower()}
+            try:
+                parses = self._morph._morph.parse(word)
+                for p in parses:
+                    if not hasattr(p, 'tag') or not p.tag:
+                        continue
+                    pos = str(p.tag.POS) if p.tag.POS else ''
+                    if pos not in self._PARADIGM_POS:
+                        continue
+                    for form in p.lexeme:
+                        if form.word:
+                            forms.add(form.word.lower())
+            except Exception:
+                pass
+            word_forms.append(sorted(forms))
+
+        # Генерируем все комбинации падежных форм по словам
+        result = []
+        product = [[]]
+        for wf in word_forms:
+            capped = wf[:8]
+            product = [comb + [f] for comb in product for f in capped]
+            if len(product) > 200:
+                product = [[' '.join(forms[:1]) for forms in word_forms]]
+                break
+
+        for combo in product:
+            phrase = ' '.join(combo).strip()
+            if phrase and phrase not in result:
+                result.append(phrase)
+
+        return result[:50]
+
     def _entries_for_street(self, street_id: int, names: List[str]) -> Tuple[
         List[Tuple[Tuple[str, ...], PhoneticEntry]],  # (stem_tuple, entry)
         List[Tuple[str, PhoneticEntry]],              # (surface_phrase, entry)
     ]:
-        """Собрать индексные записи для одной улицы (дубликаты внутри отсекаются)."""
+        """Собрать индексные записи для одной улицы (дубликаты внутри отсекаются).
+
+        Для каждого алиаса генерируются падежные формы (paradigm), которые
+        добавляются как дополнительные surface-фразы в Tier 2 индекс.
+        """
         if not names:
             return [], []
         canonical = names[0]
@@ -110,6 +194,14 @@ class PhoneticIndex:
                 surface_pairs.append(
                     (surface_phrase, PhoneticEntry(street_id, canonical, surface_phrase))
                 )
+
+            # Paradigm: генерируем падежные формы и добавляем как surface-фразы
+            for paradigm in self._generate_paradigms(name):
+                if paradigm not in seen_surface:
+                    seen_surface.add(paradigm)
+                    surface_pairs.append(
+                        (paradigm, PhoneticEntry(street_id, canonical, paradigm))
+                    )
 
         return stem_pairs, surface_pairs
 

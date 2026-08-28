@@ -65,21 +65,14 @@ _INSERT_EVENT_SIMPLE = """
         RETURNING 1
     ),
     notify_call AS (
+        -- R-DB0: minimal payload to stay well under pg_notify 8KB limit.
+        -- Core fetches full Feature via targeted SELECT or CacheManager.
         SELECT pg_notify(
             'events_new',
             jsonb_build_object(
-                'type', 'Feature',
-                'geometry', ST_AsGeoJSON(i.geom)::jsonb,
-                'properties', jsonb_build_object(
-                    'id', i.id,
-                    'layer', i.layer,
-                    'strategy', i.strategy,
-                    'description', left(i.description, 200),
-                    'photo_url', i.photo_url,
-                    'matches', i.matches,
-                    'time', to_char(i.event_time AT TIME ZONE 'UTC',
-                                    'YYYY-MM-DD"T"HH24:MI:SS"+00:00"')
-                )
+                'id', i.id,
+                'layer', i.layer,
+                'strategy', i.strategy
             )::text
         )
         FROM inserted i
@@ -94,7 +87,8 @@ _INSERT_EVENT_FROM_CANDIDATES = """
         SELECT result_strategy, result_geom, result_matches,
                result_confidence, result_diagnostics
         FROM process_candidates_v2(
-            $6::int[], $7::double precision[], $8::text[], $9::varchar
+            $6::int[], $7::double precision[], $8::text[], $9::varchar,
+            $10::double precision, $11::double precision, $12::double precision
         )
     ),
     inserted AS (
@@ -119,21 +113,14 @@ _INSERT_EVENT_FROM_CANDIDATES = """
         RETURNING 1
     ),
     notify_call AS (
+        -- R-DB0: minimal payload to stay well under pg_notify 8KB limit.
+        -- Core fetches full Feature via targeted SELECT or CacheManager.
         SELECT pg_notify(
             'events_new',
             jsonb_build_object(
-                'type', 'Feature',
-                'geometry', ST_AsGeoJSON(i.geom)::jsonb,
-                'properties', jsonb_build_object(
-                    'id', i.id,
-                    'layer', i.layer,
-                    'strategy', i.strategy,
-                    'description', left(i.description, 200),
-                    'photo_url', i.photo_url,
-                    'matches', i.matches,
-                    'time', to_char(i.event_time AT TIME ZONE 'UTC',
-                                    'YYYY-MM-DD"T"HH24:MI:SS"+00:00"')
-                )
+                'id', i.id,
+                'layer', i.layer,
+                'strategy', i.strategy
             )::text
         )
         FROM inserted i
@@ -635,10 +622,15 @@ class ProcessorBot:
                                               geo_ids, geo_scores, geo_texts):
         """Вставка события с вызовом process_candidates_v2 для разрешения кандидатов."""
         scores_array = [float(s) for s in geo_scores]
+        geo_cfg = settings.geo if settings and hasattr(settings, 'geo') else None
+        min_score = geo_cfg.candidate_min_score if geo_cfg else 0.80
+        buffer_m = geo_cfg.intersection_buffer_m if geo_cfg else 100.0
+        max_scatter_m = geo_cfg.weighted_centroid_max_scatter_m if geo_cfg else 1000.0
         result = await self._run_insert(
             _INSERT_EVENT_FROM_CANDIDATES,
             (message_id, event_time, description, photo_path, layer,
-             geo_ids, scores_array, geo_texts, None),
+             geo_ids, scores_array, geo_texts, None,
+             min_score, buffer_m, max_scatter_m),
             message_id=message_id,
             work_mem='32MB',
         )

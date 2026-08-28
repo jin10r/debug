@@ -180,9 +180,9 @@ class TestEventOperations:
         ctx = ops.db.pool.acquire.return_value
         
         def row_getitem(self, key):
-            if key in (0, 'min'):
+            if key in (0, 'min', 'min_mid'):
                 return 1
-            if key in (1, 'max'):
+            if key in (1, 'max', 'max_mid'):
                 return 100
             raise KeyError(key)
         

@@ -146,14 +146,15 @@ geo_scores = geo_scores[:5]
 geo_texts = geo_texts[:5]
 ```
 
-**Вызов из Python (4 параметра, без центра/радиуса):**
+**Вызов из Python (5 параметров, порог из .env):**
 
 ```sql
 WITH pc AS (
     SELECT result_strategy, result_geom, result_matches,
            result_confidence, result_diagnostics
     FROM process_candidates_v2(
-        $6::int[], $7::double precision[], $8::text[], $9::varchar
+        $6::int[], $7::double precision[], $8::text[], $9::varchar,
+        $10::double precision  -- geo_candidate_min_score (из .env)
     )
 ),
 inserted AS (
@@ -364,7 +365,7 @@ processor:
 **Алгоритм принятия решений (PostGIS):**
 1. Наличие 2+ пересекающихся LINESTRING → `intersection` (POINT).
 2. Наличие «главной» LINESTRING, имеющей пространственную связь (пересечение или `ST_DWithin` ≤ 50м) с 2+ другими кандидатами → `street_segment` (LINESTRING).
-3. Отсутствие пересечений, компактный кластер (scatter ≤ 1500м) → `weighted_centroid` (POINT).
+3. **Ни одна пара кандидатов не пересекается**, компактный кластер (scatter ≤ 1500м) → `weighted_centroid` (POINT). Если хотя бы одна пара пересекается → приоритет `intersection` или `street_segment`.
 4. 1 кандидат → `single_match`.
 5. 0 кандидатов или scatter > 1500м → `random`.
 
@@ -374,6 +375,34 @@ processor:
 - Дроп кандидатов на основе контекста. Если `GeoMatcher` нашел топоним с `score >= threshold`, он передается в SQL.
 
 **Принцип:** «Если матчер нашел топоним, он участвует в геометрическом расчете. Топология OSM сама расставит точки над i`.
+
+### R-PR29: POS-filter для sliding-window (отключён по умолчанию)
+
+POS-фильтр блокирует окна, состоящие **целиком** из ТОЧНО опознанных как НЕ-топоним токенов (VERB, ADVB, PREP, INTJ, CONJ, PRCL, INFN, PRTF, PRTS). OOV/GRND/NPRO пропускаются — pymorphy3 тегает неизвестные слова ошибочно.
+
+```python
+_BLOCKED_POS = frozenset({'VERB', 'ADVB', 'PREP', 'INTJ', 'CONJ', 'PRCL', 'INFN', 'PRTF', 'PRTS'})
+
+# Блокировка: ТОЛЬКО если ВСЕ токены в окне заблокированы
+if pos_enabled and clean_lemmas is not None:
+    if all(lemma.pos in self._BLOCKED_POS for lemma in slice_l if lemma.pos):
+        continue
+```
+
+**Настройка:** `GEO_ENABLE_POS_FILTER=true` в `.env`. По умолчанию **ВЫКЛ** — pymorphy3 тегает OOV-пропера как VERB/GRND, что даёт false negatives.
+
+### R-PR30: Автоматическая генерация падежных форм (paradigm)
+
+При построении PhoneticIndex для каждого geo-объекта с пропер-тегом (Geox/Name) генерируются все падежные формы через pymorphy3 lexeme. Формы добавляются как surface-фразы в Tier 2 индекс.
+
+```python
+# Только для пропров: иначе «Средняя» → «среднего/среднее» → false positive
+has_proper = any('Geox' in str(p.tag) or 'Name' in str(p.tag) for p in parses)
+if not has_proper:
+    return []  # skip paradigm generation
+```
+
+**Эффект:** «Балковского» → «Балковская» без ручных алиасов в geo.csv.
 
 ---
 

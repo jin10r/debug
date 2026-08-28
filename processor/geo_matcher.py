@@ -195,10 +195,23 @@ class GeoMatcher:
             keep_l.append(l)
         return keep_t, keep_l
 
+    # POS-теги pymorphy3, допустимые для гео-кандидатов.
+    # NPRO + is_proper: pymorphy3 часто тегает OOV-пропера как местоимения
+    # Фильтруем ТОЛЬКО то, что pymorphy3 УВЕРЕННО опознал как НЕ-топоним
+    # (глаголы, наречия, предлоги). OOV/NPRO/GRND пропускаем — pymorphy3
+    # использует GRND как fallback для неизвестных слов («Гаванная»→GRND).
+    _BLOCKED_POS = frozenset({'VERB', 'ADVB', 'PREP', 'INTJ', 'CONJ', 'PRCL', 'INFN', 'PRTF', 'PRTS'})
+
     def _candidates_sliding_window(
-        self, clean_tokens: List[Token], clean_stems: List[str], max_window: Optional[int] = None,
+        self, clean_tokens: List[Token], clean_stems: List[str],
+        clean_lemmas: Optional[List['Lemma']] = None,
+        max_window: Optional[int] = None,
     ) -> List[Candidate]:
-        """Генерация N-грамм с предфильтрацией: начинаем только с якорей."""
+        """Генерация N-грамм с предфильтрацией: начинаем только с якорей.
+
+        Если enable_pos_filter=True, окна целиком состоящие из глаголов/
+        наречий/предлогов отбрасываются — они не могут быть топонимами.
+        """
         if max_window is None:
             max_window = (
                 settings.similarity.max_sliding_window
@@ -215,6 +228,11 @@ class GeoMatcher:
             sig_tokens.append(t)
             sig_stems.append(s)
         clean_tokens, clean_stems = sig_tokens, sig_stems
+        # POS-filter: разрешённые позиции для начала окна
+        pos_enabled = (
+            settings.similarity.enable_pos_filter
+            if settings and settings.similarity else True
+        )
         if not clean_tokens:
             return []
         out = []
@@ -247,6 +265,16 @@ class GeoMatcher:
                 slice_s = clean_stems[start_i:end_i + 1]
                 surface_text = ' '.join(t.text.lower() for t in slice_t)
                 stem_tuple = tuple(s for s in slice_s if s)
+                # POS-guard: пропускаем окна, состоящие целиком из
+                # ТОЧНО опознанных как НЕ-топоним (VERB, ADVB, PREP...).
+                # OOV/NPRO/пустой POS пропускаем — не рискуем потерять топоним.
+                if pos_enabled and clean_lemmas is not None:
+                    slice_l = clean_lemmas[start_i:end_i + 1]
+                    if slice_l and all(
+                        lemma.pos in self._BLOCKED_POS
+                        for lemma in slice_l if lemma.pos
+                    ):
+                        continue
                 out.append((surface_text, stem_tuple, start_i, end_i, end_i - start_i + 1, False, is_anchored))
         return out
 
@@ -396,12 +424,12 @@ class GeoMatcher:
         if not tokens or not lemmas:
             return []
 
-        clean_tokens, _clean_lemmas = self._strip_noise(tokens, lemmas)
+        clean_tokens, clean_lemmas = self._strip_noise(tokens, lemmas)
         if not clean_tokens:
             return []
 
         clean_stems = self._morph.stem_tokens(clean_tokens)
-        candidates = self._candidates_sliding_window(clean_tokens, clean_stems)
+        candidates = self._candidates_sliding_window(clean_tokens, clean_stems, clean_lemmas)
         if not candidates:
             return []
 

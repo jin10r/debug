@@ -190,6 +190,12 @@ class SimilarityConfig:
     # Типы объектов, для которых разрешён midpoint.
     midpoint_types: tuple = ('street', 'market', 'station', 'park', 'landmark')
 
+    # Включить POS-фильтрацию (pymorphy3) для sliding-window кандидатов.
+    # По умолчанию ВЫКЛ: pymorphy3 тегает OOV-пропера как VERB/GRND/NPRO,
+    # что вызывает false negatives для топонимов. Включать ТОЛЬКО если geo-таблица
+    # состоит из слов из словаря pymorphy3.
+    enable_pos_filter: bool = False
+
     # Токены-пунктуация: отфильтровываются из tokens до поиска (_strip_noise).
     punctuation_tokens: tuple = (
         '#', '/', ',', '.', '(', ')', '!', '?', '-', '«', '»', '"', ':', ';',
@@ -197,6 +203,26 @@ class SimilarityConfig:
 
     def get_layer_keywords(self, layer: str) -> tuple:
         return DEFAULT_LAYER_KEYWORDS.get(layer, ())
+
+
+@dataclass
+class GeoConfig:
+    """Пороги гео-арбитража process_candidates_v2.
+
+    Все пространственные лимиты вынесены из SQL-функции в .env.
+    Изменение значений НЕ требует пересборки Docker-образов.
+    """
+    # Минимальный score кандидата для передачи в process_candidates_v2 (0-1).
+    # Кандидаты с score < этого порога отбрасываются ДО геометрического арбитража.
+    candidate_min_score: float = 0.80
+
+    # Единый буфер пересечения (метры) для построения графа связных компонент.
+    # ST_DWithin(geom_a, geom_b, buffer_m). Одинаков для Point, LineString, Polygon.
+    intersection_buffer_m: float = 100.0
+
+    # Максимальный scatter (метры) для weighted_centroid.
+    # Если scatter > этого значения, гипотеза отклоняется → fallback на single_match.
+    weighted_centroid_max_scatter_m: float = 1000.0
 
 
 @dataclass
@@ -261,6 +287,7 @@ class Settings:
     bot: BotConfig
     jwt: Optional[JWTConfig] = None
     similarity: SimilarityConfig = field(default_factory=SimilarityConfig)
+    geo: GeoConfig = field(default_factory=GeoConfig)
     layers: LayerConfig = field(default_factory=LayerConfig)
     parser: ParserConfig = field(default_factory=ParserConfig)
     processor: ProcessorConfig = field(default_factory=ProcessorConfig)

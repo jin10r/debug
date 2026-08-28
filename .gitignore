@@ -116,3 +116,15 @@ evvents_exporrrtt.csv
 # OSM source data (large)
 *.osm.pbf
 web/assets/data/*.geojson
+
+# Test coverage reports
+web/coverage/
+
+# Local CI cache
+.gitlab-ci-local/
+
+# Test data (large, local)
+live_messages.txt
+
+# Reference docs (not project-specific)
+**/*.pdf

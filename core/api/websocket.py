@@ -1,6 +1,6 @@
 """WebSocket API handlers for real-time event updates"""
 import asyncio
-import json
+import orjson
 import logging
 from typing import Dict, Set, Optional
 from datetime import datetime, timezone
@@ -9,6 +9,10 @@ from core.db.dbconnect import Request
 from common.settings import settings
 from core.middlewares.auth import verify_jwt_token
 from core.utils.telegram_validation import validate_telegram_webapp_data
+from core.metrics import (
+    ws_connections_total, ws_connections_rejected_total,
+    ws_messages_sent_total, ws_broadcast_duration_seconds
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +41,7 @@ class WebSocketManager:
         self.connections: Set[web.WebSocketResponse] = set()
         self.broadcast_lock = asyncio.Lock()
         self._ping_counters: Dict[web.WebSocketResponse, list] = {}  # Rate limiting
+        self._ws_subscriptions: Dict[web.WebSocketResponse, Set[str]] = {}  # Layer subscriptions
         self._cleanup_task: Optional[asyncio.Task] = None
 
     async def start_cleanup_task(self):
@@ -68,9 +73,12 @@ class WebSocketManager:
         """
         if len(self.connections) >= MAX_CONNECTIONS:
             logger.warning(f"WebSocket connection rejected: limit {MAX_CONNECTIONS} reached")
+            ws_connections_rejected_total.inc()
             return False
         self.connections.add(ws)
         self._ping_counters[ws] = []
+        self._ws_subscriptions[ws] = set()
+        ws_connections_total.inc()
         logger.info(f"WebSocket connection registered. Total: {len(self.connections)}")
         return True
 
@@ -94,6 +102,7 @@ class WebSocketManager:
         if ws in self.connections:
             self.connections.discard(ws)
             self._ping_counters.pop(ws, None)
+            self._ws_subscriptions.pop(ws, None)
         logger.debug(f"WebSocket connection unregistered. Total: {len(self.connections)}")
 
     async def close_all(self) -> None:
@@ -114,35 +123,53 @@ class WebSocketManager:
                 pass
         self.connections.clear()
         self._ping_counters.clear()
+        self._ws_subscriptions.clear()
 
-    async def _broadcast_payload(self, payload: str) -> int:
-        """Send payload string to all connected clients in chunks; remove dead ones."""
+    async def _broadcast_payload(self, payload, layer: str = None) -> int:
+        """Send payload to connected clients, optionally filtered by layer subscription.
+
+        Optimized: snapshot connections once (fast copy), send to all clients in
+        parallel without holding a lock, then batch-unregister failed connections
+        under a brief lock. This allows multiple concurrent broadcasts to proceed
+        in parallel instead of serializing on broadcast_lock.
+        """
         snapshot = list(self.connections)
         if not snapshot:
             return 0
 
-        async def _send(ws: web.WebSocketResponse) -> bool:
+        async def _send(ws: web.WebSocketResponse) -> Optional[web.WebSocketResponse]:
+            """Send payload to one client. Returns ws on failure (for batch unregister), None on success."""
             try:
-                await asyncio.wait_for(ws.send_str(payload), timeout=SEND_TIMEOUT)
-                return True
+                subscriptions = self._ws_subscriptions.get(ws, set())
+                if layer is not None and subscriptions and layer not in subscriptions:
+                    return None  # Skipped by filter, not a failure
+                await asyncio.wait_for(ws.send_bytes(payload), timeout=SEND_TIMEOUT)
+                return None
             except Exception as e:
                 logger.debug(f"Broadcast send error/timeout: {e}")
-                return False
+                return ws  # Return ws for batch unregister
 
-        success = 0
-        CHUNK_SIZE = 100
+        # Send to ALL clients in parallel — no lock held during I/O.
+        # snapshot is a point-in-time copy; new connections added during
+        # send are simply missed (will get the next broadcast).
+        results = await asyncio.gather(*[_send(ws) for ws in snapshot], return_exceptions=True)
 
-        async with self.broadcast_lock:
-            for i in range(0, len(snapshot), CHUNK_SIZE):
-                chunk = snapshot[i:i + CHUNK_SIZE]
-                results = await asyncio.gather(*[_send(ws) for ws in chunk], return_exceptions=True)
+        # Collect failed connections for batch unregister
+        failed = [r for r in results if isinstance(r, web.WebSocketResponse)]
+        success = len(snapshot) - len(failed)
 
-                for ws, ok in zip(chunk, results):
-                    if ok is True:
-                        success += 1
-                    else:
-                        await self.unregister_connection(ws)
+        # Batch-unregister failed connections under a brief lock
+        if failed:
+            async with self.broadcast_lock:
+                for ws in failed:
+                    self.connections.discard(ws)
+                    self._ping_counters.pop(ws, None)
+                    self._ws_subscriptions.pop(ws, None)
 
+        # Track broadcast metrics
+        ws_messages_sent_total.inc(success)
+        if layer:
+            ws_broadcast_duration_seconds.labels(layer=layer).observe(0)
         return success
 
     async def send_snapshot(self, events_data: dict, channel: str = 'events_new'):
@@ -151,7 +178,7 @@ class WebSocketManager:
         if not features or not self.connections:
             return
 
-        payload = json.dumps({
+        payload = orjson.dumps({
             'type': 'events_snapshot',
             'data': {
                 'type': 'FeatureCollection',
@@ -161,7 +188,7 @@ class WebSocketManager:
         })
         await self._broadcast_payload(payload)
 
-        end_payload = json.dumps({
+        end_payload = orjson.dumps({
             'type': 'events_snapshot_end',
             'count': len(features),
             'timestamp': datetime.now(timezone.utc).isoformat(),
@@ -202,7 +229,7 @@ class WebSocketManager:
 
         try:
             if resync:
-                await ws.send_str(json.dumps({
+                await ws.send_bytes(orjson.dumps({
                     'type': 'resync_required',
                     'timestamp': datetime.now(timezone.utc).isoformat()
                 }))
@@ -237,7 +264,7 @@ class WebSocketManager:
                 }
                 try:
                     await asyncio.wait_for(
-                        ws.send_str(json.dumps(message)), timeout=SEND_TIMEOUT
+                        ws.send_bytes(orjson.dumps(message)), timeout=SEND_TIMEOUT
                     )
                 except Exception as e:
                     logger.warning(f"Failed to send feature to client: {e}")
@@ -248,7 +275,7 @@ class WebSocketManager:
             # reconnect catch-up); only live pushes after it raise per-event
             # notifications.
             try:
-                await ws.send_str(json.dumps({
+                await ws.send_bytes(orjson.dumps({
                     'type': 'events_snapshot_end',
                     'count': len(features),
                     'timestamp': datetime.now(timezone.utc).isoformat()
@@ -279,13 +306,14 @@ class WebSocketManager:
             logger.warning(f"broadcast_event: unexpected data type: {event_data.get('type')}")
             return
 
-        payload = json.dumps({
+        layer = event_data.get('properties', {}).get('layer')
+        payload = orjson.dumps({
             'type': 'feature',
             'data': event_data,
             'timestamp': datetime.now(timezone.utc).isoformat()
         })
 
-        success = await self._broadcast_payload(payload)
+        success = await self._broadcast_payload(payload, layer=layer)
         logger.info(f"Feature broadcasted: {success}/{len(self.connections)} clients")
 
     async def broadcast_events_cleaned(self, data: Dict):
@@ -293,7 +321,7 @@ class WebSocketManager:
         if not self.connections:
             return
 
-        payload = json.dumps({
+        payload = orjson.dumps({
             'type': 'events_cleaned',
             'data': data,
             'timestamp': datetime.now(timezone.utc).isoformat()
@@ -406,26 +434,26 @@ async def websocket_handler(request: web.Request):
                     # Per-message size guard
                     if len(msg.data) > WS_MAX_MSG_BYTES:
                         logger.warning(f"WebSocket message too large from {request.remote}")
-                        await ws.send_str(json.dumps({
+                        await ws.send_bytes(orjson.dumps({
                             'type': 'error',
                             'message': 'message too large'
                         }))
                         continue
 
-                    data = json.loads(msg.data)
+                    data = orjson.loads(msg.data)
                     message_type = data.get('type')
 
                     if message_type == 'ping':
                         # Rate limiting для защиты от спама
                         if not ws_manager._check_rate_limit(ws):
                             logger.warning("WebSocket ping rate limit exceeded")
-                            await ws.send_str(json.dumps({
+                            await ws.send_bytes(orjson.dumps({
                                 'type': 'error',
                                 'message': 'rate limit exceeded'
                             }))
                             continue
                         
-                        await ws.send_str(json.dumps({
+                        await ws.send_bytes(orjson.dumps({
                             'type': 'pong',
                             'timestamp': datetime.now(timezone.utc).isoformat()
                         }))
@@ -439,18 +467,32 @@ async def websocket_handler(request: web.Request):
                             # сам без cancel(). Нет race condition между
                             # проверкой done() и cancel().
                             _auth_event.set()
-                            await ws.send_str(json.dumps({'type': 'auth_ok'}))
+                            await ws.send_bytes(orjson.dumps({'type': 'auth_ok'}))
                         else:
                             logger.warning("WebSocket auth failed — closing connection")
-                            await ws.send_str(json.dumps(
+                            await ws.send_bytes(orjson.dumps(
                                 {'type': 'error', 'message': 'authentication failed'}
                             ))
                             await ws.close(code=1008, message=b'auth failed')  # policy violation
                             break
 
+                    elif message_type == 'subscribe_layers':
+                        if not authenticated:
+                            await ws.send_bytes(orjson.dumps({'type': 'error', 'message': 'not authenticated'}))
+                            continue
+                        layers = data.get('layers') or []
+                        if not isinstance(layers, list):
+                            await ws.send_bytes(orjson.dumps({'type': 'error', 'message': 'layers must be a list'}))
+                            continue
+                        ws_manager._ws_subscriptions[ws] = set(layers)
+                        await ws.send_bytes(orjson.dumps({
+                            'type': 'subscribed',
+                            'layers': layers,
+                        }))
+
                     elif message_type == 'get_events':
                         if not authenticated:
-                            await ws.send_str(json.dumps({'type': 'error', 'message': 'not authenticated'}))
+                            await ws.send_bytes(orjson.dumps({'type': 'error', 'message': 'not authenticated'}))
                             continue
 
                         since_timestamp = data.get('since_timestamp')  # ISO string or null
@@ -478,7 +520,7 @@ async def websocket_handler(request: web.Request):
                             ws, since_timestamp, since_id, since_message_id
                         )
 
-                except json.JSONDecodeError:
+                except orjson.JSONDecodeError:
                     logger.warning("Invalid JSON received from WebSocket client")
                 except Exception as e:
                     logger.error(f"Error processing WebSocket message: {e}", exc_info=True)

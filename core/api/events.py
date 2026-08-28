@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import hashlib
+import orjson
 from datetime import datetime, timezone
 
 from aiohttp import web
@@ -13,6 +14,12 @@ from core.utils.cache import CacheManager
 from common.settings import settings
 
 logger = logging.getLogger(__name__)
+
+# ETag cache: avoids re-serializing the full response just to compute MD5.
+# Key: (version, time_filter, layers_tuple) → etag string.
+# invalidated when events_meta.version changes (INSERT into events).
+_etag_cache: dict = {}
+_ETAG_CACHE_MAX = 256
 
 
 async def get_events_status_handler(request: web.Request):
@@ -200,11 +207,10 @@ async def get_events_handler(request: web.Request):
                 time_interval_minutes=filters.time_filter,
                 layers=filters.layers or None
             )
-            cached_response = json.dumps(geojson_data)
+            cached_response = geojson_data
             
             # Cache result with optimized TTL
             if cache:
-                # Старые события (>5 минут) кешируются дольше
                 ttl = 60 if (filters.time_filter or 0) > 5 else 30
                 await cache.set_events_geojson(
                     filters.time_filter,
@@ -213,8 +219,20 @@ async def get_events_handler(request: web.Request):
                     ttl=ttl
                 )
         
-        # Generate ETag from cached response
-        etag = hashlib.md5(cached_response.encode(), usedforsecurity=False).hexdigest()
+        # Generate ETag from cached response (cached by version to avoid re-serialization)
+        meta = await db_request.get_events_meta()
+        version = meta.get('version', 0)
+        etag_key = (version, filters.time_filter, tuple(sorted(filters.layers)) if filters.layers else None)
+        etag = _etag_cache.get(etag_key)
+        if etag is None:
+            etag = hashlib.md5(
+                orjson.dumps(cached_response, option=orjson.OPT_SORT_KEYS),
+                usedforsecurity=False
+            ).hexdigest()
+            _etag_cache[etag_key] = etag
+            # Bounded cache: evict oldest entries when full
+            while len(_etag_cache) > _ETAG_CACHE_MAX:
+                _etag_cache.pop(next(iter(_etag_cache)))
         client_etag = request.headers.get('If-None-Match')
         
         # Return 304 Not Modified if ETag matches
@@ -224,7 +242,7 @@ async def get_events_handler(request: web.Request):
         
         # Return full response with ETag
         logger.debug(f"ETag mismatch or new request - returning full response (ETag: {etag})")
-        response_data = {'data': json.loads(cached_response)}
+        response_data = {'data': cached_response}
         return web.json_response(
             response_data,
             headers={
@@ -246,9 +264,8 @@ async def get_geo_handler(request: web.Request):
     if cache:
         cached = await cache.get_geo_geojson()
         if cached:
-            return web.Response(
-                text=cached,
-                content_type='application/json',
+            return web.json_response(
+                cached,
                 headers={
                     'Cache-Control': 'public, max-age=3600',
                     'X-Cache': 'HIT'
@@ -264,9 +281,8 @@ async def get_geo_handler(request: web.Request):
         if cache:
             await cache.set_geo_geojson(geojson_data, ttl=3600)
         
-        return web.Response(
-            text=geojson_data,
-            content_type='application/json',
+        return web.json_response(
+            geojson_data,
             headers={
                 'Cache-Control': 'public, max-age=3600',
                 'X-Cache': 'MISS'

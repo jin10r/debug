@@ -8,6 +8,7 @@ Structured JSON logging configuration (Docker-optimized version)
 import logging
 import json
 import sys
+import time
 import uuid
 import os
 import asyncio
@@ -197,7 +198,6 @@ else:
         )
 
         # Time the request
-        import time
         start_time = time.time()
 
         try:
@@ -235,6 +235,21 @@ else:
                     'duration_ms': round(duration * 1000, 2)
                 }
             )
+
+            # Prometheus metrics
+            try:
+                from core.metrics import http_requests_total, http_request_duration_seconds
+                http_requests_total.labels(
+                    method=request.method,
+                    path=request.path,
+                    status=status
+                ).inc()
+                http_request_duration_seconds.labels(
+                    method=request.method,
+                    path=request.path
+                ).observe(duration)
+            except Exception:
+                pass
 
             # Restore ContextVar to parent context value
             _request_id_var.reset(token)

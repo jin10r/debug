@@ -77,6 +77,46 @@ services:
     logging: *default-logging
 
   # =============================================================================
+  # PgBouncer - connection pooler (reduces PostgreSQL backend processes)
+  # =============================================================================
+  pgbouncer:
+    image: pgbouncer:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.pgbouncer
+    container_name: pgbouncer
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - db
+    expose:
+      - "6432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 6432 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 64M
+        reservations:
+          cpus: '0.1'
+          memory: 32M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+    logging: *default-logging
+
+  # =============================================================================
   # Parser - Telegram клиент (kurigram) + предобработка текста + фото
   # =============================================================================
   parser:
@@ -89,6 +129,7 @@ services:
     stop_grace_period: 60s
     environment:
       <<: *pg-env
+      POSTGRES_HOST: pgbouncer
       PROXY_HOST: ${PROXY_HOST:-}
       PROXY_PORT: ${PROXY_PORT:-1080}
       PROXY_SCHEME: ${PROXY_SCHEME:-socks5}
@@ -100,7 +141,7 @@ services:
       - ./parser/session.session:/app/parser/session.session:rw
       - events_media:/media/events:rw
     depends_on:
-      postgres:
+      pgbouncer:
         condition: service_healthy
     networks:
       - backend
@@ -142,9 +183,10 @@ services:
     stop_grace_period: 30s
     environment:
       <<: *pg-env
+      POSTGRES_HOST: pgbouncer
     <<: *dns
     depends_on:
-      postgres:
+      pgbouncer:
         condition: service_healthy
     networks:
       - backend
@@ -188,6 +230,7 @@ services:
     stop_grace_period: 30s
     environment:
       <<: *pg-env
+      POSTGRES_HOST: pgbouncer
       BOT_TOKEN: ${BOT_TOKEN}
       # Стабильный секрет подписи JWT (≥32 симв.): токены переживают рестарт
       # core и общие для всех реплик. Если не задан — settings генерирует
@@ -203,7 +246,7 @@ services:
     volumes:
       - events_media:/media/events:ro
     depends_on:
-      postgres:
+      pgbouncer:
         condition: service_healthy
     networks:
       - frontend
@@ -288,6 +331,156 @@ services:
     logging: *default-logging
 
 # =============================================================================
+  # =============================================================================
+  # postgres_exporter - PostgreSQL metrics collector
+  # =============================================================================
+  postgres_exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:latest
+    container_name: postgres_exporter
+    profiles:
+      - monitoring
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-postgres}?sslmode=disable"
+      PG_EXPORTER_DB_QUERIES_CONFIG_PATH: /etc/postgres_exporter/custom-queries.yml
+    volumes:
+      - ./postgres/monitoring/postgres_exporter.yml:/etc/postgres_exporter/custom-queries.yml:ro
+    networks:
+      - db
+    expose:
+      - "9187"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+    restart: unless-stopped
+    logging: *default-logging
+
+  # =============================================================================
+  # Prometheus - metrics storage and scraping
+  # =============================================================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    profiles:
+      - monitoring
+    volumes:
+      - ./postgres/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+    networks:
+      - backend
+      - db
+    expose:
+      - "9090"
+    depends_on:
+      - postgres_exporter
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    restart: unless-stopped
+    logging: *default-logging
+
+  # =============================================================================
+  # Grafana - metrics visualization
+  # =============================================================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    profiles:
+      - monitoring
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./postgres/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    networks:
+      - backend
+    expose:
+      - "3000"
+    depends_on:
+      - prometheus
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+    restart: unless-stopped
+    logging: *default-logging
+
+  # =============================================================================
+  # Loki - log aggregation
+  # =============================================================================
+  loki:
+    image: grafana/loki:latest
+    container_name: loki
+    profiles:
+      - monitoring
+    volumes:
+      - ./postgres/monitoring/loki.yml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - backend
+    expose:
+      - "3100"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+    restart: unless-stopped
+    logging: *default-logging
+
+  # =============================================================================
+  # Promtail - Docker log collector
+  # =============================================================================
+  promtail:
+    image: grafana/promtail:latest
+    container_name: promtail
+    profiles:
+      - monitoring
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./postgres/monitoring/promtail.yml:/etc/promtail/config.yml:ro
+    command: -config.file=/etc/promtail/config.yml
+    networks:
+      - backend
+    depends_on:
+      - loki
+    deploy:
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: 128M
+        reservations:
+          cpus: '0.05'
+          memory: 32M
+    restart: unless-stopped
+    logging: *default-logging
+
 # Networks
 # =============================================================================
 networks:
@@ -306,4 +499,10 @@ volumes:
   postgres_data:
     driver: local
   events_media:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  loki_data:
     driver: local

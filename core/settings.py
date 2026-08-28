@@ -371,6 +371,7 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
                 telegram_webview_validation=telegram_webview_validation,
             ),
             db=DatabaseConfig(
+                host=env.str("POSTGRES_HOST", "postgres"),
                 user=env.str("POSTGRES_USER", "postgres"),
                 password=_resolve_postgres_password(env),
                 database=env.str("POSTGRES_DB", "postgres"),

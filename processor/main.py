@@ -1,9 +1,12 @@
 """Processor — NLP pipeline: потребляет из pending_events, обрабатывает, пишет в events."""
 
 import asyncio
+import gc
 import json as json_lib
 import logging
+import math
 import os
+import random
 import signal
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -338,6 +341,7 @@ class ProcessorBot:
                 self.health_server._memory_warning_sent = False
             # R-PR2: не даём _worker_tasks расти при рестартах воркеров.
             self._worker_tasks = [t for t in self._worker_tasks if not t.done()]
+            self._write_heartbeat(self)
             await asyncio.sleep(1)
 
     def _spawn_worker(self) -> asyncio.Task:
@@ -411,10 +415,14 @@ class ProcessorBot:
         msg_id = row['message_id']
 
         async def _try_process():
+            start_t = datetime.now(timezone.utc)
             result = await self._process_row(row)
             if result:
                 await self._mark_done(row['id'])
                 self._messages_processed += 1
+                self.health_server.record_message_processed(
+                    (datetime.now(timezone.utc) - start_t).total_seconds()
+                )
                 logger.info(
                     f"✅ Message {msg_id} processed: "
                     f"event_id={result['event_id']}, layer={result['layer']}, "
@@ -422,6 +430,7 @@ class ProcessorBot:
                 )
             else:
                 await self._mark_done(row['id'])
+                self.health_server.record_message_processed(0)
                 logger.debug(f"Message {msg_id}: duplicate or no geometry")
 
         try:
@@ -433,6 +442,7 @@ class ProcessorBot:
             )
         except Exception as e:
             self._errors += 1
+            self.health_server.record_error()
             await self._mark_error(row['id'], str(e))
             logger.error(f"Message {msg_id}: failed permanently: {e}")
 
@@ -630,6 +640,7 @@ class ProcessorBot:
             (message_id, event_time, description, photo_path, layer,
              geo_ids, scores_array, geo_texts, None),
             message_id=message_id,
+            work_mem='32MB',
         )
         if result is None:
             result = await self._insert_event(
@@ -640,10 +651,15 @@ class ProcessorBot:
             )
         return result
 
-    async def _run_insert(self, sql, params, *, message_id):
+    async def _run_insert(self, sql, params, *, message_id, work_mem: str = None):
         """Выполнение SQL-запроса вставки события и возврат результата."""
         async with self.db.pool.acquire() as c:
-            row = await c.fetchrow(sql, *params)
+            if work_mem:
+                async with c.transaction():
+                    await c.execute(f"SET LOCAL work_mem = '{work_mem}'")
+                    row = await c.fetchrow(sql, *params)
+            else:
+                row = await c.fetchrow(sql, *params)
         if row is None:
             return None
         return {
@@ -654,8 +670,6 @@ class ProcessorBot:
 
     def _random_point(self):
         """Генерация случайной точки в радиусе от центра для fallback-событий."""
-        import math
-        import random
         if settings and hasattr(settings, 'question_overlay'):
             qo = settings.question_overlay
             center_lat, center_lng, radius = qo.center_lat, qo.center_lon, qo.radius
@@ -684,7 +698,6 @@ class ProcessorBot:
 
     def _apply_memory_fallback(self):
         """Graceful degradation: gc, shrink LRU."""
-        import gc
         gc.collect()
         if self.morph:
             try:
@@ -692,6 +705,42 @@ class ProcessorBot:
                 logger.info("Morphology LRU shrunk to 5000 (memory fallback)")
             except Exception as e:
                 logger.warning(f"Failed to shrink Morphology cache: {e}")
+
+    def get_rss_mb(self) -> float:
+        """Возвращает RSS процесса в МБ."""
+        try:
+            with open('/proc/self/status', 'r') as f:
+                for line in f:
+                    if line.startswith('VmRSS:'):
+                        return int(line.split()[1]) / 1024
+        except Exception:
+            pass
+        return -1.0
+
+    async def _get_pending_queue_depth(self) -> int:
+        """Возвращает глубину очереди pending_events."""
+        try:
+            row = await self.db.pool.fetchrow(
+                "SELECT count(*) AS cnt FROM pending_events WHERE status = 'pending'"
+            )
+            return row['cnt'] if row else 0
+        except Exception:
+            return -1
+
+    @staticmethod
+    def _write_heartbeat(processor: 'ProcessorBot'):
+        """Записать enriched heartbeat в /tmp/processor_heartbeat."""
+        try:
+            rss_mb = processor.get_rss_mb()
+            lru_size = processor.morph.cache_size() if hasattr(processor.morph, 'cache_size') else -1
+            with open('/tmp/processor_heartbeat', 'w') as f:  # nosec B108 — container /tmp, Docker healthcheck
+                f.write(json_lib.dumps({
+                    'timestamp': int(datetime.now(timezone.utc).timestamp()),
+                    'rss_mb': round(rss_mb, 1),
+                    'lru_size': lru_size,
+                }))
+        except Exception:
+            pass
 
     async def shutdown(self):
         """Корректное завершение: остановка воркеров, закрытие соединений."""

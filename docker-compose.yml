@@ -77,46 +77,6 @@ services:
     logging: *default-logging
 
   # =============================================================================
-  # PgBouncer - connection pooler (reduces PostgreSQL backend processes)
-  # =============================================================================
-  pgbouncer:
-    image: pgbouncer:latest
-    build:
-      context: .
-      dockerfile: Dockerfile.pgbouncer
-    container_name: pgbouncer
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks:
-      - db
-    expose:
-      - "6432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 6432 || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    deploy:
-      resources:
-        limits:
-          cpus: '0.25'
-          memory: 64M
-        reservations:
-          cpus: '0.1'
-          memory: 32M
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    restart: unless-stopped
-    logging: *default-logging
-
-  # =============================================================================
   # Parser - Telegram клиент (kurigram) + предобработка текста + фото
   # =============================================================================
   parser:
@@ -129,7 +89,7 @@ services:
     stop_grace_period: 60s
     environment:
       <<: *pg-env
-      POSTGRES_HOST: pgbouncer
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
       PROXY_HOST: ${PROXY_HOST:-}
       PROXY_PORT: ${PROXY_PORT:-1080}
       PROXY_SCHEME: ${PROXY_SCHEME:-socks5}
@@ -141,7 +101,7 @@ services:
       - ./parser/session.session:/app/parser/session.session:rw
       - events_media:/media/events:rw
     depends_on:
-      pgbouncer:
+      postgres:
         condition: service_healthy
     networks:
       - backend
@@ -183,10 +143,10 @@ services:
     stop_grace_period: 30s
     environment:
       <<: *pg-env
-      POSTGRES_HOST: pgbouncer
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
     <<: *dns
     depends_on:
-      pgbouncer:
+      postgres:
         condition: service_healthy
     networks:
       - backend
@@ -230,7 +190,7 @@ services:
     stop_grace_period: 30s
     environment:
       <<: *pg-env
-      POSTGRES_HOST: pgbouncer
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
       BOT_TOKEN: ${BOT_TOKEN}
       # Стабильный секрет подписи JWT (≥32 симв.): токены переживают рестарт
       # core и общие для всех реплик. Если не задан — settings генерирует
@@ -246,7 +206,7 @@ services:
     volumes:
       - events_media:/media/events:ro
     depends_on:
-      pgbouncer:
+      postgres:
         condition: service_healthy
     networks:
       - frontend

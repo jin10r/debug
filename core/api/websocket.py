@@ -143,7 +143,8 @@ class WebSocketManager:
                 subscriptions = self._ws_subscriptions.get(ws, set())
                 if layer is not None and subscriptions and layer not in subscriptions:
                     return None  # Skipped by filter, not a failure
-                await asyncio.wait_for(ws.send_bytes(payload), timeout=SEND_TIMEOUT)
+                # payload is bytes from orjson.dumps(); decode to str for send_str
+                await asyncio.wait_for(ws.send_str(payload.decode() if isinstance(payload, bytes) else payload), timeout=SEND_TIMEOUT)
                 return None
             except Exception as e:
                 logger.debug(f"Broadcast send error/timeout: {e}")
@@ -229,10 +230,10 @@ class WebSocketManager:
 
         try:
             if resync:
-                await ws.send_bytes(orjson.dumps({
+                await ws.send_str(orjson.dumps({
                     'type': 'resync_required',
                     'timestamp': datetime.now(timezone.utc).isoformat()
-                }))
+                }).decode())
                 since_timestamp = None
                 since_id = None
                 since_message_id = None
@@ -264,7 +265,7 @@ class WebSocketManager:
                 }
                 try:
                     await asyncio.wait_for(
-                        ws.send_bytes(orjson.dumps(message)), timeout=SEND_TIMEOUT
+                        ws.send_str(orjson.dumps(message).decode()), timeout=SEND_TIMEOUT
                     )
                 except Exception as e:
                     logger.warning(f"Failed to send feature to client: {e}")
@@ -275,11 +276,11 @@ class WebSocketManager:
             # reconnect catch-up); only live pushes after it raise per-event
             # notifications.
             try:
-                await ws.send_bytes(orjson.dumps({
+                await ws.send_str(orjson.dumps({
                     'type': 'events_snapshot_end',
                     'count': len(features),
                     'timestamp': datetime.now(timezone.utc).isoformat()
-                }))
+                }).decode())
             except Exception as e:
                 logger.warning(f"Failed to send events_snapshot_end: {e}")
 
@@ -434,10 +435,10 @@ async def websocket_handler(request: web.Request):
                     # Per-message size guard
                     if len(msg.data) > WS_MAX_MSG_BYTES:
                         logger.warning(f"WebSocket message too large from {request.remote}")
-                        await ws.send_bytes(orjson.dumps({
+                        await ws.send_str(orjson.dumps({
                             'type': 'error',
                             'message': 'message too large'
-                        }))
+                        }).decode())
                         continue
 
                     data = orjson.loads(msg.data)
@@ -447,16 +448,16 @@ async def websocket_handler(request: web.Request):
                         # Rate limiting для защиты от спама
                         if not ws_manager._check_rate_limit(ws):
                             logger.warning("WebSocket ping rate limit exceeded")
-                            await ws.send_bytes(orjson.dumps({
+                            await ws.send_str(orjson.dumps({
                                 'type': 'error',
                                 'message': 'rate limit exceeded'
-                            }))
+                            }).decode())
                             continue
                         
-                        await ws.send_bytes(orjson.dumps({
+                        await ws.send_str(orjson.dumps({
                             'type': 'pong',
                             'timestamp': datetime.now(timezone.utc).isoformat()
-                        }))
+                        }).decode())
 
                     elif message_type == 'auth':
                         # /ws исключён из jwt_auth_middleware → проверяем здесь.
@@ -467,32 +468,32 @@ async def websocket_handler(request: web.Request):
                             # сам без cancel(). Нет race condition между
                             # проверкой done() и cancel().
                             _auth_event.set()
-                            await ws.send_bytes(orjson.dumps({'type': 'auth_ok'}))
+                            await ws.send_str(orjson.dumps({'type': 'auth_ok'}).decode())
                         else:
                             logger.warning("WebSocket auth failed — closing connection")
-                            await ws.send_bytes(orjson.dumps(
+                            await ws.send_str(orjson.dumps(
                                 {'type': 'error', 'message': 'authentication failed'}
-                            ))
+                            ).decode())
                             await ws.close(code=1008, message=b'auth failed')  # policy violation
                             break
 
                     elif message_type == 'subscribe_layers':
                         if not authenticated:
-                            await ws.send_bytes(orjson.dumps({'type': 'error', 'message': 'not authenticated'}))
+                            await ws.send_str(orjson.dumps({'type': 'error', 'message': 'not authenticated'}).decode())
                             continue
                         layers = data.get('layers') or []
                         if not isinstance(layers, list):
-                            await ws.send_bytes(orjson.dumps({'type': 'error', 'message': 'layers must be a list'}))
+                            await ws.send_str(orjson.dumps({'type': 'error', 'message': 'layers must be a list'}).decode())
                             continue
                         ws_manager._ws_subscriptions[ws] = set(layers)
-                        await ws.send_bytes(orjson.dumps({
+                        await ws.send_str(orjson.dumps({
                             'type': 'subscribed',
                             'layers': layers,
-                        }))
+                        }).decode())
 
                     elif message_type == 'get_events':
                         if not authenticated:
-                            await ws.send_bytes(orjson.dumps({'type': 'error', 'message': 'not authenticated'}))
+                            await ws.send_str(orjson.dumps({'type': 'error', 'message': 'not authenticated'}).decode())
                             continue
 
                         since_timestamp = data.get('since_timestamp')  # ISO string or null

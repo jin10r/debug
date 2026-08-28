@@ -1,24 +1,12 @@
 # =============================================================================
 # PgBouncer — lightweight connection pooler for PostgreSQL
 # =============================================================================
-# Reduces backend processes from ~40 (3 services × pool_max) to ~15.
-# Transaction pooling mode: connections released after each transaction (ideal for asyncpg).
 
-FROM edoburu/pgbouncer:1.23.1
+FROM bitnami/pgbouncer:1.23.1
 
-# Copy configuration files
-COPY pgbouncer/pgbouncer.ini /etc/pgbouncer/pgbouncer.ini
-COPY pgbouncer/entrypoint.sh /entrypoint.sh
-
-# Make entrypoint executable
-RUN chmod +x /entrypoint.sh
+# Copy custom configuration
+COPY pgbouncer/pgbouncer.ini /bitnami/pgbouncer/conf/pgbouncer.ini
+COPY pgbouncer/userlist.txt /bitnami/pgbouncer/conf/userlist.txt
 
 # Expose PgBouncer port
 EXPOSE 6432
-
-# Health check
-HEALTHCHECK --interval=10s --timeout=5s --retries=3 \
-    CMD pg_isready -h 127.0.0.1 -p 6432 || exit 1
-
-# Use custom entrypoint that generates userlist from env vars
-ENTRYPOINT ["/entrypoint.sh"]

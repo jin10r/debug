@@ -33,7 +33,7 @@ Telegram (MTProto) → parser (kurigram) → pending_events (queue, SKIP LOCKED)
 - **postgres** — PostGIS, pg_cron, партиционирование, materialized views
 - **web** — nginx, Leaflet/MapLibre GL, PWA service worker
 
-**Единый источник настроек:** `core/settings.py` переиспользуется parser и processor (копируется в образы).
+**Единый источник настроек:** `common/settings.py` переиспользуется parser и processor (копируется в образы).
 
 **Доставка событий** — двойная:
 1. INSERT из processor атомарно шлёт `pg_notify` → core транслирует в WS
@@ -64,7 +64,7 @@ Telegram (MTProto) → parser (kurigram) → pending_events (queue, SKIP LOCKED)
 ### 🔴 Высокий приоритет (H)
 
 **H1. `settings.py` — trailing comma создаёт пустую строку в keywords cops.**
-`core/settings.py` — в списке keywords для cops слоя trailing comma создаёт пустую строку `''`. При матчинге пустая строка всегда совпадает → ложные позитивы.
+`common/settings.py` — в списке keywords для cops слоя trailing comma создаёт пустую строку `''`. При матчинге пустая строка всегда совпадает → ложные позитивы.
 **Рекомендация:** Убрать trailing comma.
 
 **H2. `models.py` — strip whitespace не записывается обратно.**
@@ -72,7 +72,7 @@ Telegram (MTProto) → parser (kurigram) → pending_events (queue, SKIP LOCKED)
 **Рекомендация:** Использовать `field = field.strip()` или `model_validator(mode='after')`.
 
 **H3. `settings.py` — POSTGRES_PASSWORD defaults to "postgres".**
-`core/settings.py` — если `POSTGRES_PASSWORD` не задан, используется `"postgres"` (дефолт постгриза). Противоречит комментарию «пароль обязателен». В проде — безопасное значение по умолчанию отсутствует.
+`common/settings.py` — если `POSTGRES_PASSWORD` не задан, используется `"postgres"` (дефолт постгриза). Противоречит комментарию «пароль обязателен». В проде — безопасное значение по умолчанию отсутствует.
 **Рекомендация:** Требовать `POSTGRES_PASSWORD` в env, как `JWT_SECRET`.
 
 **H4. `notifications.js` — XSS через naive regex strip.**
@@ -224,7 +224,7 @@ frame-ancestors 'self';
 ## 6. Рекомендации (приоритезированный план)
 
 ### Сейчас (быстрые победы)
-1. **H1:** Убрать trailing comma в keywords cops (`core/settings.py`)
+1. **H1:** Убрать trailing comma в keywords cops (`common/settings.py`)
 2. **H2:** Исправить strip whitespace в Pydantic model validator (`core/models.py`)
 3. **H4+M9:** Удалить stale `.js` файлы (popups.js, notifications.js, integration.js) + обновить webpack entry points
 4. **L1-L3:** Починить cache.py (rename camelCase, удалить мёртвый `_make_key`, убрать unused param)

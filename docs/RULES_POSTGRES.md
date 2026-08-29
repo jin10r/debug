@@ -306,10 +306,11 @@ ALTER ROLE maintenance SET statement_timeout = '300s';
 
 ```sql
 -- postgresql.conf
-max_connections = 200  -- с запасом для 3 сервисов × pool_max=30
+max_connections = 20  -- only PgBouncer connects; pgbouncer max_db_connections=20
 ```
 
-**Правило:** `pool_max_size` на стороне приложения ≤ `max_connections / количество сервисов`.
+**Правило:** `pool_max_size` на стороне приложения ≤ `max_connections` PgBouncer'а
+(`default_pool_size` + `max_db_connections`). PostgreSQL видит только PgBouncer.
 
 ### R-DB16: Statement timeout
 

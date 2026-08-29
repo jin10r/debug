@@ -1,15 +1,15 @@
 """Tests for parser-side truncation for geo (B6).
 
 Verifies:
-  * core/settings exposes parser.max_text_length == 380
+  * common/settings exposes parser.max_text_length == 380
   * text <= max_text_length survives preprocessing unchanged
   * long text is truncated to head + tail (location usually sits at either
     end), NOT replaced by the old "слишком длиннное…" placeholder
 """
 from conftest import load_module_by_path
 
-settings = load_module_by_path("_settings_under_test", "core/settings.py").settings
-tp = load_module_by_path("_tp_under_test", "core/utils/text_preprocessor.py")
+settings = load_module_by_path("_settings_under_test", "common/settings.py").settings
+tp = load_module_by_path("_tp_under_test", "common/text_preprocessor.py")
 truncate_for_geo = tp.truncate_for_geo
 
 

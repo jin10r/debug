@@ -24,11 +24,11 @@ def _missing(name: str) -> bool:
         return True
 
 
-# --- environs stub (core.settings builds Env at import) -----------------------
+# --- environs stub (common.settings builds Env at import) ---------------------
 if _missing("environs"):
     _m = types.ModuleType("environs")
 
-    class _Env:  # minimal surface used by core/settings.py
+    class _Env:  # minimal surface used by common/settings.py
         def __init__(self, *a, **k):
             pass
 

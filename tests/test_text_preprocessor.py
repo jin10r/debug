@@ -1,7 +1,7 @@
-"""Tests for core/text_preprocessor (pure regex/HTML, no heavy deps)."""
+"""Tests for common/text_preprocessor (pure regex/HTML, no heavy deps)."""
 from conftest import load_module_by_path
 
-tp = load_module_by_path("_tp_under_test", "core/utils/text_preprocessor.py")
+tp = load_module_by_path("_tp_under_test", "common/text_preprocessor.py")
 
 
 def test_strip_tail_cuts_at_marker():

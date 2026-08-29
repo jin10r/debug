@@ -1,4 +1,4 @@
-"""Tests for core/utils/logging_config.py."""
+"""Tests for common/logging_config.py."""
 import json
 import logging
 from io import StringIO
@@ -8,7 +8,7 @@ import pytest
 
 from conftest import load_module_by_path
 
-lc = load_module_by_path("_logging_config_under_test", "core/utils/logging_config.py")
+lc = load_module_by_path("_logging_config_under_test", "common/logging_config.py")
 JSONFormatter = lc.JSONFormatter
 ContextLogger = lc.ContextLogger
 setup_logging = lc.setup_logging

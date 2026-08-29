@@ -96,7 +96,7 @@ async def validate_init_handler(request: web.Request) -> web.Response:
             )
     else:
         # Dev-bypass: включается ТОЛЬКО явным TELEGRAM_WEBVIEW_VALIDATION=false/0
-        # (строгий парсер в core/settings.py). Защита production — в парсере:
+        # (строгий парсер в common/settings.py). Защита production — в парсере:
         # любое другое/отсутствующее значение = валидация включена.
         logger.warning(
             f"validate-init in dev bypass mode from {request.remote} — "

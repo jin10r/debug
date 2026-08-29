@@ -94,7 +94,7 @@ LAYER_PRIORITY: tuple = tuple(k for k in DEFAULT_LAYER_KEYWORDS if k != 'pig')
 class DatabaseConfig:
     """PostgreSQL — прямое подключение (без PgBouncer)."""
     host: str = "postgres"
-    port: int = 5432
+    port: int = 5432  # may be overridden by POSTGRES_PORT (PgBouncer listens on 6432)
     database: str = "postgres"
     user: str = "postgres"
     # Пустая строка — явно невалидный дефолт: при отсутствии POSTGRES_PASSWORD
@@ -371,7 +371,7 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
 
     Всё остальное — хардкодные дефолты в соответствующих `@dataclass`. Чтобы
     изменить калибровку матчера / параметры БД / прокси и т.п., правится
-    `core/settings.py` напрямую (не env).
+    `common/settings.py` напрямую (не env).
 
     Keep-list env: BOT_TOKEN, WEBAPP_URL, REDIRECT_URL. JWT_SECRET — обязателен
     при require_jwt=True (R-C8).
@@ -399,6 +399,7 @@ def load_settings(env_path: Optional[str] = None, require_jwt: bool = True) -> S
             ),
             db=DatabaseConfig(
                 host=env.str("POSTGRES_HOST", "postgres"),
+                port=env.int("POSTGRES_PORT", 5432),
                 user=env.str("POSTGRES_USER", "postgres"),
                 password=_resolve_postgres_password(env),
                 database=env.str("POSTGRES_DB", "postgres"),

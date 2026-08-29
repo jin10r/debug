@@ -21,7 +21,7 @@ from typing import Optional
 import asyncpg
 
 from core.db.db_base import create_pool
-from core.settings import settings
+from common.settings import settings
 
 logger = logging.getLogger(__name__)
 

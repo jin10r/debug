@@ -28,11 +28,16 @@ except Exception:
     settings = None
     _LAYER_PRIORITY = ('bus', 'cops', 'traffic')
 
+try:
+    from common.metrics import layer_classification_fallback_total
+except Exception:
+    layer_classification_fallback_total = None
+
 logger = logging.getLogger(__name__)
 
 
 def _get_layer_keywords(layer: str) -> tuple:
-    """Ключевые слова слоя из настроек (БД или fallback из core/settings)."""
+    """Ключевые слова слоя из настроек (БД или fallback из common/settings)."""
     if settings and settings.similarity:
         return settings.similarity.get_layer_keywords(layer)
     return ()
@@ -68,13 +73,15 @@ class LayerClassifier:
         Принимает уже лемматизированные токены (от Morphology.lemmatize_tokens).
         Слой определяется только по совпадению лемм с ключевыми словами слоёв.
         """
-        if not lemmas:
-            return 'pig'
+        result = 'pig'
+        if lemmas:
+            token_lemmas: Set[str] = {l.normal_form for l in lemmas if l.normal_form}
 
-        token_lemmas: Set[str] = {l.normal_form for l in lemmas if l.normal_form}
+            for layer in _LAYER_PRIORITY:
+                if self._keyword_lemmas[layer] & token_lemmas:
+                    result = layer
+                    break
 
-        for layer in _LAYER_PRIORITY:
-            if self._keyword_lemmas[layer] & token_lemmas:
-                return layer
-
-        return 'pig'
+        if layer_classification_fallback_total is not None:
+            layer_classification_fallback_total.labels(result).inc()
+        return result

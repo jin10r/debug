@@ -43,7 +43,7 @@ def main():
 
     try:
         # Set env var BEFORE importing so module-level load_settings()
-        # (core/settings.py:351) sees the correct value during import.
+        # (common/settings.py) sees the correct value during import.
         if test_env_value == "UNSET":
             os.environ.pop("TELEGRAM_WEBVIEW_VALIDATION", None)
         else:

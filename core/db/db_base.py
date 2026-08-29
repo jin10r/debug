@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from typing import List, Dict, Any, Optional
 
 try:
-    from core.settings import settings
+    from common.settings import settings
 except Exception:
     settings = None
 

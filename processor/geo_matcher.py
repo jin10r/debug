@@ -27,6 +27,11 @@ try:
 except Exception:
     settings = None
 
+try:
+    from common.metrics import geo_match_tier_total
+except Exception:
+    geo_match_tier_total = None
+
 logger = logging.getLogger(__name__)
 
 Candidate = Tuple[str, Tuple[str, ...], int, int, int, bool, bool]
@@ -373,6 +378,17 @@ class GeoMatcher:
                     }
         return None
 
+    def _classify_geo_tier(self, best_by_geo: Dict[int, Dict]) -> str:
+        """Map a find_geo result set to a match tier for observability."""
+        if not best_by_geo:
+            return "none"
+        sources = {r.get("source") for r in best_by_geo.values()}
+        if sources & {"stem_exact", "stem_reorder"}:
+            return "tier1"
+        if "surface_typo" in sources:
+            return "tier2"
+        return "none"
+
     def _finalize(self, best_by_geo: Dict[int, Dict]) -> List[Dict]:
         """Дедупликация, сортировка и возврат top-K найденных geo-объектов."""
         top_k = (
@@ -529,5 +545,8 @@ class GeoMatcher:
         for r in best_by_geo.values():
             if r.pop('_anchored', False):
                 r['score'] = min(1.0, r['score'] + boost)
+
+        if geo_match_tier_total is not None:
+            geo_match_tier_total.labels(self._classify_geo_tier(best_by_geo)).inc()
 
         return self._finalize(best_by_geo)

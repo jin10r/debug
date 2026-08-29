@@ -1,4 +1,4 @@
-"""Tests for core/settings._parse_strict_bool (Secure by Default).
+"""Tests for common/settings._parse_strict_bool (Secure by Default).
 
 Сценарии:
   None / '' / 'true' / '1' / 'abc'  → True  (валидация включена)
@@ -13,7 +13,7 @@ import pytest
 
 from conftest import load_module_by_path
 
-settings_mod = load_module_by_path("_settings_under_test", "core/settings.py")
+settings_mod = load_module_by_path("_settings_under_test", "common/settings.py")
 _parse_strict_bool = settings_mod._parse_strict_bool
 load_settings = settings_mod.load_settings
 

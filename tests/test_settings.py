@@ -1,4 +1,4 @@
-"""Tests for core/settings.py — _resolve_jwt_secret, load_settings, dataclasses."""
+"""Tests for common/settings.py — _resolve_jwt_secret, load_settings, dataclasses."""
 import os
 from unittest.mock import patch, MagicMock
 
@@ -6,7 +6,7 @@ import pytest
 
 from conftest import load_module_by_path
 
-settings_mod = load_module_by_path("_settings_under_test", "core/settings.py")
+settings_mod = load_module_by_path("_settings_under_test", "common/settings.py")
 _resolve_jwt_secret = settings_mod._resolve_jwt_secret
 load_settings = settings_mod.load_settings
 Settings = settings_mod.Settings

@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS pending_events (
     event_time TIMESTAMPTZ NOT NULL,
     photo_file_id TEXT,
     status TEXT NOT NULL DEFAULT 'pending'
-        CHECK (status IN ('pending', 'processing', 'done', 'error')),
+        CHECK (status IN ('pending', 'processing', 'done', 'error', 'expired')),
     error_message TEXT,
     created_at TIMESTAMPTZ DEFAULT now(),
     processed_at TIMESTAMPTZ,

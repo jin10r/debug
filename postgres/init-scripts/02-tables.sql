@@ -51,13 +51,13 @@ CREATE TABLE IF NOT EXISTS events (
     PRIMARY KEY (id, event_time)
 ) PARTITION BY RANGE (event_time);
 
--- Создаём партиции с -72 часов (3 суток истории) до +2 часа вперёд
+-- Создаём партиции с -1 часа до +1 часа вперёд
 DO $$
 DECLARE
     part_hour TIMESTAMPTZ;
     part_name TEXT;
 BEGIN
-    FOR i IN -72..2 LOOP
+    FOR i IN -1..1 LOOP
         part_hour := date_trunc('hour', NOW()) + i * INTERVAL '1 hour';
         part_name := 'events_' || to_char(part_hour, 'YYYY_MM_DD_HH24');
         IF NOT EXISTS (

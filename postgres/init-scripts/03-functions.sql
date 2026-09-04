@@ -13,46 +13,94 @@
 CREATE OR REPLACE FUNCTION clean_old_events()
 RETURNS INTEGER AS $$
 DECLARE
-    deleted_count INTEGER := 0;
+    dropped_partitions INTEGER := 0;
+    deleted_rows INTEGER := 0;
     partition_name TEXT;
-    cutoff_time TIMESTAMPTZ := NOW() - INTERVAL '60 minutes';
+    cutoff TIMESTAMPTZ := NOW() - INTERVAL '60 minutes';
+    photo_urls JSONB := '[]'::jsonb;
+    partition_photos JSONB;
+    deleted_photos JSONB;
 BEGIN
     FOR partition_name IN
-        SELECT c.relname AS partition_name
+        SELECT c.relname
         FROM pg_class c
         JOIN pg_inherits i ON c.oid = i.inhrelid
         JOIN pg_class p ON i.inhparent = p.oid
         WHERE p.relname = 'events'
           AND c.relname ~ '^events_\d{4}_\d{2}_\d{2}_\d{2}$'
           AND c.relkind = 'r'
-          AND to_timestamp(
-              substring(c.relname FROM 8 FOR 13),
-              'YYYY_MM_DD_HH24'
-          ) + INTERVAL '1 hour' < cutoff_time
+          AND to_timestamp(substring(c.relname FROM 8 FOR 13), 'YYYY_MM_DD_HH24')
+              + INTERVAL '1 hour' <= cutoff
     LOOP
+        EXECUTE format(
+            'SELECT coalesce(jsonb_agg(photo_url), ''[]''::jsonb) FROM %I WHERE photo_url IS NOT NULL',
+            partition_name
+        ) INTO partition_photos;
+
+        photo_urls := photo_urls || coalesce(partition_photos, '[]'::jsonb);
+
         EXECUTE format('DROP TABLE IF EXISTS %I', partition_name);
-        deleted_count := deleted_count + 1;
+        dropped_partitions := dropped_partitions + 1;
     END LOOP;
 
-    IF deleted_count > 0 THEN
+    WITH deleted AS (
+        DELETE FROM events WHERE event_time < cutoff
+        RETURNING photo_url
+    )
+    SELECT coalesce(jsonb_agg(photo_url), '[]'::jsonb)
+    INTO deleted_photos
+    FROM deleted WHERE photo_url IS NOT NULL;
+
+    GET DIAGNOSTICS deleted_rows = ROW_COUNT;
+    photo_urls := photo_urls || coalesce(deleted_photos, '[]'::jsonb);
+
+    IF dropped_partitions > 0 OR deleted_rows > 0 THEN
         UPDATE events_meta
-        SET version = version + 1,
-            updated_at = NOW()
+        SET version = version + 1, updated_at = NOW()
         WHERE id = 1;
 
         PERFORM pg_notify('events_cleaned', jsonb_build_object(
-            'deleted_count', deleted_count,
+            'deleted_count', deleted_rows,
+            'dropped_partitions', dropped_partitions,
             'cleaned_at', NOW(),
-            'photo_urls', '[]'::jsonb
+            'photo_urls', photo_urls
         )::text);
     END IF;
 
-    RETURN deleted_count;
+    RETURN dropped_partitions + deleted_rows;
 END;
 $$ LANGUAGE plpgsql;
 
--- Снимаем старое задание
+CREATE OR REPLACE FUNCTION clean_old_pending_events()
+RETURNS INTEGER AS $$
+DECLARE
+    expired_count INTEGER;
+    deleted_count INTEGER;
+BEGIN
+    UPDATE pending_events
+    SET status = 'expired', processed_at = now(), locked_at = NULL, worker_id = NULL
+    WHERE (event_time < NOW() - INTERVAL '60 minutes'
+           OR event_time > NOW() + INTERVAL '5 minutes')
+      AND status = 'pending';
+
+    GET DIAGNOSTICS expired_count = ROW_COUNT;
+
+    DELETE FROM pending_events
+    WHERE event_time < NOW() - INTERVAL '60 minutes'
+      AND status IN ('done', 'error', 'expired');
+
+    GET DIAGNOSTICS deleted_count = ROW_COUNT;
+
+    RETURN expired_count + deleted_count;
+END;
+$$ LANGUAGE plpgsql;
+
 SELECT cron.unschedule('clean-old-events')
 WHERE EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'clean-old-events');
 
 SELECT cron.schedule('clean-old-events', '3-59/5 * * * *', 'SELECT clean_old_events()');
+
+SELECT cron.unschedule('clean-old-pending-events')
+WHERE EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'clean-old-pending-events');
+
+SELECT cron.schedule('clean-old-pending-events', '*/15 * * * *', 'SELECT clean_old_pending_events()');

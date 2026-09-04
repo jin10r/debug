@@ -4,12 +4,12 @@
 -- Two-tier cleanup strategy (Option C):
 --   1. clean_old_events() — primary TTL enforcement, drops partitions > 60 min old.
 --      Runs every 5 min via pg_cron, owns the ephemeral-buffer lifecycle.
---   2. manage_event_partitions() — safety net for partitions > 48 hours old.
+--   2. manage_event_partitions() — safety net for partitions older than 3 hours.
 --      Dead code under healthy cluster (clean_old_events reaps at 60 min),
 --      but catches runaway growth if clean_old_events stalls. When it does
 --      drop partitions it fires pg_notify('partition_overflow') for alerting.
 --
--- Creates partitions from -72h (3-day history) to +2h ahead.
+-- Creates partitions from -1h to +1h (3 partitions).
 
 CREATE OR REPLACE FUNCTION manage_event_partitions()
 RETURNS INTEGER AS $$
@@ -20,8 +20,7 @@ DECLARE
     dropped_count INTEGER := 0;
     cutoff_hour TIMESTAMPTZ;
 BEGIN
-    -- Создаём с -72 часов (3 суток истории) до +2 часа вперёд
-    FOR i IN -72..2 LOOP
+    FOR i IN -1..1 LOOP
         part_hour := date_trunc('hour', NOW()) + i * INTERVAL '1 hour';
         part_name := 'events_' || to_char(part_hour, 'YYYY_MM_DD_HH24');
         IF to_regclass(part_name) IS NULL THEN
@@ -36,8 +35,7 @@ BEGIN
         END IF;
     END LOOP;
 
-    -- Удаляем партиции, целиком старше 48 часов (а не 1 часа)
-    cutoff_hour := date_trunc('hour', NOW()) - INTERVAL '48 hours';
+    cutoff_hour := date_trunc('hour', NOW()) - INTERVAL '3 hours';
     FOR part_name IN
         SELECT relname FROM pg_class
         WHERE relname ~ '^events_\d{4}_\d{2}_\d{2}_\d{2}$'
@@ -66,14 +64,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Снимаем старое задание если есть
 SELECT cron.unschedule('manage-event-partitions')
 WHERE EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'manage-event-partitions');
 
--- Создаём задание каждые 5 минут в минуты 0/5/10/... (`*/5`). Партиции
--- создаются заранее на +2 часа вперёд, поэтому задержка до 5 минут
--- некритична (в INSERT-окне нужные партиции уже существуют). Раньше задание
--- бежало каждую минуту и давало ~1с нагрузки/цикл, а при старте в минуты
--- 0/5/10/... конфликтовало по блокировке events с clean-old-events
--- (`3-59/5`) — AccessShareLock против AccessExclusiveLock, чистка ждала ~1с.
 SELECT cron.schedule('manage-event-partitions', '*/5 * * * *', 'SELECT manage_event_partitions()');

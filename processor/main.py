@@ -8,6 +8,7 @@ import math
 import os
 import random
 import signal
+import sys
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -140,6 +141,7 @@ class ProcessorBot:
         self._running = False
         self._messages_processed = 0
         self._errors = 0
+        self._expired = 0
         self._worker_tasks: list[asyncio.Task] = []
         self._worker_seq = 0
         self._shutdown_started = False
@@ -404,6 +406,10 @@ class ProcessorBot:
         async def _try_process():
             start_t = datetime.now(timezone.utc)
             result = await self._process_row(row)
+            if result == 'expired':
+                await self._mark_expired(row['id'])
+                self._expired += 1
+                return None
             if result:
                 await self._mark_done(row['id'])
                 self._messages_processed += 1
@@ -439,6 +445,7 @@ class ProcessorBot:
         Статус меняется на 'processing' в той же транзакции, что и
         FOR UPDATE SKIP LOCKED — после commit задача недоступна другим
         воркерам (нет «закрыл транзакцию, а статус остался pending»).
+        Фильтр event_time предотвращает выборку устаревших сообщений.
         """
         async with self.db.pool.acquire() as conn:
             async with conn.transaction():
@@ -448,6 +455,8 @@ class ProcessorBot:
                     "WHERE id = ("
                     "    SELECT id FROM pending_events "
                     "    WHERE status = 'pending' "
+                    "      AND event_time >= now() - interval '60 minutes' "
+                    "      AND event_time <= now() + interval '5 minutes' "
                     "    ORDER BY created_at "
                     "    LIMIT 1 "
                     "    FOR UPDATE SKIP LOCKED"
@@ -489,6 +498,17 @@ class ProcessorBot:
                 "UPDATE pending_events "
                 "SET status = 'pending', locked_at = NULL, worker_id = NULL "
                 "WHERE id = $1 AND status = 'processing'",
+                row_id,
+            )
+
+    async def _mark_expired(self, row_id: int):
+        """Пометить pending-событие как истёкшее (event_time вне окна)."""
+        async with self.db.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE pending_events "
+                "SET status = 'expired', processed_at = now(), "
+                "    locked_at = NULL, worker_id = NULL "
+                "WHERE id = $1",
                 row_id,
             )
 
@@ -536,6 +556,11 @@ class ProcessorBot:
         message_id = row['message_id']
         event_time = row['event_time']
         raw_text = row['text'] or ''
+
+        now = datetime.now(timezone.utc)
+        if not (now - timedelta(minutes=60) <= event_time <= now + timedelta(minutes=5)):
+            logger.warning("msg %s: event_time %s outside 60-min window — skip", message_id, event_time)
+            return 'expired'
 
         tokens = tokenize(raw_text)
         lemmas = self.morph.lemmatize_tokens(tokens)

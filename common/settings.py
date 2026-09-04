@@ -94,7 +94,7 @@ LAYER_PRIORITY: tuple = tuple(k for k in DEFAULT_LAYER_KEYWORDS if k != 'pig')
 class DatabaseConfig:
     """PostgreSQL — прямое подключение (без PgBouncer)."""
     host: str = "postgres"
-    port: int = 5432  # may be overridden by POSTGRES_PORT (PgBouncer listens on 6432)
+    port: int = 5432  # may be overridden by POSTGRES_PORT
     database: str = "postgres"
     user: str = "postgres"
     # Пустая строка — явно невалидный дефолт: при отсутствии POSTGRES_PASSWORD
@@ -102,12 +102,14 @@ class DatabaseConfig:
     # слабый пароль "postgres".
     password: str = ""
     # Прямое подключение: каждый коннект = backend process в postgres.
-    # pool_max_size=30 — оптимизировано для 1GB postgres контейнера.
-    pool_min_size: int = 5
-    pool_max_size: int = 30
-    # Command timeout для SQL-запроса. Role parser имеет 60s timeout
-    # в postgresql.conf, core — 30s.
-    command_timeout: int = 60
+    # 3 сервиса × pool_max_size=10 = 30 max. Under max_connections=50.
+    # min_size=1: asyncpg opens min_size соединений eagerly — 3 total at startup
+    # (not 15 with the old min_size=5). Sufficient for 5 msg/min load.
+    pool_min_size: int = 1
+    pool_max_size: int = 10
+    # Command timeout для SQL-запроса. Slowest observed query: 3.6s.
+    # 30s timeout leaves 8x margin. Aligns with R-C15 (core) and R-DB14.
+    command_timeout: int = 30
 
 
 @dataclass

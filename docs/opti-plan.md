@@ -40,14 +40,14 @@ Test: Тесты XSS-векторов проходят (javascript: blocked, one
 Demo: Попап с вредоносным photo_url не выполняет JS
 Task 3: Settings Hardening - Trailing Comma & Password Default (HIGH)
 
-Objective: Исправить баги конфигурации в core/settings.py
+Objective: Исправить баги конфигурации в common/settings.py
 Implementation:
 Убрать trailing comma после 'мусорской' в cops keywords (создаёт пустую строку)
 Добавить валидацию POSTGRES_PASSWORD в load_settings() (как JWT_SECRET)
 Создать функцию _resolve_postgres_password() с fail-fast логикой
 Обновить error messages с ссылками на правила (R-C8, G-9)
 Test: Unit-тесты: keywords не содержат ''; POSTGRES_PASSWORD="" падает при старте
-Demo: python -c "from core.settings import DEFAULT_LAYER_KEYWORDS; print('cops' in DEFAULT_LAYER_KEYWORDS['cops'])" = True
+Demo: python -c "from common.settings import DEFAULT_LAYER_KEYWORDS; print('cops' in DEFAULT_LAYER_KEYWORDS['cops'])" = True
 Task 4: Deprecation Fix - asyncio.get_event_loop() (MEDIUM)
 
 Objective: Заменить deprecated asyncio.get_event_loop() на get_running_loop()

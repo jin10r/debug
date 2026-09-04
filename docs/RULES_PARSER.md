@@ -123,6 +123,19 @@ Emoji УДАЛЯЮТСЯ только перед токенизацией/мат
 
 Parser использует один `asyncpg.Pool` на весь процесс. Пул создаётся при старте, закрывается при shutdown.
 
+Размеры пула берутся из `common/settings.py` (DatabaseConfig dataclass):
+
+```python
+self.__pool = await asyncpg.create_pool(
+    min_size=settings.db.pool_min_size,   # 1
+    max_size=settings.db.pool_max_size,   # 10
+    command_timeout=settings.db.command_timeout,  # 30s
+)
+```
+
+**Правило:** `max_size ≤ max_connections / количество_сервисов` (см. R-DB15).
+3 сервиса × `max_size=10` = 30, что ≤ `max_connections=50`.
+
 ### R-P12: Parameterized queries
 
 Все SQL-запросы используют параметризацию ($1, $2, ...). Конкатенация строк ЗАПРЕЩЕНА.

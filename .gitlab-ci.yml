@@ -260,7 +260,7 @@ test:settings-strict-bool:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     - changes:
-        - core/settings.py
+        - common/settings.py
         - tests/test_settings_strict_bool.py
         - tests/conftest.py
         - .gitlab-ci.yml
@@ -294,7 +294,7 @@ test:core-startup-matrix:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     - changes:
-        - core/settings.py
+        - common/settings.py
         - core/app_factory.py
         - scripts/ci_check_webview_validation.py
         - .gitlab-ci.yml

@@ -438,6 +438,8 @@ json-file driver с ротацией (10MB × 5 files).
 **⚠️ PgBouncer Not Built**
 Dockerfile.pgbouncer создан, но image не построен (edoburu/pgbouncer not found).
 
+> **Footnote (2026-09-04):** PgBouncer was removed entirely in v5.0.0. Connection pooling now handled by asyncpg's built-in `asyncpg.Pool` with `min_size=1/max_size=10` (R-DB15). See plan `1788523952652-pgBouncer-removal.md` for details. This section is retained as historical analysis.
+
 **Оценка: 7.5/10**
 
 ---

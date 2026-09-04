@@ -80,9 +80,9 @@ class TestDatabaseConfigDefaults:
         assert db.database == "postgres"
         assert db.user == "postgres"
         assert db.password == ""
-        assert db.pool_min_size == 5
-        assert db.pool_max_size == 30
-        assert db.command_timeout == 60
+        assert db.pool_min_size == 1
+        assert db.pool_max_size == 10
+        assert db.command_timeout == 30
 
 
 # ============================================================

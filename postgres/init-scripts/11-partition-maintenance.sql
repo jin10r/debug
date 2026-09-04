@@ -1,7 +1,15 @@
 -- 11-partition-maintenance.sql
--- Partition management for hourly partitions (72-hour lookback, 48-hour TTL)
--- Создаёт партиции на 3 суток назад + 2 часа вперёд,
--- удаляет только партиции старше 48 часов
+-- Partition management for hourly partitions.
+--
+-- Two-tier cleanup strategy (Option C):
+--   1. clean_old_events() — primary TTL enforcement, drops partitions > 60 min old.
+--      Runs every 5 min via pg_cron, owns the ephemeral-buffer lifecycle.
+--   2. manage_event_partitions() — safety net for partitions > 48 hours old.
+--      Dead code under healthy cluster (clean_old_events reaps at 60 min),
+--      but catches runaway growth if clean_old_events stalls. When it does
+--      drop partitions it fires pg_notify('partition_overflow') for alerting.
+--
+-- Creates partitions from -72h (3-day history) to +2h ahead.
 
 CREATE OR REPLACE FUNCTION manage_event_partitions()
 RETURNS INTEGER AS $$
@@ -41,6 +49,13 @@ BEGIN
     END LOOP;
 
     IF dropped_count > 0 THEN
+        PERFORM pg_notify(
+            'partition_overflow',
+            json_build_object(
+                'dropped_count', dropped_count,
+                'ran_at', NOW()
+            )::TEXT
+        );
         UPDATE events_meta
         SET version = version + 1,
             updated_at = NOW()

@@ -234,9 +234,9 @@ await self._listen_conn.add_listener("geo_updated", self._on_geo_updated)
 
 ```python
 self.__pool = await asyncpg.create_pool(
-    min_size=settings.db.pool_min_size,   # 5
-    max_size=settings.db.pool_max_size,   # 30
-    command_timeout=settings.db.command_timeout,  # 60s
+    min_size=settings.db.pool_min_size,   # 1
+    max_size=settings.db.pool_max_size,   # 10
+    command_timeout=settings.db.command_timeout,  # 30s
 )
 ```
 

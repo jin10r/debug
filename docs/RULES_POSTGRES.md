@@ -58,15 +58,19 @@ CREATE TABLE events (
 
 **Правило:** Never use `DELETE FROM events WHERE event_time < ...` напрямую. Используй `clean_old_events()` или `pg_partman`.
 
+**Двухуровневая очистка:**
+- `clean_old_events()` — **primary TTL**, удаляет партиции старше **60 минут**. Запускается каждые 5 минут через pg_cron. Это основной механизм эпхемерного буфера (R-DB0).
+- `manage_event_partitions()` — **safety net**, удаляет партиции старше **48 часов**. Обычно мёртвый код (clean_old_events успевает за 60 минут), но ловит runaway growth при сбое clean_old_events. При удалении партиций посылает `pg_notify('partition_overflow')` для алертинга.
+
 ### R-DB3: TTL через pg_cron
 
-Очистка событий > 60 минут через pg_cron каждые 5 минут:
+Очистка событий > 60 минут через pg_cron каждые 5 минут (primary TTL):
 
 ```sql
 SELECT cron.schedule('clean-old-events', '*/5 * * * *', 'SELECT clean_old_events()');
 ```
 
-**Правило:** Функция `clean_old_events()` — partition-aware: DROP целых партиций + DELETE из текущей.
+**Правило:** Функция `clean_old_events()` — partition-aware: DROP целых партиций + DELETE из текущей. Это **единственный** механизм, отвечающий за эпхемерное хранилище (R-DB0). 48-часовой safety net в `manage_event_partitions()` работает только при сбое clean_old_events.
 
 ### R-DB4: pg_notify как брокер сообщений
 
@@ -306,11 +310,12 @@ ALTER ROLE maintenance SET statement_timeout = '300s';
 
 ```sql
 -- postgresql.conf
-max_connections = 20  -- only PgBouncer connects; pgbouncer max_db_connections=20
+max_connections = 50  -- 3 services × pool_max_size=10 = 30 max; headroom for pg_cron/admin
 ```
 
-**Правило:** `pool_max_size` на стороне приложения ≤ `max_connections` PgBouncer'а
-(`default_pool_size` + `max_db_connections`). PostgreSQL видит только PgBouncer.
+**Правило:** `pool_max_size` на стороне приложения ≤ `max_connections / количество_сервисов`.
+3 сервиса (parser, processor, core) подключаются напрямую к PostgreSQL через internal `db` network.
+`pool_max_size=10` × 3 = 30, что ≤ `max_connections=50` с запасом 20 для pg_cron и админ-запросов.
 
 ### R-DB16: Statement timeout
 
@@ -462,10 +467,11 @@ LIMIT 20;
 
 | Job | Интервал | Назначение |
 |-----|----------|------------|
-| `clean-old-events` | `*/5 * * * *` | Очистка событий > 60min |
-| `manage-event-partitions` | `0 * * * *` | Создание партиций на +2 дня |
-| `refresh-events-mv` | `*/30 * * * *` | Обновление MV events |
-| `refresh-geo-mv` | `*/5 * * * *` | Обновление MV geo |
+| `clean-old-events` | `3-59/5 * * * *` | Очистка событий > 60min (DROP partition) — primary TTL |
+| `manage-event-partitions` | `*/5 * * * *` | Создание партиций на +2 часа + 48h safety net DROP с pg_notify('partition_overflow') |
+| `cleanup-refresh-tokens` | `0 */6 * * * *` | Очистка истёкших refresh-токенов |
+
+**Правило:** Расписания `clean-old-events` и `manage-event-partitions` смещены на 3 минуты (`3-59/5` vs `*/5`), чтобы избежать конфликта `AccessShareLock` vs `AccessExclusiveLock` на `events`.
 
 ### R-DB27: Materialized views
 

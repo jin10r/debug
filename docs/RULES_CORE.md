@@ -210,7 +210,7 @@ events_data = await self.db_request.get_filtered_events_as_geojson(
 
 ```python
 pool = await asyncpg.create_pool(
-    min_size=2,
+    min_size=1,
     max_size=10,
     command_timeout=30,
 )

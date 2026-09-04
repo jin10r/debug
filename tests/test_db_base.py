@@ -87,6 +87,18 @@ class TestRetryDbCondition:
 class TestCreatePool:
     @pytest.mark.asyncio
     async def test_create_pool_with_defaults(self):
+        """Test fallback pool values when ``settings`` is ``None``.
+
+        When the settings module is unavailable (``settings=None``),
+        ``create_pool()`` falls back to safety-net defaults:
+        ``min_size=5, max_size=20, command_timeout=60``.
+
+        These **differ** from production defaults (``1/10/30`` from
+        ``settings.db``) and exist solely so tests can exercise the pool
+        factory without a real settings module. Production code always
+        resolves values through ``settings.db`` (dataclass), never the
+        fallbacks. See also R-TEST7 for the production-vs-fallback contract.
+        """
         mock_pool = AsyncMock()
         with patch('common.db.base.asyncpg.create_pool', new_callable=AsyncMock, return_value=mock_pool) as mock_create:
             with patch('common.db.base.settings', None):

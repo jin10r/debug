@@ -237,7 +237,7 @@ window.initializeMap = function(): void {
         zoomControl: true,
         preferCanvas: false,
         minZoom: 11,
-        maxZoom: 14,
+        maxZoom: 18,
         maxBounds: L.latLngBounds([45.1, 28.1], [48.35, 31.4]),
         maxBoundsViscosity: 1.0,
     }).setView([window.APP_CONFIG.map_center_lat, window.APP_CONFIG.map_center_lng], window.APP_CONFIG.map_default_zoom);

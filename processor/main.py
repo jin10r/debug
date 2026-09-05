@@ -406,9 +406,8 @@ class ProcessorBot:
         async def _try_process():
             start_t = datetime.now(timezone.utc)
             result = await self._process_row(row)
-            if result == 'expired':
-                await self._mark_expired(row['id'])
-                self._expired += 1
+            if result is None:
+                # expired — уже помечена внутри _process_row
                 return None
             if result:
                 await self._mark_done(row['id'])
@@ -429,6 +428,7 @@ class ProcessorBot:
         try:
             await retry_with_backoff(
                 _try_process,
+                args=(),
                 max_attempts=3,
                 max_transient_attempts=8,
                 label=f"Message {msg_id}",
@@ -559,8 +559,10 @@ class ProcessorBot:
 
         now = datetime.now(timezone.utc)
         if not (now - timedelta(minutes=60) <= event_time <= now + timedelta(minutes=5)):
-            logger.warning("msg %s: event_time %s outside 60-min window — skip", message_id, event_time)
-            return 'expired'
+            logger.warning("msg %s: event_time %s outside 60-min window — mark expired", message_id, event_time)
+            await self._mark_expired(row['id'])
+            self._expired += 1
+            return None
 
         tokens = tokenize(raw_text)
         lemmas = self.morph.lemmatize_tokens(tokens)

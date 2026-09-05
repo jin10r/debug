@@ -15,7 +15,7 @@ Usage:
 
 import asyncio
 import logging
-from typing import Any, Callable, Coroutine, List, Optional, Set
+from typing import Any, Callable, Coroutine, Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +59,7 @@ class PgNotifyListener:
         self._post_subscribe = post_subscribe
         self._connection: Optional[Any] = None
         self._notify_tasks: Set[asyncio.Task] = set()
+        self._listeners: Dict[str, Callable] = {}
 
     async def run(self):
         """Main loop: acquire, listen, keep-alive, reconnect on failure.
@@ -72,8 +73,10 @@ class PgNotifyListener:
                 self._connection = await self._pool.acquire()
 
                 for channel in self._channels:
+                    listener = self._make_listener(channel)
+                    self._listeners[channel] = listener
                     await self._connection.add_listener(
-                        channel, self._make_listener(channel)
+                        channel, listener
                     )
 
                 logger.info(f"{self._label}: listening on {self._channels}")
@@ -136,13 +139,17 @@ class PgNotifyListener:
 
             # Remove listeners
             for channel in self._channels:
+                listener = self._listeners.get(channel)
+                if listener is None:
+                    continue
                 try:
                     await asyncio.wait_for(
-                        conn.remove_listener(channel, self._make_listener(channel)),
+                        conn.remove_listener(channel, listener),
                         timeout=1.0,
                     )
                 except (asyncio.TimeoutError, Exception):
                     pass
+            self._listeners.clear()
 
             # Release connection back to pool
             try:

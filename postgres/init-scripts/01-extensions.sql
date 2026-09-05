@@ -1,7 +1,7 @@
 -- 01-extensions.sql
+-- Extensions required by Survival Map.
+-- Order matters: pg_cron must be present before pg_cron jobs are scheduled.
+
 CREATE EXTENSION IF NOT EXISTS postgis;
 CREATE EXTENSION IF NOT EXISTS pg_cron;
--- Топ-N медленных запросов для аудита производительности.
--- Использование: SELECT calls, total_exec_time, mean_exec_time, query
---                FROM pg_stat_statements ORDER BY total_exec_time DESC LIMIT 20;
 CREATE EXTENSION IF NOT EXISTS pg_stat_statements;

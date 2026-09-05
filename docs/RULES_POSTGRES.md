@@ -15,7 +15,7 @@ PostgreSQL в этом проекте **НЕ является** архивным
 Его главные роли:
 
 1. **Геопространственный калькулятор:** Выполнение тяжёлых PostGIS-операций (`process_candidates_v2`, `ST_Distance`, `ST_MakeValid`) внутри CTE, чтобы избежать пересылки сырых координат в Python.
-2. **Краткосрочный буфер состояний:** Хранение актуальных событий строго за последний ~1 час (TTL). Данные старше 2 часов DROPаются атомарно на уровне метаданных.
+2. **Краткосрочный буфер состояний:** Хранение актуальных событий строго за последний ~1 час (TTL). Данные старше 1 часа удаляются (DROP партиций + DELETE строк).
 3. **In-memory брокер:** Использование `pg_notify` для мгновенного проброса событий между processor → core.
 
 **Следствия для разработки:**
@@ -45,7 +45,7 @@ CREATE TABLE geo (
 
 ### R-DB2: Партиционирование events по часам
 
-Таблица `events` партиционирована по `event_time` (RANGE) с шагом 1 час. Автоматическое создание партиций:
+Таблица `events` партиционирована по `event_time` (RANGE) с шагом 1 час. Автоматическое создание партиций (окно `-1h..+1h`):
 
 ```sql
 CREATE TABLE events (
@@ -59,48 +59,174 @@ CREATE TABLE events (
 **Правило:** Never use `DELETE FROM events WHERE event_time < ...` напрямую. Используй `clean_old_events()` или `pg_partman`.
 
 **Двухуровневая очистка:**
-- `clean_old_events()` — **primary TTL**, удаляет партиции старше **60 минут**. Запускается каждые 5 минут через pg_cron. Это основной механизм эпхемерного буфера (R-DB0).
-- `manage_event_partitions()` — **safety net**, удаляет партиции старше **48 часов**. Обычно мёртвый код (clean_old_events успевает за 60 минут), но ловит runaway growth при сбое clean_old_events. При удалении партиций посылает `pg_notify('partition_overflow')` для алертинга.
+- `clean_old_events()` — **primary TTL**, удаляет партиции старше **60 минут** + строки из текущей партиции. Запускается каждые 5 минут через pg_cron. Это основной механизм эпхемерного буфера (R-DB0).
+- `manage_event_partitions()` — **safety net**, создаёт партиции в окне `-1h..+1h`, удаляет партиции старше **3 часов**. Обычно мёртвый код (clean_old_events успевает за 60 минут), но ловит runaway growth при сбое clean_old_events. При удалении партиций посылает `pg_notify('partition_overflow')` для алертинга.
 
 ### R-DB3: TTL через pg_cron
 
 Очистка событий > 60 минут через pg_cron каждые 5 минут (primary TTL):
 
 ```sql
-SELECT cron.schedule('clean-old-events', '*/5 * * * *', 'SELECT clean_old_events()');
+SELECT cron.schedule('clean-old-events', '3-59/5 * * * *', 'SELECT clean_old_events()');
 ```
 
-**Правило:** Функция `clean_old_events()` — partition-aware: DROP целых партиций + DELETE из текущей. Это **единственный** механизм, отвечающий за эпхемерное хранилище (R-DB0). 48-часовой safety net в `manage_event_partitions()` работает только при сбое clean_old_events.
+**Правило:** Функция `clean_old_events()` — partition-aware: DROP целых партиций + DELETE из текущей. `photo_urls` из удалённых партиций и строк собирается в нотификации `events_cleaned` для последующего удаления фото парсером. 3-часной safety net в `manage_event_partitions()` работает только при сбое clean_old_events.
 
-### R-DB4: pg_notify как брокер сообщений
+Функция `clean_old_pending_events()` — помечает протухшие pending-строки как `expired` и удаляет старые done/error/expired строки. Удаление покрывает обе категории: строки старше 60 минут (`event_time < NOW() - INTERVAL '60 minutes'`) и будущие строки старше 5 минут (`event_time > NOW() + INTERVAL '5 minutes'`).
 
-PostgreSQL используется как in-process message broker через `pg_notify`:
+### R-PR11: Pending events — двухфазный claim + очиститель
 
-| Канал | Назначение | Кто слушает |
-|-------|-----------|-------------|
-| `events_new` | Новое событие | core (WebSocket) |
-| `events_cleaned` | Очистка событий | parser (удаление фото) |
-| `geo_updated` | Изменение geo | processor (reindex) |
-| `photo_download` | Скачивание фото | parser |
+Воркер атомарно меняет статус на `processing` и фиксирует `locked_at`/`worker_id` внутри транзакции с `FOR UPDATE SKIP LOCKED`.
 
-**Правило:** pg_notify payload — JSON строка. Размер payload ≤ 8000 bytes (ограничение PostgreSQL).
+```python
+"UPDATE pending_events "
+"SET status = 'processing', locked_at = now(), worker_id = $1 "
+"WHERE id = ("
+"    SELECT id FROM pending_events "
+"    WHERE status = 'pending' "
+"      AND event_time >= now() - interval '60 minutes' "
+"      AND event_time <= now() + interval '5 minutes' "
+"    ORDER BY created_at "
+"    LIMIT 1 "
+"    FOR UPDATE SKIP LOCKED"
+") "
+"RETURNING id, message_id, text, event_time, photo_file_id"
+```
 
-### R-DB5: Идемпотентные операции
+**Почему не SELECT:**
+- Классический `SELECT ... FOR UPDATE SKIP LOCKED` снимает блокировку при commit транзакции, а `status` остаётся `'pending'` — следующий воркер снова берёт ту же задачу (гонка).
+- Двухфазный claim меняет `status → 'processing'` в той же транзакции: после commit задача недоступна другим воркерам, даже если обработка идёт долго.
 
-Все INSERT используют `ON CONFLICT`:
+**Очиститель зависших задач:**
+Если воркер падает (SIGKILL/OOM/краш процесса), фоновый очиститель каждые 60с возвращает зависшие задачи (`locked_at < now() - 5 minutes`) в статус `pending`:
 
 ```sql
--- events
-ON CONFLICT (message_id, event_time) DO NOTHING
-
--- pending_events
-ON CONFLICT (message_id, event_time) DO NOTHING
-
--- events_meta
-ON CONFLICT (id) DO NOTHING
+UPDATE pending_events
+SET status = 'pending', locked_at = NULL, worker_id = NULL
+WHERE status = 'processing'
+  AND locked_at < now() - interval '5 minutes'
 ```
 
-**Правило:** Ретраи НЕ создают дубликатов.
+**Протухшие строки:**
+`_fetch_pending` фильтрует события по `event_time` в окне `-60min..+5min`. Строки с `event_time` вне этого окна, попавшие в `pending_events` (например, из-за задержки парсера), не выбираются воркерами и со временем помечаются как `expired` фоновым очистителем `clean_old_pending_events`.
+
+**Правило:**
+- Multiple workers безопасно потребляют очередь без блокировок.
+- Неучтённая ошибка воркера → `_requeue` с guard `AND status = 'processing'` (нельзя вернуть в `pending` задачу, уже помеченную `done`/`error`).
+- Задача в статусе `processing` дольше 5 минут считается зависшей и реквоится очистителем (at-least-once семантика; дубликаты исключены idempotent INSERT, R-PR12).
+
+### R-PR8.1: Каждое сообщение отображается на фронтенде
+
+Любое сообщение из `pending_events` ДОЛЖНО попасть в `events` и быть видимым на карте.
+
+- **Распознанные локации:** normal strategy — точная геометрия
+- **Нераспознанные / спам / пустые:** `strategy=random` — точка в зоне `question_overlay`
+
+**Запрещено:**
+- Дропать сообщения из-за отсутствия гео-кандидатов (`return None`)
+- Отбрасывать сообщения после LLM-детекции спама — вместо этого `strategy=random`
+- Фильтровать сообщения по длине текста, промо-характеру или слою
+
+**Исключение:**
+- Технические дубликаты (`ON CONFLICT DO NOTHING`).
+- Сообщения с `event_time` вне 60-минутного окна (`-60min..+5min`): такие события не выбираются воркерами и не отображаются на карте — они помечаются как `expired` (R-DB3, `clean_old_pending_events`).
+
+### R-DB26: pg_cron jobs
+
+Все фоновые задачи через pg_cron:
+
+| Job | Интервал | Назначение |
+|-----|----------|------------|
+| `clean-old-events` | `3-59/5 * * * *` | Очистка событий > 60min (DROP partition + DELETE строк) — primary TTL |
+| `clean-old-pending-events` | `*/15 * * * *` | Помечает протухшие pending-строки как `expired` и удаляет старые done/error/expired строки (в том числе будущие строки с `event_time > NOW()+5min`) |
+| `manage-event-partitions` | `*/5 * * * *` | Создание партиций в окне `-1h..+1h` + 3h safety net DROP с pg_notify('partition_overflow') |
+| `cleanup-refresh-tokens` | `0 */6 * * * *` | Очистка истёкших refresh-токенов |
+
+**Правило:** Расписания `clean-old-events` и `manage-event-partitions` смещены на 3 минуты (`3-59/5` vs `*/5`), чтобы избежать конфликта `AccessShareLock` vs `AccessExclusiveLock` на `events`.
+
+### R-DB27: Materialized views (устарело)
+
+Ранее использовались Materialized Views для дашбордов. В текущей архитектуре (R-DB0) запросы по BRIN/GiST индексам покрывают потребность в данных «последнего часа», и `REFRESH CONCURRENTLY` не требуется.
+
+```sql
+-- Recent events by layer
+CREATE MATERIALIZED VIEW mv_recent_events_by_layer AS
+SELECT layer, COUNT(*) AS count, MAX(event_time) AS latest_time
+FROM events WHERE event_time > NOW() - INTERVAL '1 hour'
+GROUP BY layer WITH NO DATA;
+```
+
+**Правило:** MV больше не поддерживаются; при необходимости дашбордов использовать прямые запросы или внешнюю BI-систему.
+
+---
+
+### R-DB15: Connection limits
+
+```sql
+-- postgresql.conf
+max_connections = 50  -- 3 services × pool_max_size=10 = 30 max; headroom for pg_cron/admin
+```
+
+**Правило:** `pool_max_size` на стороне приложения ≤ `max_connections / количество_сервисов`.
+3 сервиса (parser, processor, core) подключаются напрямую к PostgreSQL через internal `db` network.
+`pool_max_size=10` × 3 = 30, что ≤ `max_connections=50` с запасом 20 для pg_cron и админ-запросов.
+
+### R-C15: asyncpg pool — min/max sizing
+
+```python
+pool = await asyncpg.create_pool(
+    min_size=1,
+    max_size=10,
+    command_timeout=30,
+)
+```
+
+**Правило:** `max_size ≤ max_connections / количество_сервисов` (см. R-DB15).
+
+### R-P11: Один пул соединений
+
+Parser использует один `asyncpg.Pool` на весь процесс. Пул создаётся при старте, закрывается при shutdown.
+
+Размеры пула берутся из `common/settings.py` (DatabaseConfig dataclass):
+
+```python
+self.__pool = await asyncpg.create_pool(
+    min_size=settings.db.pool_min_size,   # 1
+    max_size=settings.db.pool_max_size,   # 10
+    command_timeout=settings.db.command_timeout,  # 30s
+)
+```
+
+**Правило:** `max_size ≤ max_connections / количество_сервисов` (см. R-DB15).
+3 сервиса × `max_size=10` = 30, что ≤ `max_connections=50`.
+
+### R-PR15: Один asyncpg pool
+
+```python
+self.__pool = await asyncpg.create_pool(
+    min_size=settings.db.pool_min_size,   # 1
+    max_size=settings.db.pool_max_size,   # 10
+    command_timeout=settings.db.command_timeout,  # 30s
+)
+```
+
+**Правило:** Один пул на весь процесс. Connection release — через `async with pool.acquire()`.
+
+### R-P21: Settings из common/settings.py
+
+Parser переиспользует `common/settings.py` для всех настроек.
+
+### R-C28: Settings из common/settings.py
+
+Core переиспользует `common/settings.py` для всех настроек. Собственные настройки минимальны.
+
+### R-PR25: Settings из common/settings.py
+
+Processor переиспользует `common/settings.py`. Собственные настройки минимальны.
+
+### G-11: Settings из common/settings.py
+
+Каждый сервис переиспользует `common/settings.py` для общих настроек (БД, приложение, слои). Собственные настройки сервиса минимальны.
 
 ---
 
@@ -460,32 +586,6 @@ FROM pg_stat_statements
 ORDER BY total_exec_time DESC
 LIMIT 20;
 ```
-
-### R-DB26: pg_cron jobs
-
-Все фоновые задачи через pg_cron:
-
-| Job | Интервал | Назначение |
-|-----|----------|------------|
-| `clean-old-events` | `3-59/5 * * * *` | Очистка событий > 60min (DROP partition) — primary TTL |
-| `manage-event-partitions` | `*/5 * * * *` | Создание партиций на +2 часа + 48h safety net DROP с pg_notify('partition_overflow') |
-| `cleanup-refresh-tokens` | `0 */6 * * * *` | Очистка истёкших refresh-токенов |
-
-**Правило:** Расписания `clean-old-events` и `manage-event-partitions` смещены на 3 минуты (`3-59/5` vs `*/5`), чтобы избежать конфликта `AccessShareLock` vs `AccessExclusiveLock` на `events`.
-
-### R-DB27: Materialized views
-
-MV для дашбордов (обновляются pg_cron):
-
-```sql
--- Recent events by layer
-CREATE MATERIALIZED VIEW mv_recent_events_by_layer AS
-SELECT layer, COUNT(*) AS count, MAX(event_time) AS latest_time
-FROM events WHERE event_time > NOW() - INTERVAL '1 hour'
-GROUP BY layer WITH NO DATA;
-```
-
-**Правило:** MV обновляются через `REFRESH MATERIALIZED VIEW CONCURRENTLY`.
 
 ---
 

@@ -47,11 +47,10 @@ BEGIN
         DELETE FROM events WHERE event_time < cutoff
         RETURNING photo_url
     )
-    SELECT coalesce(jsonb_agg(photo_url), '[]'::jsonb)
-    INTO deleted_photos
-    FROM deleted WHERE photo_url IS NOT NULL;
-
-    GET DIAGNOSTICS deleted_rows = ROW_COUNT;
+    SELECT count(*) AS cnt,
+           coalesce(jsonb_agg(photo_url) FILTER (WHERE photo_url IS NOT NULL), '[]'::jsonb) AS photos
+    INTO   deleted_rows, deleted_photos
+    FROM   deleted;
     photo_urls := photo_urls || coalesce(deleted_photos, '[]'::jsonb);
 
     IF dropped_partitions > 0 OR deleted_rows > 0 THEN
@@ -86,7 +85,8 @@ BEGIN
     GET DIAGNOSTICS expired_count = ROW_COUNT;
 
     DELETE FROM pending_events
-    WHERE event_time < NOW() - INTERVAL '60 minutes'
+    WHERE (event_time < NOW() - INTERVAL '60 minutes'
+           OR event_time > NOW() + INTERVAL '5 minutes')
       AND status IN ('done', 'error', 'expired');
 
     GET DIAGNOSTICS deleted_count = ROW_COUNT;

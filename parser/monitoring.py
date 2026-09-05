@@ -10,7 +10,9 @@ import logging
 import os
 import signal
 import sys
+import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -260,10 +262,13 @@ class ParserBot:
                 self._run_photo_download_listener()
             )
 
-            # H4: догоняем фото, чей NOTIFY photo_download был потерян
+                    # H4: догоняем фото, чей NOTIFY photo_download был потерян
             # (parser был недоступен/рестартовал в момент перехода status→'done'
             # — триггер больше не сработает).
             await self._recover_missing_photos()
+
+            # P1.2: страховка от потери pg_notify — удаление фото старше 70 минут
+            self._stale_photo_task = asyncio.create_task(self._run_stale_photo_cleaner())
 
             while self._running:
                 self._write_heartbeat()
@@ -578,6 +583,32 @@ class ParserBot:
         logger.info("Stop signal received — requesting graceful shutdown")
         self._running = False
 
+    async def _run_stale_photo_cleaner(self):
+        """Периодическая очистка фото старше 70 минут (страховка от потери pg_notify)."""
+        while self._running:
+            await self._cleanup_stale_photos()
+            await asyncio.sleep(300)
+
+    async def _cleanup_stale_photos(self):
+        """Удалять файлы старше 70 минут независимо от БД (страховка от потери pg_notify)."""
+        cutoff = time.time() - 70 * 60
+        media_dir = Path(self.events_media_dir)
+        if not media_dir.exists():
+            return
+
+        deleted = 0
+        for f in media_dir.iterdir():
+            if f.is_file() and f.stat().st_mtime < cutoff:
+                try:
+                    f.unlink()
+                    deleted += 1
+                except FileNotFoundError:
+                    pass  # идемпотентно
+                except Exception as e:
+                    logger.warning(f"stale photo delete failed: {f}: {e}")
+        if deleted:
+            logger.info(f"Stale photos cleaned: {deleted}")
+
     async def shutdown(self, drain_timeout: float = 20.0):
         """Корректно остановить бота: дождаться очереди, отменить задачи, закрыть соединения."""
         if self._shutdown_started:
@@ -600,7 +631,8 @@ class ParserBot:
                 )
 
         tasks = [t for t in (*self._worker_tasks, self._cleanup_listener_task,
-                              self._photo_listener_task, self._adaptive_pool_task)
+                              self._photo_listener_task, self._adaptive_pool_task,
+                              self._stale_photo_task)
                  if t and not t.done()]
         for task in tasks:
             task.cancel()

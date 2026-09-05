@@ -127,7 +127,11 @@ delay = min(2 ** attempt, 30)
 - Отбрасывать сообщения после LLM-детекции спама — вместо этого `strategy=random`
 - Фильтровать сообщения по длине текста, промо-характеру или слою
 
-**Исключение:** Технические дубликаты (`ON CONFLICT DO NOTHING`).
+**Исключение:**
+- Технические дубликаты (`ON CONFLICT DO NOTHING`).
+- Сообщения с `event_time` вне 60-минутного окна (`-60min..+5min`) не выбираются воркерами и не отображаются на карте — они помечаются как `expired` (R-DB3, `clean_old_pending_events`).
+
+### R-PR11: фильтр `event_time` в `_fetch_pending`
 
 ### R-PR9: SemanticResolver исключён из геометрии
 
@@ -177,6 +181,8 @@ inserted AS (
 "WHERE id = ("
 "    SELECT id FROM pending_events "
 "    WHERE status = 'pending' "
+"      AND event_time >= now() - interval '60 minutes' "
+"      AND event_time <= now() + interval '5 minutes' "
 "    ORDER BY created_at "
 "    LIMIT 1 "
 "    FOR UPDATE SKIP LOCKED"
@@ -340,7 +346,7 @@ Processor переиспользует `common/settings.py`. Собственн�
 | `POSTGRES_PASSWORD` | да | Пароль PostgreSQL |
 | `POSTGRES_DB` | нет | Имя БД (default: postgres) |
 
-**Правило:** Всё остальное — хардкод в `settings.py`.
+**Правило:** Всё остальное — хардкод в `common/settings.py`.
 
 ### R-PR27: Geometry-First (Отказ от семантических эвристик в геометрии)
 Processor НЕ ДОЛЖЕН анализировать семантику текста (предлоги «между/от/до», отрицания «не/нет», контекстные списки) для выбора стратегии геометрии или фильтрации кандидатов.

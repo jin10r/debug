@@ -212,6 +212,34 @@ parser:
 
 **Правило:** Parser работает от non-root (UID 1000). `cap_drop: ALL`. tmpfs для temp-файлов.
 
+### R-P26: Cleanup stale photos (70 min)
+
+Parser обязан содержать страховку от потери pg_notify: файлы фото старше 70 минут удаляются независимо от БД.
+
+```python
+async def _cleanup_stale_photos(self):
+    """Удалять файлы старше 70 минут независимо от БД (страховка от потери pg_notify)."""
+    cutoff = time.time() - 70 * 60
+    media_dir = Path(self.events_media_dir)
+    if not media_dir.exists():
+        return
+
+    deleted = 0
+    for f in media_dir.iterdir():
+        if f.is_file() and f.stat().st_mtime < cutoff:
+            try:
+                f.unlink()
+                deleted += 1
+            except FileNotFoundError:
+                pass   # идемпотентно
+            except Exception as e:
+                logger.warning(f"stale photo delete failed: {f}: {e}")
+    if deleted:
+        logger.info(f"Stale photos cleaned: {deleted}")
+```
+
+**Правило:** Запуск раз в 5 минут в главном цикле. `FileNotFoundError` проглатывается (идемпотентность).
+
 ---
 
 ## Антипаттерны (ЗАПРЕЩЕНО)
